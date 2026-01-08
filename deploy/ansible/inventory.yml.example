@@ -1,0 +1,39 @@
+# Unicity Ansible Inventory Template
+# Copy this file to inventory.yml and update with your actual server details
+# inventory.yml is gitignored to keep your infrastructure private
+
+all:
+  children:
+    unicity_nodes:
+      hosts:
+        node1:
+          ansible_host: 10.0.0.1  # Replace with actual IP
+          node_id: 0
+          p2p_port: 29333
+          rpc_port: 29334
+        node2:
+          ansible_host: 10.0.0.2  # Replace with actual IP
+          node_id: 1
+          p2p_port: 29333
+          rpc_port: 29334
+        node3:
+          ansible_host: 10.0.0.3  # Replace with actual IP
+          node_id: 2
+          p2p_port: 29333
+          rpc_port: 29334
+        # Add more nodes as needed
+      vars:
+        ansible_user: root
+        ansible_ssh_private_key_file: ~/.ssh/your_key  # Update path
+        ansible_python_interpreter: /usr/bin/python3
+
+        # Network configuration
+        unicity_network: regtest  # mainnet, testnet, or regtest
+
+        # Paths
+        docker_data_dir: /var/lib/docker/unicity
+        container_name: "unicity-{{ unicity_network }}"
+
+        # Resource limits
+        docker_memory_limit: "2g"
+        docker_cpu_limit: "2.0"

@@ -1,0 +1,413 @@
+// Copyright (c) 2025 The Unicity Foundation
+// Distributed under the MIT software license
+
+#include "network/ban_manager.hpp"
+
+#include "util/files.hpp"
+#include "util/logging.hpp"
+#include "util/netaddress.hpp"
+#include "util/time.hpp"
+
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
+
+namespace unicity {
+namespace network {
+
+// Policy constants
+static constexpr size_t MAX_DISCOURAGED = 10000;
+
+BanManager::BanManager(const std::string& datadir) {
+  // Initialize ban_file_path_ if datadir is provided
+  // This ensures auto-save works correctly from the start
+  if (!datadir.empty()) {
+    std::filesystem::path dir(datadir);
+    ban_file_path_ = (dir / "banlist.json").string();
+  }
+}
+
+std::string BanManager::GetBanlistPath() const {
+  if (ban_file_path_.empty()) {
+    return "";
+  }
+  return ban_file_path_;
+}
+
+bool BanManager::LoadBans(const std::string& datadir) {
+  std::lock_guard<std::mutex> lock(banned_mutex_);
+
+  // Set path if not already set by constructor
+  if (ban_file_path_.empty()) {
+    if (datadir.empty()) {
+      LOG_NET_TRACE("BanManager: no datadir specified, skipping ban load");
+      return true;
+    }
+    std::filesystem::path dir(datadir);
+    ban_file_path_ = (dir / "banlist.json").string();
+  }
+
+  std::ifstream file(ban_file_path_);
+  if (!file.is_open()) {
+    LOG_NET_TRACE("BanManager: no existing banlist found at {}", ban_file_path_);
+    return true;  // Not an error - first run
+  }
+
+  try {
+    json j;
+    file >> j;
+
+    int64_t now = util::GetTime();
+    size_t loaded = 0;
+    size_t expired = 0;
+
+    for (const auto& [address, ban_data] : j.items()) {
+      CBanEntry entry;
+      entry.nVersion = ban_data.value("version", CBanEntry::CURRENT_VERSION);
+      entry.nCreateTime = ban_data.value("create_time", int64_t(0));
+      entry.nBanUntil = ban_data.value("ban_until", int64_t(0));
+
+      // Skip expired bans
+      if (entry.IsExpired(now)) {
+        expired++;
+        continue;
+      }
+
+      banned_[address] = entry;
+      loaded++;
+    }
+
+    LOG_NET_TRACE("BanManager: loaded {} bans from {} (skipped {} expired)", loaded, ban_file_path_, expired);
+
+    // Mark dirty if we skipped expired entries, clear otherwise
+    is_dirty_ = (expired > 0);
+
+    // Persist cleaned list if we skipped expired entries and autosave is enabled
+    if (expired > 0 && ban_auto_save_ && !ban_file_path_.empty()) {
+      SaveBansInternal();
+    }
+    return true;
+
+  } catch (const std::exception& e) {
+    LOG_NET_ERROR("BanManager: failed to parse {}: {}", ban_file_path_, e.what());
+    return false;
+  }
+}
+
+bool BanManager::SaveBansInternal() {
+  if (ban_file_path_.empty()) {
+    LOG_NET_TRACE("BanManager: no ban file path set, skipping save");
+    return true;
+  }
+
+  // Sweep expired bans before saving
+  // Note: This is done inline to avoid code duplication with SweepBanned()
+  int64_t now = util::GetTime();
+  for (auto it = banned_.begin(); it != banned_.end();) {
+    if (it->second.IsExpired(now)) {
+      it = banned_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  // Skip save if nothing changed
+  if (!is_dirty_) {
+    return true;
+  }
+
+  try {
+    json j;
+    for (const auto& [address, entry] : banned_) {
+      j[address] = {{"version", entry.nVersion}, {"create_time", entry.nCreateTime}, {"ban_until", entry.nBanUntil}};
+    }
+
+    std::string data = j.dump(2);
+
+    // Use centralized atomic write with 0600 permissions (owner-only)
+    // This provides: temp file creation, partial write handling, fsync,
+    // directory sync, and atomic rename - more robust than previous implementation
+    if (!util::atomic_write_file(ban_file_path_, data, 0600)) {
+      LOG_NET_ERROR("BanManager: failed to save {}", ban_file_path_);
+      // Keep is_dirty_ = true so save will be retried
+      return false;
+    }
+
+    LOG_NET_TRACE("BanManager: saved {} bans to {}", banned_.size(), ban_file_path_);
+    is_dirty_ = false;  // Clear dirty flag on successful save
+    return true;
+
+  } catch (const std::exception& e) {
+    LOG_NET_ERROR("BanManager: failed to save {}: {}", ban_file_path_, e.what());
+    // Keep is_dirty_ = true so save will be retried
+    return false;
+  }
+}
+
+bool BanManager::SaveBans() {
+  std::lock_guard<std::mutex> lock(banned_mutex_);
+  return SaveBansInternal();
+}
+
+void BanManager::Ban(const std::string& address, int64_t ban_time_offset) {
+  // Validate and normalize the address before banning
+  auto normalized = util::ValidateAndNormalizeIP(address);
+  if (!normalized.has_value()) {
+    LOG_NET_ERROR("BanManager: refusing to ban invalid IP address: {}", address);
+    return;
+  }
+
+  // The whitelist is only checked at connection time, not ban time.
+  std::lock_guard<std::mutex> lock(banned_mutex_);
+
+  int64_t now = util::GetTime();
+  int64_t ban_until = ban_time_offset > 0 ? now + ban_time_offset : 0;  // 0 = permanent
+
+  CBanEntry entry(now, ban_until);
+  banned_[*normalized] = entry;
+  is_dirty_ = true;  // Mark as modified
+
+  if (ban_time_offset > 0) {
+    LOG_NET_WARN("BanManager: banned {} until {} ({}s)", *normalized, ban_until, ban_time_offset);
+  } else {
+    LOG_NET_WARN("BanManager: permanently banned {}", *normalized);
+  }
+  // Auto-save
+  if (ban_auto_save_ && !ban_file_path_.empty()) {
+    SaveBansInternal();
+  }
+}
+
+void BanManager::Unban(const std::string& address) {
+  // Validate and normalize the address
+  auto normalized = util::ValidateAndNormalizeIP(address);
+  if (!normalized.has_value()) {
+    LOG_NET_ERROR("BanManager: refusing to unban invalid IP address: {}", address);
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(banned_mutex_);
+
+  auto it = banned_.find(*normalized);
+  if (it != banned_.end()) {
+    banned_.erase(it);
+    is_dirty_ = true;  // Mark as modified
+    LOG_NET_INFO("BanManager: unbanned {}", *normalized);
+
+    // Auto-save
+    if (ban_auto_save_ && !ban_file_path_.empty()) {
+      SaveBansInternal();
+    }
+  } else {
+    LOG_NET_TRACE("BanManager: address {} was not banned", *normalized);
+  }
+}
+
+bool BanManager::IsBanned(const std::string& address) const {
+  // Validate and normalize the address
+  auto normalized = util::ValidateAndNormalizeIP(address);
+  if (!normalized.has_value()) {
+    // Invalid address cannot be banned
+    return false;
+  }
+
+  // Return the actual ban status regardless of whitelist.
+  // The whitelist is checked separately at connection time, not when querying ban status.
+  std::lock_guard<std::mutex> lock(banned_mutex_);
+
+  auto it = banned_.find(*normalized);
+  if (it == banned_.end()) {
+    return false;
+  }
+
+  // Check if expired
+  int64_t now = util::GetTime();
+  return !it->second.IsExpired(now);
+}
+
+void BanManager::Discourage(const std::string& address) {
+  // Validate and normalize the address
+  auto normalized = util::ValidateAndNormalizeIP(address);
+  if (!normalized.has_value()) {
+    LOG_NET_ERROR("BanManager: refusing to discourage invalid IP address: {}", address);
+    return;
+  }
+
+  // The whitelist is only checked at connection time, not at discourage time.
+  std::lock_guard<std::mutex> lock(discouraged_mutex_);
+
+  int64_t now = util::GetTime();
+  int64_t expiry = now + DISCOURAGE_DURATION_SEC;
+
+  // Enforce upper bound BEFORE insertion
+  if (discouraged_.size() >= MAX_DISCOURAGED) {
+    // First sweep expired
+    for (auto it = discouraged_.begin(); it != discouraged_.end();) {
+      if (now >= it->second) {
+        it = discouraged_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    // If still at capacity, evict the entry with the earliest expiry
+    if (discouraged_.size() >= MAX_DISCOURAGED) {
+      auto victim = discouraged_.end();
+      int64_t min_expiry = std::numeric_limits<int64_t>::max();
+      for (auto it = discouraged_.begin(); it != discouraged_.end(); ++it) {
+        if (it->second < min_expiry) {
+          min_expiry = it->second;
+          victim = it;
+        }
+      }
+      if (victim != discouraged_.end()) {
+        LOG_NET_TRACE("BanManager: evicting discouraged entry {} to enforce size cap ({} >= {})", victim->first,
+                      discouraged_.size(), MAX_DISCOURAGED);
+        discouraged_.erase(victim);
+      }
+    }
+  }
+
+  // Now safe to insert (size < MAX_DISCOURAGED or we just made space)
+  discouraged_[*normalized] = expiry;
+  LOG_NET_INFO("BanManager: discouraged {} until {} (~24h)", *normalized, expiry);
+}
+
+bool BanManager::IsDiscouraged(const std::string& address) const {
+  // Validate and normalize the address
+  auto normalized = util::ValidateAndNormalizeIP(address);
+  if (!normalized.has_value()) {
+    // Invalid address cannot be discouraged
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lock(discouraged_mutex_);
+
+  auto it = discouraged_.find(*normalized);
+  if (it == discouraged_.end()) {
+    return false;
+  }
+
+  // Check if expired (do not mutate here; cleanup is done in SweepDiscouraged())
+  int64_t now = util::GetTime();
+  if (now >= it->second) {
+    return false;
+  }
+
+  return true;
+}
+
+void BanManager::ClearDiscouraged() {
+  std::lock_guard<std::mutex> lock(discouraged_mutex_);
+  discouraged_.clear();
+  LOG_NET_TRACE("BanManager: cleared all discouraged addresses");
+}
+
+void BanManager::SweepDiscouraged() {
+  std::lock_guard<std::mutex> lock(discouraged_mutex_);
+  const int64_t now = util::GetTime();
+  size_t before = discouraged_.size();
+  for (auto it = discouraged_.begin(); it != discouraged_.end();) {
+    if (now >= it->second) {
+      it = discouraged_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  size_t removed = before - discouraged_.size();
+  if (removed > 0) {
+    LOG_NET_TRACE("BanManager: swept {} expired discouraged entries", removed);
+  }
+}
+
+std::map<std::string, BanManager::CBanEntry> BanManager::GetBanned() const {
+  std::lock_guard<std::mutex> lock(banned_mutex_);
+  return banned_;
+}
+
+void BanManager::ClearBanned() {
+  std::lock_guard<std::mutex> lock(banned_mutex_);
+  banned_.clear();
+  is_dirty_ = true;  // Mark as modified
+  LOG_NET_TRACE("BanManager: cleared all bans");
+
+  // Auto-save
+  if (ban_auto_save_ && !ban_file_path_.empty()) {
+    SaveBansInternal();
+  }
+}
+
+void BanManager::SweepBanned() {
+  std::lock_guard<std::mutex> lock(banned_mutex_);
+
+  int64_t now = util::GetTime();
+  size_t before = banned_.size();
+
+  for (auto it = banned_.begin(); it != banned_.end();) {
+    if (it->second.IsExpired(now)) {
+      LOG_NET_TRACE("BanManager: sweeping expired ban for {}", it->first);
+      it = banned_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  size_t removed = before - banned_.size();
+  if (removed > 0) {
+    is_dirty_ = true;  // Mark as modified
+    LOG_NET_TRACE("BanManager: swept {} expired bans", removed);
+
+    // Auto-save
+    if (ban_auto_save_ && !ban_file_path_.empty()) {
+      SaveBansInternal();
+    }
+  }
+}
+
+void BanManager::AddToWhitelist(const std::string& address) {
+  // Validate and normalize the address
+  auto normalized = util::ValidateAndNormalizeIP(address);
+  if (!normalized.has_value()) {
+    LOG_NET_ERROR("BanManager: refusing to whitelist invalid IP address: {}", address);
+    return;
+  }
+
+  // Whitelist and ban/discourage are independent.
+  // We allow whitelisted addresses to also be banned/discouraged.
+  // The whitelist overrides the ban only at connection acceptance time.
+  std::lock_guard<std::mutex> guard(whitelist_mutex_);
+  whitelist_.insert(*normalized);
+  LOG_NET_INFO("BanManager: whitelisted {}", *normalized);
+}
+
+void BanManager::RemoveFromWhitelist(const std::string& address) {
+  // Validate and normalize the address
+  auto normalized = util::ValidateAndNormalizeIP(address);
+  if (!normalized.has_value()) {
+    LOG_NET_ERROR("BanManager: refusing to remove invalid IP address from whitelist: {}", address);
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(whitelist_mutex_);
+  whitelist_.erase(*normalized);
+  LOG_NET_TRACE("BanManager: removed {} from whitelist", *normalized);
+}
+
+bool BanManager::IsWhitelisted(const std::string& address) const {
+  // Validate and normalize the address
+  auto normalized = util::ValidateAndNormalizeIP(address);
+  if (!normalized.has_value()) {
+    // Invalid address cannot be whitelisted
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lock(whitelist_mutex_);
+  return whitelist_.find(*normalized) != whitelist_.end();
+}
+
+}  // namespace network
+}  // namespace unicity

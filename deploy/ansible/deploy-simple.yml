@@ -1,0 +1,212 @@
+---
+# Simplified Ansible Playbook: Deploy Unicity using Docker CLI
+# No Python dependencies required - uses direct shell commands
+#
+# Usage:
+#   ansible-playbook -i inventory.yml deploy-simple.yml --limit unicity_testnet
+#   ansible-playbook -i inventory.yml deploy-simple.yml --limit unicity_mainnet
+#   ansible-playbook -i inventory.yml deploy-simple.yml --limit unicity_regtest
+
+- name: Deploy Unicity Docker Network (Simple)
+  hosts: all
+  become: true
+
+  tasks:
+    # =========================================================================
+    # 0. Validate deployment configuration
+    # =========================================================================
+    - name: Display deployment configuration
+      debug:
+        msg:
+          - "=========================================="
+          - " Unicity Deployment Configuration"
+          - "=========================================="
+          - " Network: {{ unicity_network }}"
+          - " P2P Port: {{ p2p_port }}"
+          - " Container Name: {{ container_name }}"
+          - " Data Directory: {{ docker_data_dir }}"
+          - " Node: {{ inventory_hostname }} ({{ ansible_host }})"
+          - "=========================================="
+      tags: [always]
+
+    - name: Validate required variables
+      assert:
+        that:
+          - unicity_network is defined
+          - p2p_port is defined
+          - docker_data_dir is defined
+        fail_msg: "Missing required variables. Check inventory.yml group_vars."
+        success_msg: "All required variables are defined."
+      tags: [always]
+
+    # =========================================================================
+    # 1. Transfer project files
+    # =========================================================================
+    - name: Create temporary build directory
+      file:
+        path: /tmp/unicity-build
+        state: directory
+        mode: '0755'
+      tags: [build]
+
+    - name: Copy project files to server
+      synchronize:
+        src: "{{ playbook_dir }}/../../"
+        dest: /tmp/unicity-build/
+        delete: yes
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=build"
+          - "--exclude=build_*"
+          - "--exclude=.vscode"
+          - "--exclude=*.o"
+          - "--exclude=*.a"
+          - "--exclude=deploy/ansible"
+      tags: [build]
+
+    # =========================================================================
+    # 2. Build Docker image
+    # =========================================================================
+    - name: Build Docker image
+      shell: |
+        cd /tmp/unicity-build
+        docker build {{ '--no-cache' if docker_no_cache | default(false) else '' }} -t unicity:latest -f deploy/docker/Dockerfile .
+      tags: [build]
+
+    - name: Clean up build directory
+      file:
+        path: /tmp/unicity-build
+        state: absent
+      tags: [build]
+
+    # =========================================================================
+    # 3. Deploy Container
+    # =========================================================================
+    - name: Create data directory
+      file:
+        path: "{{ docker_data_dir }}"
+        state: directory
+        mode: '0755'
+      tags: [deploy]
+
+    - name: Set data directory ownership for container user
+      file:
+        path: "{{ docker_data_dir }}"
+        owner: 1000
+        group: 1000
+        mode: '0755'
+        recurse: yes
+        state: directory
+      tags: [deploy]
+
+    - name: Stop and remove existing container (if any)
+      shell: |
+        docker stop {{ container_name }} 2>/dev/null || true
+        docker rm {{ container_name }} 2>/dev/null || true
+      tags: [deploy]
+
+    - name: Start Unicity container
+      shell: |
+        docker run -d \
+          --name {{ container_name }} \
+          --restart unless-stopped \
+          -p {{ p2p_port }}:{{ p2p_port }} \
+          -v {{ docker_data_dir }}:/home/unicity/.unicity \
+          -e UNICITY_NETWORK={{ unicity_network }} \
+          -e UNICITY_PORT={{ p2p_port }} \
+          -e UNICITY_MAXCONNECTIONS=10 \
+          unicity:latest
+      tags: [deploy]
+
+    - name: Wait for container to start
+      pause:
+        seconds: 10
+      tags: [deploy]
+
+    - name: Check container status
+      shell: docker ps -f name={{ container_name }} --format 'table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}{% endraw %}'
+      register: container_status
+      tags: [deploy, info]
+
+    - name: Display container status
+      debug:
+        msg: "{{ container_status.stdout_lines }}"
+      tags: [deploy, info]
+
+    # =========================================================================
+    # 4. Establish peer connections (mesh network)
+    # =========================================================================
+    #
+    # - name: Wait for containers to be ready for connections
+    #   pause:
+    #     seconds: 10
+    #   run_once: true
+    #   tags: [deploy, network]
+    #
+    # - name: Establish peer connections
+    #   shell: |
+    #     {% for host in groups['unicity_nodes'] %}
+    #     {% if host != inventory_hostname %}
+    #     docker exec {{ container_name }} unicity-cli addnode {{ hostvars[host]['ansible_host'] }}:{{ hostvars[host]['p2p_port'] }} add 2>&1 | grep -q "success" || true
+    #     {% endif %}
+    #     {% endfor %}
+    #   register: peer_connections
+    #   tags: [deploy, network]
+
+    - name: Check connection count
+      shell: docker exec {{ container_name }} unicity-cli getconnectioncount
+      register: connection_count
+      tags: [deploy, network, verify]
+
+    - name: Display connection count
+      debug:
+        msg: "Node {{ inventory_hostname }} has {{ connection_count.stdout }} peer connections"
+      tags: [deploy, network, verify]
+
+    - name: Wait for nodes to stabilize
+      pause:
+        seconds: 15
+      run_once: true
+      tags: [deploy, verify]
+
+    - name: Run deployment verification
+      local_action:
+        module: shell
+        cmd: bash {{ playbook_dir }}/scripts/verify-deployment.sh
+      run_once: true
+      register: verification_result
+      ignore_errors: yes
+      tags: [deploy, verify]
+
+    - name: Display verification results
+      debug:
+        msg: "{{ verification_result.stdout_lines | default(['Verification script failed - manual check required']) }}"
+      run_once: true
+      when: verification_result is defined
+      tags: [deploy, verify]
+
+    # =========================================================================
+    # 5. Display final summary
+    # =========================================================================
+    - name: Get blockchain info
+      shell: docker exec {{ container_name }} unicity-cli getblockchaininfo 2>&1 | grep -E '"chain"|"blocks"' | head -2
+      register: blockchain_info
+      ignore_errors: yes
+      tags: [deploy, summary]
+
+    - name: Final deployment summary
+      debug:
+        msg:
+          - "=========================================="
+          - " Unicity Deployment Complete"
+          - "=========================================="
+          - " Node: {{ inventory_hostname }} ({{ ansible_host }})"
+          - " Network: {{ unicity_network }}"
+          - " Container: {{ container_name }}"
+          - " P2P Port: {{ p2p_port }}"
+          - " Data Dir: {{ docker_data_dir }}"
+          - " Peer Connections: {{ connection_count.stdout | default('N/A') }}"
+          - " Blockchain Info:"
+          - "{{ blockchain_info.stdout_lines | default(['  Not available']) | join('\n') }}"
+          - "=========================================="
+      tags: [deploy, summary]

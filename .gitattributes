@@ -1,0 +1,4 @@
+# Track prebuilt test chains via Git LFS
+# Keep the pattern narrowly scoped to avoid accidental LFS of other artifacts
+
+test/functional/test_chains/** filter=lfs diff=lfs merge=lfs -text

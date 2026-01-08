@@ -1,0 +1,9 @@
+build/
+build-fuzz/
+.git/
+.github/
+*.log
+*.o
+*.a
+.DS_Store
+tmp/

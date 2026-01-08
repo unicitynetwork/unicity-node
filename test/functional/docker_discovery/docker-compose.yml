@@ -1,0 +1,192 @@
+# Docker Compose for Peer Discovery Tests
+#
+# Tests PeerDiscoveryManager functionality:
+# - ADDR message handling and rate limiting
+# - GETADDR request/response flow
+# - Token bucket rate limiting
+# - Learned address echo suppression
+# - Per-netgroup address limits in AddrMan
+#
+# Network Layout:
+#   - discovery_net_1 (172.40.0.0/16): target + peers 1-3 (netgroup 1)
+#   - discovery_net_2 (172.41.0.0/16): target + peers 4-6 (netgroup 2)
+#   - discovery_net_3 (172.42.0.0/16): target + peers 7-9 (netgroup 3)
+#
+# Usage:
+#   docker-compose build
+#   docker-compose up -d
+#   python3 run_discovery_tests.py
+#   docker-compose down -v
+
+networks:
+  discovery_net_1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.40.0.0/16
+  discovery_net_2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.41.0.0/16
+  discovery_net_3:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.42.0.0/16
+
+services:
+  # Target node - the node under test, connected to all networks
+  target:
+    build:
+      context: ../../..
+      dockerfile: test/functional/docker_eclipse/Dockerfile
+    image: discovery-test
+    container_name: discovery_target
+    hostname: target
+    networks:
+      discovery_net_1:
+        ipv4_address: 172.40.1.1
+      discovery_net_2:
+        ipv4_address: 172.41.1.1
+      discovery_net_3:
+        ipv4_address: 172.42.1.1
+    ports:
+      - "29690:29590"  # P2P port (mapped to different host port to avoid conflicts)
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --loglevel=debug
+    volumes:
+      - target_data:/data
+
+  # =========================================================================
+  # Netgroup 1: 172.40.x.x - Peers for ADDR relay testing
+  # =========================================================================
+  peer1:
+    image: discovery-test
+    container_name: discovery_peer1
+    hostname: peer1
+    networks:
+      discovery_net_1:
+        ipv4_address: 172.40.2.1
+    depends_on:
+      - target
+    command: ["sleep", "infinity"]
+
+  peer2:
+    image: discovery-test
+    container_name: discovery_peer2
+    hostname: peer2
+    networks:
+      discovery_net_1:
+        ipv4_address: 172.40.3.1
+    depends_on:
+      - target
+    command: ["sleep", "infinity"]
+
+  peer3:
+    image: discovery-test
+    container_name: discovery_peer3
+    hostname: peer3
+    networks:
+      discovery_net_1:
+        ipv4_address: 172.40.4.1
+    depends_on:
+      - target
+    command: ["sleep", "infinity"]
+
+  # =========================================================================
+  # Netgroup 2: 172.41.x.x - Different /16 for diverse address testing
+  # =========================================================================
+  peer4:
+    image: discovery-test
+    container_name: discovery_peer4
+    hostname: peer4
+    networks:
+      discovery_net_2:
+        ipv4_address: 172.41.2.1
+    depends_on:
+      - target
+    command: ["sleep", "infinity"]
+
+  peer5:
+    image: discovery-test
+    container_name: discovery_peer5
+    hostname: peer5
+    networks:
+      discovery_net_2:
+        ipv4_address: 172.41.3.1
+    depends_on:
+      - target
+    command: ["sleep", "infinity"]
+
+  peer6:
+    image: discovery-test
+    container_name: discovery_peer6
+    hostname: peer6
+    networks:
+      discovery_net_2:
+        ipv4_address: 172.41.4.1
+    depends_on:
+      - target
+    command: ["sleep", "infinity"]
+
+  # =========================================================================
+  # Netgroup 3: 172.42.x.x - Third /16 for rate limiting tests
+  # =========================================================================
+  peer7:
+    image: discovery-test
+    container_name: discovery_peer7
+    hostname: peer7
+    networks:
+      discovery_net_3:
+        ipv4_address: 172.42.2.1
+    depends_on:
+      - target
+    command: ["sleep", "infinity"]
+
+  peer8:
+    image: discovery-test
+    container_name: discovery_peer8
+    hostname: peer8
+    networks:
+      discovery_net_3:
+        ipv4_address: 172.42.3.1
+    depends_on:
+      - target
+    command: ["sleep", "infinity"]
+
+  peer9:
+    image: discovery-test
+    container_name: discovery_peer9
+    hostname: peer9
+    networks:
+      discovery_net_3:
+        ipv4_address: 172.42.4.1
+    depends_on:
+      - target
+    command: ["sleep", "infinity"]
+
+  # Test runner - connected to all networks for orchestration
+  test_runner:
+    image: discovery-test
+    container_name: discovery_test_runner
+    hostname: test_runner
+    networks:
+      discovery_net_1:
+        ipv4_address: 172.40.100.1
+      discovery_net_2:
+        ipv4_address: 172.41.100.1
+      discovery_net_3:
+        ipv4_address: 172.42.100.1
+    depends_on:
+      - target
+    volumes:
+      - ./:/tests
+    command: ["sleep", "infinity"]
+
+volumes:
+  target_data:

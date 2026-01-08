@@ -1,0 +1,120 @@
+version: "3.8"
+
+# Docker network configuration for HeaderSyncManager functional tests
+# Tests header synchronization behavior with real TCP connections
+
+networks:
+  syncnet1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.60.0.0/16
+  syncnet2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.61.0.0/16
+
+services:
+  # Target node (the node testing header sync behavior)
+  sync_target:
+    image: eclipse-test
+    container_name: sync_target
+    hostname: sync_target
+    networks:
+      syncnet1:
+        ipv4_address: 172.60.1.1
+      syncnet2:
+        ipv4_address: 172.61.1.1
+    ports:
+      - "30090:29590"  # P2P
+    volumes:
+      - sync_target_data:/data
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --debug=network
+
+  # Sync peer (honest peer with longer chain)
+  sync_peer1:
+    image: eclipse-test
+    container_name: sync_peer1
+    hostname: sync_peer1
+    networks:
+      syncnet1:
+        ipv4_address: 172.60.2.1
+    ports:
+      - "30091:29590"
+    volumes:
+      - sync_peer1_data:/data
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --debug=network
+
+  # Secondary sync peer (for stall/failover tests)
+  sync_peer2:
+    image: eclipse-test
+    container_name: sync_peer2
+    hostname: sync_peer2
+    networks:
+      syncnet1:
+        ipv4_address: 172.60.3.1
+    ports:
+      - "30092:29590"
+    volumes:
+      - sync_peer2_data:/data
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --debug=network
+
+  # Attacker nodes (for adversarial tests) - different netgroup
+  sync_attacker1:
+    image: eclipse-test
+    container_name: sync_attacker1
+    hostname: sync_attacker1
+    networks:
+      syncnet2:
+        ipv4_address: 172.61.2.1
+    depends_on:
+      - sync_target
+    command: ["sleep", "infinity"]
+
+  sync_attacker2:
+    image: eclipse-test
+    container_name: sync_attacker2
+    hostname: sync_attacker2
+    networks:
+      syncnet2:
+        ipv4_address: 172.61.3.1
+    depends_on:
+      - sync_target
+    command: ["sleep", "infinity"]
+
+  # Test runner container
+  sync_test_runner:
+    image: eclipse-test
+    container_name: sync_test_runner
+    hostname: sync_test_runner
+    networks:
+      syncnet1:
+        ipv4_address: 172.60.100.1
+      syncnet2:
+        ipv4_address: 172.61.100.1
+    depends_on:
+      - sync_target
+    volumes:
+      - ./:/tests
+    command: ["sleep", "infinity"]
+
+volumes:
+  sync_target_data:
+  sync_peer1_data:
+  sync_peer2_data:

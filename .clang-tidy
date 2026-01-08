@@ -1,0 +1,68 @@
+---
+# clang-tidy configuration for Unicity
+# Focuses on memory safety, modern C++, and performance
+
+Checks: >
+  -*,
+  bugprone-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  readability-*,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -modern
+
+ize-use-trailing-return-type,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic
+
+# Configuration options for specific checks
+CheckOptions:
+  # Memory safety checks
+  - key: bugprone-unused-return-value.CheckedFunctions
+    value: '::set_receive_callback;::set_disconnect_callback;::make_shared;::make_unique'
+
+  - key: cppcoreguidelines-owning-memory.LegacyResourceConsumers
+    value: 'set_receive_callback;set_disconnect_callback'
+
+  # Naming conventions
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+
+  - key: readability-identifier-naming.PrivateMemberSuffix
+    value: '_'
+
+  - key: readability-identifier-naming.ProtectedMemberSuffix
+    value: '_'
+
+  # Performance checks
+  - key: performance-move-const-arg.CheckTriviallyCopyableMove
+    value: true
+
+  # Modernize checks
+  - key: modernize-use-auto.MinTypeNameLength
+    value: 5
+
+  - key: modernize-use-nullptr.NullMacros
+    value: 'NULL'
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '(src|include)/.*\.(h|hpp)$'
+FormatStyle: none
+
+# Analysis options
+AnalyzeTemporaryDtors: true

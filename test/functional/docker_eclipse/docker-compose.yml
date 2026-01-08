@@ -1,0 +1,251 @@
+# Docker Compose for Eclipse Attack Testing
+#
+# Creates a victim node and multiple attacker nodes across different netgroups
+# to test eclipse attack defenses that require multiple source IPs.
+#
+# Network Layout:
+#   - eclipse_net_1 (172.28.0.0/16): victim + attackers 1-5 (same netgroup)
+#   - eclipse_net_2 (172.29.0.0/16): attackers 6-10 (different netgroup)
+#   - eclipse_net_3 (172.30.0.0/16): attackers 11-15 (different netgroup)
+#
+# Usage:
+#   docker build -t eclipse-test -f test/functional/docker_eclipse/Dockerfile .
+#   docker-compose up -d
+#   python3 run_eclipse_tests.py
+#   docker-compose down -v
+
+networks:
+  eclipse_net_1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+  eclipse_net_2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/16
+  eclipse_net_3:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+
+services:
+  # Victim node - connected to all networks
+  victim:
+    image: eclipse-test
+    container_name: eclipse_victim
+    hostname: victim
+    networks:
+      eclipse_net_1:
+        ipv4_address: 172.28.1.1
+      eclipse_net_2:
+        ipv4_address: 172.29.1.1
+      eclipse_net_3:
+        ipv4_address: 172.30.1.1
+    ports:
+      - "29590:29590"  # P2P port
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --loglevel=debug
+    volumes:
+      - victim_data:/data
+
+  # =========================================================================
+  # Netgroup 1: 172.28.x.x (same /16 as victim's primary interface)
+  # =========================================================================
+  attacker1:
+    image: eclipse-test
+    container_name: eclipse_attacker1
+    hostname: attacker1
+    networks:
+      eclipse_net_1:
+        ipv4_address: 172.28.2.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker2:
+    image: eclipse-test
+    container_name: eclipse_attacker2
+    hostname: attacker2
+    networks:
+      eclipse_net_1:
+        ipv4_address: 172.28.3.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker3:
+    image: eclipse-test
+    container_name: eclipse_attacker3
+    hostname: attacker3
+    networks:
+      eclipse_net_1:
+        ipv4_address: 172.28.4.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker4:
+    image: eclipse-test
+    container_name: eclipse_attacker4
+    hostname: attacker4
+    networks:
+      eclipse_net_1:
+        ipv4_address: 172.28.5.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker5:
+    image: eclipse-test
+    container_name: eclipse_attacker5
+    hostname: attacker5
+    networks:
+      eclipse_net_1:
+        ipv4_address: 172.28.6.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  # =========================================================================
+  # Netgroup 2: 172.29.x.x (different /16)
+  # =========================================================================
+  attacker6:
+    image: eclipse-test
+    container_name: eclipse_attacker6
+    hostname: attacker6
+    networks:
+      eclipse_net_2:
+        ipv4_address: 172.29.2.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker7:
+    image: eclipse-test
+    container_name: eclipse_attacker7
+    hostname: attacker7
+    networks:
+      eclipse_net_2:
+        ipv4_address: 172.29.3.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker8:
+    image: eclipse-test
+    container_name: eclipse_attacker8
+    hostname: attacker8
+    networks:
+      eclipse_net_2:
+        ipv4_address: 172.29.4.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker9:
+    image: eclipse-test
+    container_name: eclipse_attacker9
+    hostname: attacker9
+    networks:
+      eclipse_net_2:
+        ipv4_address: 172.29.5.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker10:
+    image: eclipse-test
+    container_name: eclipse_attacker10
+    hostname: attacker10
+    networks:
+      eclipse_net_2:
+        ipv4_address: 172.29.6.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  # =========================================================================
+  # Netgroup 3: 172.30.x.x (different /16)
+  # =========================================================================
+  attacker11:
+    image: eclipse-test
+    container_name: eclipse_attacker11
+    hostname: attacker11
+    networks:
+      eclipse_net_3:
+        ipv4_address: 172.30.2.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker12:
+    image: eclipse-test
+    container_name: eclipse_attacker12
+    hostname: attacker12
+    networks:
+      eclipse_net_3:
+        ipv4_address: 172.30.3.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker13:
+    image: eclipse-test
+    container_name: eclipse_attacker13
+    hostname: attacker13
+    networks:
+      eclipse_net_3:
+        ipv4_address: 172.30.4.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker14:
+    image: eclipse-test
+    container_name: eclipse_attacker14
+    hostname: attacker14
+    networks:
+      eclipse_net_3:
+        ipv4_address: 172.30.5.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  attacker15:
+    image: eclipse-test
+    container_name: eclipse_attacker15
+    hostname: attacker15
+    networks:
+      eclipse_net_3:
+        ipv4_address: 172.30.6.1
+    depends_on:
+      - victim
+    command: ["sleep", "infinity"]
+
+  # Test runner - connected to all networks
+  test_runner:
+    image: eclipse-test
+    container_name: eclipse_test_runner
+    hostname: test_runner
+    networks:
+      eclipse_net_1:
+        ipv4_address: 172.28.100.1
+      eclipse_net_2:
+        ipv4_address: 172.29.100.1
+      eclipse_net_3:
+        ipv4_address: 172.30.100.1
+    depends_on:
+      - victim
+    volumes:
+      - ./:/tests
+    command: ["sleep", "infinity"]
+
+volumes:
+  victim_data:

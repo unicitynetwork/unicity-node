@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+# Cancel in-progress runs when a new push is made
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Build and test matrix
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds
+          - name: Linux Clang 18
+            os: ubuntu-22.04
+            compiler: clang
+            cc: clang-18
+            cxx: clang++-18
+            sanitizer: none
+
+          - name: Linux GCC 11
+            os: ubuntu-22.04
+            compiler: gcc
+            cc: gcc-11
+            cxx: g++-11
+            sanitizer: none
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
+
+      # Cache dependencies (speeds up builds significantly)
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/_deps
+          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-
+
+      # Install dependencies - Linux
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-system-dev libboost-filesystem-dev libminiupnpc-dev
+
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            wget https://apt.llvm.org/llvm.sh
+            chmod +x llvm.sh
+            sudo ./llvm.sh 18
+            sudo apt-get install -y clang-18 clang++-18
+          else
+            sudo apt-get install -y g++-11 gcc-11
+          fi
+
+      # Configure build
+      - name: Configure CMake
+        run: |
+          export CC=${{ matrix.cc }}
+          export CXX=${{ matrix.cxx }}
+
+          if [ "${{ matrix.sanitizer }}" != "none" ]; then
+            cmake -B build \
+              -DCMAKE_CXX_COMPILER=$CXX \
+              -DCMAKE_C_COMPILER=$CC \
+              -DSANITIZE=${{ matrix.sanitizer }} \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          else
+            cmake -B build \
+              -DCMAKE_CXX_COMPILER=$CXX \
+              -DCMAKE_C_COMPILER=$CC \
+              -DCMAKE_BUILD_TYPE=Release
+          fi
+
+      # Build
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      # Run tests
+      # Exclude [real] transport tests (require actual TCP sockets), [rpc] tests
+      # (require Unix domain sockets), and [slow] tests (8+ seconds each)
+      - name: Run unit tests
+        run: ./build/bin/unicity_tests -d yes "~[real]" "~[rpc]" "~[slow]"
+        timeout-minutes: 10
+
+      # Upload test results on failure
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.name }}
+          path: build/Testing/Temporary/
+
+  # Summary job - required to pass before merge
+  all-checks-passed:
+    name: All Checks Passed
+    needs: [build-test]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check all jobs
+        run: |
+          if [ "${{ needs.build-test.result }}" != "success" ]; then
+            echo "Build/test jobs failed"
+            exit 1
+          fi
+          echo "All checks passed"

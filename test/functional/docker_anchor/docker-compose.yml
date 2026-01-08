@@ -1,0 +1,130 @@
+version: "3.8"
+
+# Docker network configuration for AnchorManager functional tests
+# Tests anchor connection behavior for eclipse attack resistance
+
+networks:
+  anchornet1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.52.0.0/16
+  anchornet2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.53.0.0/16
+
+services:
+  # Target node (victim) - the node testing anchor behavior
+  anchor_target:
+    image: eclipse-test
+    container_name: anchor_target
+    hostname: anchor_target
+    networks:
+      anchornet1:
+        ipv4_address: 172.52.1.1
+      anchornet2:
+        ipv4_address: 172.53.1.1
+    ports:
+      - "29890:29590"  # P2P
+    volumes:
+      - anchor_target_data:/data
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --debug=network
+
+  # Anchor peers (honest nodes to be saved as anchors)
+  anchor_honest1:
+    image: eclipse-test
+    container_name: anchor_honest1
+    hostname: anchor_honest1
+    networks:
+      anchornet1:
+        ipv4_address: 172.52.2.1
+    ports:
+      - "29892:29590"
+    volumes:
+      - anchor_honest1_data:/data
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --debug=network
+
+  anchor_honest2:
+    image: eclipse-test
+    container_name: anchor_honest2
+    hostname: anchor_honest2
+    networks:
+      anchornet1:
+        ipv4_address: 172.52.3.1
+    ports:
+      - "29893:29590"
+    volumes:
+      - anchor_honest2_data:/data
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --debug=network
+
+  # Attacker nodes from different netgroup
+  anchor_attacker1:
+    image: eclipse-test
+    container_name: anchor_attacker1
+    hostname: anchor_attacker1
+    networks:
+      anchornet2:
+        ipv4_address: 172.53.2.1
+    depends_on:
+      - anchor_target
+    command: ["sleep", "infinity"]
+
+  anchor_attacker2:
+    image: eclipse-test
+    container_name: anchor_attacker2
+    hostname: anchor_attacker2
+    networks:
+      anchornet2:
+        ipv4_address: 172.53.3.1
+    depends_on:
+      - anchor_target
+    command: ["sleep", "infinity"]
+
+  anchor_attacker3:
+    image: eclipse-test
+    container_name: anchor_attacker3
+    hostname: anchor_attacker3
+    networks:
+      anchornet2:
+        ipv4_address: 172.53.4.1
+    depends_on:
+      - anchor_target
+    command: ["sleep", "infinity"]
+
+  # Test runner container
+  anchor_test_runner:
+    image: eclipse-test
+    container_name: anchor_test_runner
+    hostname: anchor_test_runner
+    networks:
+      anchornet1:
+        ipv4_address: 172.52.100.1
+      anchornet2:
+        ipv4_address: 172.53.100.1
+    depends_on:
+      - anchor_target
+    volumes:
+      - ./:/tests
+    command: ["sleep", "infinity"]
+
+volumes:
+  anchor_target_data:
+  anchor_honest1_data:
+  anchor_honest2_data:

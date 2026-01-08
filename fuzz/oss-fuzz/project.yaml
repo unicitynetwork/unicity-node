@@ -1,0 +1,28 @@
+# OSS-Fuzz project configuration for Unicity
+homepage: "https://github.com/unicitynetwork/unicity-pow"
+language: c++
+primary_contact: "0xt1mo@users.noreply.github.com"
+auto_ccs:
+  - "0xt1mo@users.noreply.github.com"
+
+# Sanitizers to run
+sanitizers:
+  - address
+  - undefined
+  - memory
+
+# Fuzzing engines
+fuzzing_engines:
+  - libfuzzer
+  - afl
+  - honggfuzz
+
+# Main language
+main_repo: "https://github.com/unicitynetwork/unicity-pow.git"
+
+# File issue tracker
+file_github_issue: true
+
+# Vendor ccs (optional - add specific maintainer emails)
+vendor_ccs:
+  - "0xt1mo@users.noreply.github.com"

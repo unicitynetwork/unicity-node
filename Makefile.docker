@@ -1,0 +1,208 @@
+# Unicity Docker Makefile
+# Convenient shortcuts for Docker operations
+
+.PHONY: help build build-test build-all run run-testnet run-regtest \
+        stop clean logs shell cli test up down ps backup restore
+
+# Default target
+.DEFAULT_GOAL := help
+
+# Configuration
+IMAGE_NAME := unicity
+IMAGE_TAG := latest
+TEST_IMAGE := $(IMAGE_NAME):test
+COMPOSE := docker-compose
+
+# Color output
+BLUE := \033[0;34m
+GREEN := \033[0;32m
+YELLOW := \033[1;33m
+NC := \033[0m # No Color
+
+##@ Building
+
+build: ## Build the main node image
+	@echo "$(BLUE)Building Unicity node image...$(NC)"
+	docker build -t $(IMAGE_NAME):$(IMAGE_TAG) .
+	@echo "$(GREEN)Build complete!$(NC)"
+
+build-test: ## Build the test image
+	@echo "$(BLUE)Building Unicity test image...$(NC)"
+	docker build -f Dockerfile.test -t $(TEST_IMAGE) .
+	@echo "$(GREEN)Test image build complete!$(NC)"
+
+build-all: build build-test ## Build all images
+	@echo "$(GREEN)All images built successfully!$(NC)"
+
+build-no-cache: ## Build without using cache
+	@echo "$(BLUE)Building without cache...$(NC)"
+	docker build --no-cache -t $(IMAGE_NAME):$(IMAGE_TAG) .
+	@echo "$(GREEN)Build complete!$(NC)"
+
+##@ Running
+
+up: ## Start the node with docker-compose
+	@echo "$(BLUE)Starting Unicity node...$(NC)"
+	$(COMPOSE) up -d
+	@echo "$(GREEN)Node started! Use 'make logs' to view logs$(NC)"
+
+run: build ## Build and run mainnet node
+	@echo "$(BLUE)Starting mainnet node...$(NC)"
+	docker run -d \
+		--name unicity-node \
+		-p 9590:9590 \
+		-v unicity-data:/home/unicity/.unicity \
+		$(IMAGE_NAME):$(IMAGE_TAG)
+	@echo "$(GREEN)Mainnet node running!$(NC)"
+
+run-testnet: build ## Build and run testnet node
+	@echo "$(BLUE)Starting testnet node...$(NC)"
+	$(COMPOSE) --profile testnet up -d testnet
+	@echo "$(GREEN)Testnet node running!$(NC)"
+
+run-regtest: build ## Build and run regtest node
+	@echo "$(BLUE)Starting regtest node...$(NC)"
+	$(COMPOSE) --profile regtest up -d regtest
+	@echo "$(GREEN)Regtest node running!$(NC)"
+
+down: ## Stop all containers
+	@echo "$(YELLOW)Stopping containers...$(NC)"
+	$(COMPOSE) down
+	@echo "$(GREEN)Containers stopped$(NC)"
+
+stop: down ## Alias for 'down'
+
+##@ Monitoring
+
+logs: ## Follow container logs
+	$(COMPOSE) logs -f node
+
+logs-tail: ## Show last 100 lines of logs
+	$(COMPOSE) logs --tail 100 node
+
+ps: ## Show running containers
+	$(COMPOSE) ps
+
+status: ps ## Alias for 'ps'
+
+##@ Interaction
+
+shell: ## Open a shell in the running container
+	docker exec -it unicity-node bash
+
+cli: ## Run unicity-cli (usage: make cli ARGS="getinfo")
+	@$(COMPOSE) exec node unicity-cli $(ARGS)
+
+cli-info: ## Get node info
+	@echo "$(BLUE)Node Information:$(NC)"
+	@$(COMPOSE) exec node unicity-cli getinfo
+
+cli-blockchain: ## Get blockchain info
+	@echo "$(BLUE)Blockchain Information:$(NC)"
+	@$(COMPOSE) exec node unicity-cli getblockchaininfo
+
+cli-peers: ## Get peer info
+	@echo "$(BLUE)Connected Peers:$(NC)"
+	@$(COMPOSE) exec node unicity-cli getpeerinfo
+
+##@ Testing
+
+test: build-test ## Run the test suite
+	@echo "$(BLUE)Running test suite...$(NC)"
+	$(COMPOSE) --profile test run --rm tests
+	@echo "$(GREEN)Tests complete!$(NC)"
+
+test-verbose: build-test ## Run tests with verbose output
+	@echo "$(BLUE)Running tests (verbose)...$(NC)"
+	$(COMPOSE) --profile test run --rm tests -v
+
+test-specific: build-test ## Run specific test (usage: make test-specific SUITE="block header")
+	@echo "$(BLUE)Running test suite: $(SUITE)$(NC)"
+	$(COMPOSE) --profile test run --rm tests "$(SUITE)"
+
+##@ Maintenance
+
+clean: ## Remove containers and images
+	@echo "$(YELLOW)Removing containers...$(NC)"
+	$(COMPOSE) down
+	@echo "$(YELLOW)Removing images...$(NC)"
+	docker rmi $(IMAGE_NAME):$(IMAGE_TAG) $(TEST_IMAGE) 2>/dev/null || true
+	@echo "$(GREEN)Cleanup complete$(NC)"
+
+clean-all: clean ## Remove everything including volumes
+	@echo "$(YELLOW)WARNING: This will delete all blockchain data!$(NC)"
+	@echo "Press Ctrl+C to cancel, or wait 5 seconds to continue..."
+	@sleep 5
+	$(COMPOSE) down -v
+	docker volume rm unicity-mainnet-data unicity-testnet-data unicity-regtest-data 2>/dev/null || true
+	@echo "$(GREEN)Full cleanup complete$(NC)"
+
+prune: ## Remove unused Docker resources
+	@echo "$(YELLOW)Pruning Docker system...$(NC)"
+	docker system prune -f
+	@echo "$(GREEN)Prune complete$(NC)"
+
+##@ Backup & Restore
+
+backup: ## Backup blockchain data
+	@echo "$(BLUE)Backing up blockchain data...$(NC)"
+	@mkdir -p backups
+	docker run --rm \
+		-v unicity-mainnet-data:/data \
+		-v $(PWD)/backups:/backup \
+		ubuntu tar czf /backup/unicity-backup-$(shell date +%Y%m%d-%H%M%S).tar.gz -C /data .
+	@echo "$(GREEN)Backup saved to backups/$(NC)"
+
+restore: ## Restore from backup (usage: make restore BACKUP=backups/file.tar.gz)
+	@if [ -z "$(BACKUP)" ]; then \
+		echo "$(YELLOW)Usage: make restore BACKUP=backups/file.tar.gz$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Restoring from $(BACKUP)...$(NC)"
+	docker run --rm \
+		-v unicity-mainnet-data:/data \
+		-v $(PWD):/backup \
+		ubuntu tar xzf /backup/$(BACKUP) -C /data
+	@echo "$(GREEN)Restore complete$(NC)"
+
+inspect-volume: ## Inspect the blockchain data volume
+	docker run --rm \
+		-v unicity-mainnet-data:/data \
+		ubuntu ls -lah /data
+
+##@ Development
+
+dev-shell: ## Start a development shell with source mounted
+	docker run -it --rm \
+		-v $(PWD):/workspace \
+		-w /workspace \
+		ubuntu:22.04 \
+		bash
+
+rebuild: clean build ## Clean and rebuild everything
+	@echo "$(GREEN)Rebuild complete!$(NC)"
+
+watch-logs: logs ## Alias for 'logs'
+
+##@ Information
+
+help: ## Display this help message
+	@echo "$(BLUE)Unicity Docker Makefile$(NC)"
+	@echo ""
+	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make $(BLUE)<target>$(NC)\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  $(BLUE)%-18s$(NC) %s\n", $$1, $$2 } /^##@/ { printf "\n$(YELLOW)%s$(NC)\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+version: ## Show Docker and Compose versions
+	@echo "$(BLUE)Docker Version:$(NC)"
+	@docker --version
+	@echo "$(BLUE)Docker Compose Version:$(NC)"
+	@docker-compose --version
+
+info: ## Show system info
+	@echo "$(BLUE)Docker System Info:$(NC)"
+	@docker system df
+	@echo ""
+	@echo "$(BLUE)Unicity Volumes:$(NC)"
+	@docker volume ls | grep unicity || echo "No volumes found"
+	@echo ""
+	@echo "$(BLUE)Unicity Containers:$(NC)"
+	@docker ps -a | grep unicity || echo "No containers found"

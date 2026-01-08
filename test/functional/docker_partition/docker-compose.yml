@@ -1,0 +1,224 @@
+# Docker Compose for Network Partition Testing
+#
+# Creates two groups of nodes that can be isolated from each other
+# to test partition tolerance and recovery.
+#
+# Network Layout:
+#   - partition_net_a (172.31.0.0/16): Nodes A1, A2, A3 (partition A)
+#   - partition_net_b (172.32.0.0/16): Nodes B1, B2, B3 (partition B)
+#   - partition_net_bridge (172.33.0.0/16): Bridge node + test runner
+#
+# All nodes listen for connections. The test runner establishes
+# connections between nodes and uses iptables to simulate partitions.
+#
+# Usage:
+#   docker-compose up -d
+#   python3 run_partition_tests.py
+#   docker-compose down -v
+
+networks:
+  partition_net_a:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/16
+  partition_net_b:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.32.0.0/16
+  partition_net_bridge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.33.0.0/16
+
+services:
+  # =========================================================================
+  # Partition A: Nodes A1, A2, A3
+  # =========================================================================
+  node_a1:
+    image: eclipse-test
+    container_name: partition_node_a1
+    hostname: node_a1
+    cap_add:
+      - NET_ADMIN
+    networks:
+      partition_net_a:
+        ipv4_address: 172.31.1.1
+      partition_net_bridge:
+        ipv4_address: 172.33.1.1
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --loglevel=info
+    volumes:
+      - node_a1_data:/data
+
+  node_a2:
+    image: eclipse-test
+    container_name: partition_node_a2
+    hostname: node_a2
+    cap_add:
+      - NET_ADMIN
+    networks:
+      partition_net_a:
+        ipv4_address: 172.31.2.1
+    depends_on:
+      - node_a1
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --loglevel=info
+    volumes:
+      - node_a2_data:/data
+
+  node_a3:
+    image: eclipse-test
+    container_name: partition_node_a3
+    hostname: node_a3
+    cap_add:
+      - NET_ADMIN
+    networks:
+      partition_net_a:
+        ipv4_address: 172.31.3.1
+    depends_on:
+      - node_a1
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --loglevel=info
+    volumes:
+      - node_a3_data:/data
+
+  # =========================================================================
+  # Partition B: Nodes B1, B2, B3
+  # =========================================================================
+  node_b1:
+    image: eclipse-test
+    container_name: partition_node_b1
+    hostname: node_b1
+    cap_add:
+      - NET_ADMIN
+    networks:
+      partition_net_b:
+        ipv4_address: 172.32.1.1
+      partition_net_bridge:
+        ipv4_address: 172.33.2.1
+    depends_on:
+      - node_a1
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --loglevel=info
+    volumes:
+      - node_b1_data:/data
+
+  node_b2:
+    image: eclipse-test
+    container_name: partition_node_b2
+    hostname: node_b2
+    cap_add:
+      - NET_ADMIN
+    networks:
+      partition_net_b:
+        ipv4_address: 172.32.2.1
+    depends_on:
+      - node_b1
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --loglevel=info
+    volumes:
+      - node_b2_data:/data
+
+  node_b3:
+    image: eclipse-test
+    container_name: partition_node_b3
+    hostname: node_b3
+    cap_add:
+      - NET_ADMIN
+    networks:
+      partition_net_b:
+        ipv4_address: 172.32.3.1
+    depends_on:
+      - node_b1
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --loglevel=info
+    volumes:
+      - node_b3_data:/data
+
+  # =========================================================================
+  # Bridge Node: Connects both partitions
+  # =========================================================================
+  node_bridge:
+    image: eclipse-test
+    container_name: partition_node_bridge
+    hostname: node_bridge
+    cap_add:
+      - NET_ADMIN
+    networks:
+      partition_net_a:
+        ipv4_address: 172.31.100.1
+      partition_net_b:
+        ipv4_address: 172.32.100.1
+      partition_net_bridge:
+        ipv4_address: 172.33.100.1
+    ports:
+      - "29590:29590"
+    depends_on:
+      - node_a1
+      - node_b1
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --loglevel=info
+    volumes:
+      - node_bridge_data:/data
+
+  # =========================================================================
+  # Test Runner
+  # =========================================================================
+  test_runner:
+    image: eclipse-test
+    container_name: partition_test_runner
+    hostname: test_runner
+    cap_add:
+      - NET_ADMIN
+    networks:
+      partition_net_a:
+        ipv4_address: 172.31.200.1
+      partition_net_b:
+        ipv4_address: 172.32.200.1
+      partition_net_bridge:
+        ipv4_address: 172.33.200.1
+    depends_on:
+      - node_bridge
+    volumes:
+      - ./:/tests
+    command: ["sleep", "infinity"]
+
+volumes:
+  node_a1_data:
+  node_a2_data:
+  node_a3_data:
+  node_b1_data:
+  node_b2_data:
+  node_b3_data:
+  node_bridge_data:

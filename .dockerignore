@@ -1,0 +1,44 @@
+# Build directories
+build/
+build_*/
+cmake-build-*/
+xcode-build/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Version control
+.git/
+.gitignore
+.github/
+
+# Backup files
+backup_*/
+*.o
+test_*.o
+
+# Documentation (not needed in container)
+*.md
+!README.md
+
+# Logs
+*.log
+debug.log
+
+# CI/CD files
+.claude/
+fuzz/oss-fuzz/
+
+# CMake cache
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Temporary files
+*.tmp
+*.temp

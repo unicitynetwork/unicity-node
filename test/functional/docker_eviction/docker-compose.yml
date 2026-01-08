@@ -1,0 +1,179 @@
+version: "3.8"
+
+# Docker network configuration for EvictionManager functional tests
+# Tests peer eviction behavior under connection pressure
+
+networks:
+  evictnet1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.54.0.0/16
+  evictnet2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.55.0.0/16
+  evictnet3:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.56.0.0/16
+
+services:
+  # Target node - limited connections to trigger eviction
+  evict_target:
+    image: eclipse-test
+    container_name: evict_target
+    hostname: evict_target
+    networks:
+      evictnet1:
+        ipv4_address: 172.54.1.1
+      evictnet2:
+        ipv4_address: 172.55.1.1
+      evictnet3:
+        ipv4_address: 172.56.1.1
+    ports:
+      - "29990:29590"  # P2P
+    volumes:
+      - evict_target_data:/data
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --debug=network
+
+  # Honest peers from netgroup 1 (to test netgroup diversity protection)
+  evict_honest1:
+    image: eclipse-test
+    container_name: evict_honest1
+    hostname: evict_honest1
+    networks:
+      evictnet1:
+        ipv4_address: 172.54.2.1
+    depends_on:
+      - evict_target
+    command: ["sleep", "infinity"]
+
+  evict_honest2:
+    image: eclipse-test
+    container_name: evict_honest2
+    hostname: evict_honest2
+    networks:
+      evictnet1:
+        ipv4_address: 172.54.3.1
+    depends_on:
+      - evict_target
+    command: ["sleep", "infinity"]
+
+  # Attackers from netgroup 2 (same /16 - testing netgroup diversity)
+  evict_attacker1:
+    image: eclipse-test
+    container_name: evict_attacker1
+    hostname: evict_attacker1
+    networks:
+      evictnet2:
+        ipv4_address: 172.55.2.1
+    depends_on:
+      - evict_target
+    command: ["sleep", "infinity"]
+
+  evict_attacker2:
+    image: eclipse-test
+    container_name: evict_attacker2
+    hostname: evict_attacker2
+    networks:
+      evictnet2:
+        ipv4_address: 172.55.3.1
+    depends_on:
+      - evict_target
+    command: ["sleep", "infinity"]
+
+  evict_attacker3:
+    image: eclipse-test
+    container_name: evict_attacker3
+    hostname: evict_attacker3
+    networks:
+      evictnet2:
+        ipv4_address: 172.55.4.1
+    depends_on:
+      - evict_target
+    command: ["sleep", "infinity"]
+
+  evict_attacker4:
+    image: eclipse-test
+    container_name: evict_attacker4
+    hostname: evict_attacker4
+    networks:
+      evictnet2:
+        ipv4_address: 172.55.5.1
+    depends_on:
+      - evict_target
+    command: ["sleep", "infinity"]
+
+  evict_attacker5:
+    image: eclipse-test
+    container_name: evict_attacker5
+    hostname: evict_attacker5
+    networks:
+      evictnet2:
+        ipv4_address: 172.55.6.1
+    depends_on:
+      - evict_target
+    command: ["sleep", "infinity"]
+
+  # Diverse attackers from netgroup 3 (different /16)
+  evict_attacker6:
+    image: eclipse-test
+    container_name: evict_attacker6
+    hostname: evict_attacker6
+    networks:
+      evictnet3:
+        ipv4_address: 172.56.2.1
+    depends_on:
+      - evict_target
+    command: ["sleep", "infinity"]
+
+  evict_attacker7:
+    image: eclipse-test
+    container_name: evict_attacker7
+    hostname: evict_attacker7
+    networks:
+      evictnet3:
+        ipv4_address: 172.56.3.1
+    depends_on:
+      - evict_target
+    command: ["sleep", "infinity"]
+
+  evict_attacker8:
+    image: eclipse-test
+    container_name: evict_attacker8
+    hostname: evict_attacker8
+    networks:
+      evictnet3:
+        ipv4_address: 172.56.4.1
+    depends_on:
+      - evict_target
+    command: ["sleep", "infinity"]
+
+  # Test runner container
+  evict_test_runner:
+    image: eclipse-test
+    container_name: evict_test_runner
+    hostname: evict_test_runner
+    networks:
+      evictnet1:
+        ipv4_address: 172.54.100.1
+      evictnet2:
+        ipv4_address: 172.55.100.1
+      evictnet3:
+        ipv4_address: 172.56.100.1
+    depends_on:
+      - evict_target
+    volumes:
+      - ./:/tests
+    command: ["sleep", "infinity"]
+
+volumes:
+  evict_target_data:

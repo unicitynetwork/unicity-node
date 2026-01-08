@@ -1,0 +1,114 @@
+version: "3.8"
+
+# Docker network configuration for BanManager functional tests
+# Tests ban/discouragement behavior with real TCP connections
+
+networks:
+  bannet1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.50.0.0/16
+  bannet2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.51.0.0/16
+
+services:
+  # Target node (victim) - the node being tested
+  ban_target:
+    image: eclipse-test
+    container_name: ban_target
+    hostname: ban_target
+    networks:
+      bannet1:
+        ipv4_address: 172.50.1.1
+      bannet2:
+        ipv4_address: 172.51.1.1
+    ports:
+      - "29790:29590"  # P2P
+    volumes:
+      - ban_target_data:/data
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29590
+      --debug=network
+
+  # Attacker peers (simulate misbehaving/banned peers)
+  ban_attacker1:
+    image: eclipse-test
+    container_name: ban_attacker1
+    hostname: ban_attacker1
+    networks:
+      bannet1:
+        ipv4_address: 172.50.2.1
+    depends_on:
+      - ban_target
+    command: ["sleep", "infinity"]
+
+  ban_attacker2:
+    image: eclipse-test
+    container_name: ban_attacker2
+    hostname: ban_attacker2
+    networks:
+      bannet1:
+        ipv4_address: 172.50.3.1
+    depends_on:
+      - ban_target
+    command: ["sleep", "infinity"]
+
+  ban_attacker3:
+    image: eclipse-test
+    container_name: ban_attacker3
+    hostname: ban_attacker3
+    networks:
+      bannet1:
+        ipv4_address: 172.50.4.1
+    depends_on:
+      - ban_target
+    command: ["sleep", "infinity"]
+
+  # Attackers from different netgroup
+  ban_attacker4:
+    image: eclipse-test
+    container_name: ban_attacker4
+    hostname: ban_attacker4
+    networks:
+      bannet2:
+        ipv4_address: 172.51.2.1
+    depends_on:
+      - ban_target
+    command: ["sleep", "infinity"]
+
+  ban_attacker5:
+    image: eclipse-test
+    container_name: ban_attacker5
+    hostname: ban_attacker5
+    networks:
+      bannet2:
+        ipv4_address: 172.51.3.1
+    depends_on:
+      - ban_target
+    command: ["sleep", "infinity"]
+
+  # Test runner container
+  ban_test_runner:
+    image: eclipse-test
+    container_name: ban_test_runner
+    hostname: ban_test_runner
+    networks:
+      bannet1:
+        ipv4_address: 172.50.100.1
+      bannet2:
+        ipv4_address: 172.51.100.1
+    depends_on:
+      - ban_target
+    volumes:
+      - ./:/tests
+    command: ["sleep", "infinity"]
+
+volumes:
+  ban_target_data:

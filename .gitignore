@@ -1,0 +1,88 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+bin/
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/
+CLAUDE.md
+
+# Compiled files
+*.o
+*.so
+*.dylib
+*.a
+
+# Executables
+unicity
+
+# macOS
+.DS_Store
+
+# Dependencies
+_deps/
+
+# Static analysis
+.scannerwork/
+cppcheck-report.txt
+iwyu_results/
+*.iwyu
+sonar-project.properties
+
+# Local testing configuration
+lsan.supp
+asan.supp
+test_threading_perf.sh
+Dockerfile.test
+
+# Sensitive deployment configuration
+deploy/ansible/inventory.yml
+deploy/ansible/inventory-*.yml
+deploy/ansible/hosts
+deploy/ansible/*.vault
+
+# Local operational files (not in repo)
+deploy/ansible/local/
+
+# Keep example/template files
+!deploy/ansible/inventory.yml.example
+# Environment files with secrets
+.env
+*.env.local
+!.env.example
+
+# Runtime generated files (node data directories)
+debug.log
+*.log
+banlist.json
+peers.json
+anchors.json
+node.sock
+
+# Temporary local files (not checked in)
+tmp/
+tmpDec/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+testnet-node1/
+
+# Large test chains (not needed for tests)
+test/functional/test_chains/chain_100000_blocks/
+data

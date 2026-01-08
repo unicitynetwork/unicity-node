@@ -1,0 +1,226 @@
+version: '3.8'
+
+services:
+  # ============================================================================
+  # Main Unicity Node
+  # ============================================================================
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: unicity:latest
+    container_name: unicity-node
+    hostname: unicity-node
+    restart: unless-stopped
+    profiles: ["mainnet"]
+
+    # Port mappings for P2P networking
+    ports:
+      - "9590:9590"   # Mainnet P2P
+
+    # Persistent data volume
+    volumes:
+      - unicity-data:/home/unicity/.unicity
+
+    # Environment variables for configuration
+    environment:
+      - UNICITY_VERBOSE=1
+
+    # Default command-line arguments
+    command: [
+      "--verbose",
+      "--datadir=/home/unicity/.unicity"
+    ]
+
+    # Health check via CLI
+    healthcheck:
+      test: ["CMD", "unicity-cli", "getinfo"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '2.0'
+          memory: 2G
+
+  # ============================================================================
+  # Testnet Node (use profile: docker-compose --profile testnet up)
+  # ============================================================================
+  testnet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: unicity:latest
+    container_name: unicity-testnet
+    hostname: unicity-testnet
+    restart: unless-stopped
+    profiles: ["testnet"]
+
+    ports:
+      - "19590:19590"   # Testnet P2P
+
+    volumes:
+      - ./data/testnet:/home/unicity/.unicity
+
+    command: [
+      "--testnet",
+      "--verbose",
+      "--datadir=/home/unicity/.unicity"
+    ]
+
+    healthcheck:
+      test: ["CMD", "unicity-cli", "getinfo"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================================================
+  # Regtest Node (use profile: docker-compose --profile regtest up)
+  # ============================================================================
+  regtest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: unicity:latest
+    container_name: unicity-regtest
+    hostname: unicity-regtest
+    restart: unless-stopped
+    profiles: ["regtest"]
+
+    ports:
+      - "29590:29590"   # Regtest P2P
+
+    volumes:
+      - unicity-regtest-data:/home/unicity/.unicity
+
+    command: [
+      "--regtest",
+      "--verbose",
+      "--datadir=/home/unicity/.unicity"
+    ]
+
+    healthcheck:
+      test: ["CMD", "unicity-cli", "getinfo"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # Debug Node with TRACE logging (use profile: docker-compose --profile debug up)
+  # For debugging chain/network issues with comprehensive TRACE output
+  # ============================================================================
+  debug:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: unicity:latest
+    container_name: unicity-debug
+    hostname: unicity-debug
+    restart: unless-stopped
+    profiles: ["debug"]
+
+    ports:
+      - "29590:29590"   # Regtest port for debugging
+
+    volumes:
+      - unicity-debug-data:/home/unicity/.unicity
+
+    environment:
+      # Enable TRACE logging for all components
+      - UNICITY_DEBUG=all
+
+    command: [
+      "--regtest",
+      "--datadir=/home/unicity/.unicity",
+      "--debug=all"
+    ]
+
+    healthcheck:
+      test: ["CMD", "unicity-cli", "getinfo"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # Test Runner (use profile: docker-compose --profile test up)
+  # ============================================================================
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: unicity:test
+    container_name: unicity-tests
+    profiles: ["test"]
+
+    # Environment for test configuration
+    environment:
+      # Set to 'trace' to enable TRACE logging in tests
+      - UNICITY_TEST_LOG_LEVEL=info
+
+    # Run tests and exit
+    command: ["./unicity_tests", "-v"]
+
+    # Mount source for potential test coverage reports
+    volumes:
+      - ./test:/workspace/test:ro
+
+  # ============================================================================
+  # Test Runner with TRACE logging (use profile: docker-compose --profile test-trace up)
+  # For debugging test failures with comprehensive TRACE output
+  # ============================================================================
+  tests-trace:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: unicity:test
+    container_name: unicity-tests-trace
+    profiles: ["test-trace"]
+
+    environment:
+      # Enable TRACE logging for all test output
+      - UNICITY_TEST_LOG_LEVEL=trace
+
+    # Run tests with TRACE logging
+    command: ["./unicity_tests", "-v"]
+
+    volumes:
+      - ./test:/workspace/test:ro
+
+# ============================================================================
+# Named Volumes for Persistent Data
+# ============================================================================
+volumes:
+  unicity-data:
+    driver: local
+    name: unicity-mainnet-data
+
+  unicity-testnet-data:
+    driver: local
+    name: unicity-testnet-data
+
+  unicity-regtest-data:
+    driver: local
+    name: unicity-regtest-data
+
+  unicity-debug-data:
+    driver: local
+    name: unicity-debug-data
+
+# ============================================================================
+# Networks (optional: use custom network for node communication)
+# ============================================================================
+networks:
+  default:
+    name: unicity-network
+    driver: bridge
