@@ -26,6 +26,7 @@ jobs:
     - name: Coverity Scan
       uses: vapier/coverity-scan-action@v1
       with:
+        project: unicity-node
         email: ${{ secrets.COVERITY_SCAN_EMAIL }}
         token: ${{ secrets.COVERITY_SCAN_TOKEN }}
         command: cmake --build build -j$(nproc)
