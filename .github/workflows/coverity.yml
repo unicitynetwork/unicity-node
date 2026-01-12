@@ -21,7 +21,7 @@ jobs:
         sudo apt-get install -y build-essential cmake libboost-dev
 
     - name: Configure
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 
     - name: Debug Coverity Download
       run: |

@@ -35,6 +35,8 @@ if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
     set(CMAKE_BUILD_TYPE "Release")
 endif()
 
+option(BUILD_TESTING "Build tests" ON)
+
 # =============================================================================
 # Sanitizer Support
 # =============================================================================
@@ -457,5 +459,7 @@ endif()
 # Subdirectories
 # =============================================================================
 
-add_subdirectory(test)
+if(BUILD_TESTING)
+    add_subdirectory(test)
+endif()
 add_subdirectory(tools/genesis_miner)
