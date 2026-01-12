@@ -23,6 +23,16 @@ jobs:
     - name: Configure
       run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
+    - name: Debug Coverity Download
+      run: |
+        # Test the download URL to see what error we get
+        curl -v --form token=${{ secrets.COVERITY_SCAN_TOKEN }} \
+             --form project=unicity-node \
+             https://scan.coverity.com/download/cxx/linux64 \
+             -o test-download.txt 2>&1 | head -50
+        echo "=== Download response ==="
+        cat test-download.txt | head -20
+
     - name: Coverity Scan
       uses: vapier/coverity-scan-action@v1
       with:
