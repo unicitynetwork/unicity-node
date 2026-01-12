@@ -1,7 +1,7 @@
 Unicity Proof of Work
 =====================================
 
-[![Docs](https://img.shields.io/badge/docs-README-blue.svg)](docs/README.md) [![Functional Tests](https://img.shields.io/badge/tests-functional-blueviolet.svg)](test/functional/README.md)
+[![Docs](https://img.shields.io/badge/docs-README-blue.svg)](docs/README.md) [![Functional Tests](https://img.shields.io/badge/tests-functional-blueviolet.svg)](test/functional/README.md) [![Coverity Scan](https://img.shields.io/coverity/scan/32828.svg)](https://scan.coverity.com/projects/unicity-node)
 Unicity PoW is a headers-only blockchain with RandomX proof-of-work and ASERT difficulty adjustment. There are no transactions, mempool or wallets. Each block is only a header which contains the miner's address. Coins that are mined here can be minted off-chain using the Unicity Token SDK. The end result is a portable trust anchor and coin-genesis blockchain purpose-built for the Unicity off-chain system that grows at approx 1MB a year.
 
 The implementation is Bitcoin Core-inspired and closely follows the architectural patterns for P2P networking and chainstate management, adapted for a headers-only implementation. Without transactions the attack surface is vastly reduced and the codebase is 5% of Core.
@@ -12,9 +12,9 @@ The implementation is Bitcoin Core-inspired and closely follows the architectura
 - [Architecture Documentation](docs/ARCHITECTURE.md) - System design and component interactions
 - [Protocol Specification](docs/SPECIFICATION.md) - Wire protocol and message formats
 - [Functional Tests](test/functional/README.md) - Runner, categories, test-only RPCs
-- [Testing Guide](test/QUICK_REFERENCE.md) - Running tests and test coverage
+- [Testing Guide](test/README.md) - Test suite documentation
 - [Deployment Guide](deploy/README.md) - Docker and Ansible deployment
-- [Binary Releases](https://github.com/sakuyama2024/unicity-pow/releases)
+- [Binary Releases](https://github.com/unicitynetwork/unicity-node/releases)
 
 ## Bitcoin Core-Inspired Architecture
 
@@ -37,7 +37,7 @@ Unicity adopts proven architectural patterns from Bitcoin Core for P2P networkin
 ## Project Structure
 
 ```
-unicity-pow/
+unicity-node/
 ├── src/                 # C++ source code (~12,000 lines)
 │   ├── chain/           # Blockchain core (validation, PoW, block index)
 │   ├── network/         # P2P networking and peer management
@@ -48,11 +48,11 @@ unicity-pow/
 │   └── util/            # Utility headers
 ├── test/                # Comprehensive test suite
 │   ├── unit/            # Unit tests (Catch2)
+│   ├── integration-network/  # P2P network tests
+│   ├── integration-chain/    # Chain integration tests
 │   ├── functional/      # End-to-end Python tests
-│   ├── security/        # Security-focused tests
-│   ├── chain/           # Chain validation tests
-│   ├── network/         # Network protocol tests
-│   └── util/            # Utility tests
+│   ├── wire/            # Wire-level protocol tools
+│   └── benchmark/       # Performance benchmarks
 ├── fuzz/                # Fuzzing infrastructure
 ├── deploy/              # Deployment automation
 │   ├── ansible/         # Multi-node deployment
@@ -75,8 +75,8 @@ All other dependencies (Asio, RandomX, spdlog, fmt, nlohmann/json, miniupnpc) ar
 ### Build Steps
 
 ```bash
-git clone https://github.com/sakuyama2024/unicity-pow.git
-cd unicity-pow
+git clone https://github.com/unicitynetwork/unicity-node.git
+cd unicity-node
 cmake -B build
 cmake --build build -j$(nproc)
 ```
@@ -101,7 +101,7 @@ cd test/functional
 ./run_tests.py
 ```
 
-See [test/QUICK_REFERENCE.md](test/QUICK_REFERENCE.md) for testing documentation.
+See [test/README.md](test/README.md) for testing documentation.
 
 ## Running a Node
 
@@ -132,7 +132,7 @@ For production deployments, Docker is recommended:
 docker run -d --name unicityd \
   -p 9590:9590 \
   -v unicity-data:/data \
-  unicitynetwork/unicity-pow
+  unicitynetwork/unicity-node
 
 # With resource limits
 docker run -d --name unicityd \
@@ -140,7 +140,7 @@ docker run -d --name unicityd \
   --cpus="2" \
   -p 9590:9590 \
   -v unicity-data:/data \
-  unicitynetwork/unicity-pow
+  unicitynetwork/unicity-node
 ```
 
 For multi-node deployments with Ansible, see [deploy/README.md](deploy/README.md).
@@ -218,8 +218,6 @@ Unicity uses RandomX proof-of-work (ASIC-resistant, CPU-friendly). The node supp
 
 ### Code Organization
 
-The implementation follows a modular design with clear separation:
-
 - **Chain Layer** (`src/chain/`, `include/chain/`)
   - Block validation and proof-of-work
   - Chain state management (CBlockIndex, CChainState)
@@ -258,16 +256,16 @@ CI runs on every commit:
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Detailed system architecture
-- [PROTOCOL_SPECIFICATION.md](PROTOCOL_SPECIFICATION.md) - Wire protocol specification
-- [test/QUICK_REFERENCE.md](test/QUICK_REFERENCE.md) - Testing guide
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Detailed system architecture
+- [docs/SPECIFICATION.md](docs/SPECIFICATION.md) - Wire protocol specification
+- [docs/SANITIZERS.md](docs/SANITIZERS.md) - Sanitizer build guide
+- [test/README.md](test/README.md) - Testing guide
 - [deploy/README.md](deploy/README.md) - Deployment guide
-- [DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md) - Full documentation index
 
 ## Community
 
-- **Issues**: [GitHub Issues](https://github.com/unicity-network/unicity-pow/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/unicity-network/unicity-pow/discussions)
+- **Issues**: [GitHub Issues](https://github.com/unicitynetwork/unicity-node/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/unicitynetwork/unicity-node/discussions)
 
 ## License
 

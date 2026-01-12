@@ -194,7 +194,8 @@ def main():
     log("\n=== Multi-Node Concurrent Sync Test ===\n", BLUE)
 
     # Configuration
-    NUM_SYNC_NODES = 10  # 10 nodes syncing from Node0
+    # Note: MAX_INBOUND_PER_NETGROUP=4 limits localhost connections
+    NUM_SYNC_NODES = 4  # 4 nodes syncing from Node0
     CHAIN_LENGTH = 50
 
     test_dir = tempfile.mkdtemp(prefix='cbc_multinode_')
@@ -245,8 +246,9 @@ def main():
 
         log(f"✓ All {NUM_SYNC_NODES} sync nodes started\n", GREEN)
 
-        # Now connect all nodes to Node0 via RPC
-        log("Connecting all sync nodes to Node0 via RPC...", BLUE)
+        # Connect all sync nodes to Node0 (outbound from sync nodes)
+        # Note: MAX_INBOUND_PER_NETGROUP=4 limits localhost connections to Node0
+        log("Connecting all sync nodes to Node0...", BLUE)
         for node in nodes[1:]:
             node.connect_to_peer(f'127.0.0.1:{port0}')
             time.sleep(0.1)

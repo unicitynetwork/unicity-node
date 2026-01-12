@@ -23,9 +23,10 @@ namespace unicity {
 namespace network {
 
 PeerDiscoveryManager::PeerDiscoveryManager(PeerLifecycleManager* peer_manager, const std::string& datadir)
-    : datadir_(datadir), peer_manager_(peer_manager), rng_(std::random_device{}()) {
-  // Create and own AddressManager
-  addr_manager_ = std::make_unique<AddressManager>();
+    : datadir_(datadir),
+      peer_manager_(peer_manager),
+      addr_manager_(std::make_unique<AddressManager>()),
+      rng_(std::random_device{}()) {
   LOG_NET_INFO("PeerDiscoveryManager created AddressManager");
 
   // Create and own AnchorManager
@@ -304,7 +305,7 @@ bool PeerDiscoveryManager::HandleAddr(PeerPtr peer, message::AddrMessage* msg) {
       std::vector<PeerPtr> relay_candidates;
       relay_candidates.reserve(all_peers.size());
 
-      for (auto& p : all_peers) {
+      for (const auto& p : all_peers) {
         if (!p || p->id() == peer_id)
           continue;  // Skip sender
         if (!p->relays_addr())
@@ -322,7 +323,11 @@ bool PeerDiscoveryManager::HandleAddr(PeerPtr peer, message::AddrMessage* msg) {
         std::shuffle(relay_candidates.begin(), relay_candidates.end(), rng_);
         size_t relay_count = std::min(relay_candidates.size(), size_t{2});
 
-        size_t sent_count = 0;
+        // Queue relays with trickle delay 
+        std::exponential_distribution<double> delay_dist(1.0 / ADDR_TRICKLE_MEAN_MS);
+        auto now_tp = util::GetSteadyTime();  
+
+        size_t queued_count = 0;
         for (size_t i = 0; i < relay_count; ++i) {
           auto& target = relay_candidates[i];
           const int target_id = target->id();
@@ -337,15 +342,18 @@ bool PeerDiscoveryManager::HandleAddr(PeerPtr peer, message::AddrMessage* msg) {
             }
           });
 
-          // Send the addresses
-          auto msg_copy = std::make_unique<message::AddrMessage>();
-          msg_copy->addresses = relay_addrs;
-          target->send_message(std::move(msg_copy));
-          ++sent_count;
+          // Queue for delayed send (Poisson-distributed delay)
+          auto delay_ms = static_cast<int64_t>(delay_dist(rng_));
+          PendingAddrRelay pending;
+          pending.send_time = now_tp + std::chrono::milliseconds(delay_ms);
+          pending.target_peer_id = target_id;
+          pending.addresses = relay_addrs;
+          pending_addr_relays_.push_back(std::move(pending));
+          ++queued_count;
         }
 
-        LOG_NET_DEBUG("ADDR relay: relayed {} addresses (of {} accepted) from peer={} to {} peers", relay_addrs.size(),
-                      accepted_addrs.size(), peer_id, sent_count);
+        LOG_NET_DEBUG("ADDR relay: queued {} addresses (of {} accepted) from peer={} to {} peers)",
+                      relay_addrs.size(), accepted_addrs.size(), peer_id, queued_count);
       }
     }
   } else if (!accepted_addrs.empty()) {
@@ -717,6 +725,42 @@ std::vector<protocol::NetworkAddress> PeerDiscoveryManager::LoadAnchors(const st
     return {};
   }
   return anchor_manager_->LoadAnchors(filepath);
+}
+
+// === ADDR Trickle Relay Processing ===
+
+void PeerDiscoveryManager::ProcessPendingAddrRelays() {
+  if (pending_addr_relays_.empty() || !peer_manager_) {
+    return;
+  }
+
+  auto now = util::GetSteadyTime();  
+  size_t sent_count = 0;
+
+  // Process all pending relays whose send_time has passed
+  auto it = pending_addr_relays_.begin();
+  while (it != pending_addr_relays_.end()) {
+    if (it->send_time > now) {
+      ++it;
+      continue;  // Not ready yet
+    }
+
+    // Time to send - get the peer
+    auto peer = peer_manager_->get_peer(it->target_peer_id);
+    if (peer && peer->is_connected() && peer->relays_addr()) {
+      auto msg = std::make_unique<message::AddrMessage>();
+      msg->addresses = std::move(it->addresses);
+      peer->send_message(std::move(msg));
+      ++sent_count;
+    }
+    // Remove from queue (sent or peer gone)
+    it = pending_addr_relays_.erase(it);
+  }
+
+  if (sent_count > 0) {
+    LOG_NET_TRACE("ADDR trickle: sent {} pending relay(s), {} remaining in queue", sent_count,
+                  pending_addr_relays_.size());
+  }
 }
 
 }  // namespace network

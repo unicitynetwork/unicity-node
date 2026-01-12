@@ -1,0 +1,43 @@
+# cppcheck suppressions for Unicity
+# Format: [error id]:[filename]:[line]
+# Or just: [error id] to suppress globally
+
+# Intentional implicit conversions for numeric types (Bitcoin Core style)
+noExplicitConstructor:*arith_uint256.hpp
+
+# STL algorithm suggestions - raw loops are often clearer
+useStlAlgorithm
+
+# Variable scope is a stylistic preference
+variableScope
+
+# ValidationState::Invalid() always returns false by design
+knownConditionTrueFalse:*validation.cpp
+
+# Init functions return true on success - checked for error handling
+knownConditionTrueFalse:*application.cpp
+
+# Bitcoin Core vendored code - don't modify upstream
+uninitMemberVar:*sha256.cpp
+shadowVariable:*sha256.cpp
+
+# False positive: loop condition checks cur && cur->pprev before body
+nullPointerRedundantCheck:*rpc_server.cpp:530
+
+# POSIX socket API requires C-style casts to sockaddr*
+dangerousTypeCast:*rpc_client.cpp
+dangerousTypeCast:*rpc_server.cpp
+
+# C-style cast in Bitcoin-derived code (randomx_pow.cpp SHA256 calls)
+cstyleCast:*randomx_pow.cpp
+
+# Implicit constructors are intentional for these types
+noExplicitConstructor:*addr_manager.hpp
+noExplicitConstructor:*nat_manager.cpp
+noExplicitConstructor:*rpc_server.cpp
+
+# Calling virtual function from destructor is safe (no derived classes)
+virtualCallInConstructor:*real_transport.hpp
+
+# NAT disabled build variant always returns false
+knownConditionTrueFalse:*nat_manager.cpp

@@ -2,16 +2,11 @@
 
 A C++ utility for testing P2P protocol behavior and DoS protection mechanisms in the Unicity network.
 
-**⚠️  WARNING: This tool sends custom P2P messages for testing. Only use on private test networks!**
+**WARNING: This tool sends adversarial P2P messages for testing. Only use on private test networks!**
 
 ## Purpose
 
-This tool allows you to test the node's P2P behavior by sending various types of P2P messages:
-
-1. **Invalid PoW Headers** - Headers with invalid proof-of-work (should trigger instant disconnect, score=100)
-2. **Oversized Messages** - Headers messages exceeding MAX_HEADERS_COUNT (should trigger +20 misbehavior score)
-3. **Non-Continuous Headers** - Headers that don't properly chain together (should trigger +20 misbehavior score)
-4. **Spam Scenarios** - Repeated violations to test score accumulation and disconnection
+This tool connects to a running node via TCP and sends various types of P2P messages to test protocol behavior, DoS protection, and edge case handling. It performs a proper P2P handshake before executing test scenarios.
 
 ## Building
 
@@ -27,34 +22,147 @@ Binary location: `build/bin/node_simulator`
 ## Usage
 
 ```bash
-# Show help
+./build/bin/node_simulator [options]
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--host <host>` | Target host (default: 127.0.0.1) |
+| `--port <port>` | Target port (default: 29590 regtest) |
+| `--test <type>` | Test scenario type (default: all) |
+| `--help` | Show help message |
+
+### Examples
+
+```bash
+# Show help with all test types
 ./build/bin/node_simulator --help
 
 # Test invalid PoW scenario
 ./build/bin/node_simulator --test invalid-pow
 
-# Test oversized headers scenario
-./build/bin/node_simulator --test oversized
+# Test slow-loris attack
+./build/bin/node_simulator --test slow-loris
 
-# Test non-continuous headers
-./build/bin/node_simulator --test non-continuous
-
-# Test spam scenario (5x non-continuous)
-./build/bin/node_simulator --test spam-continuous
+# Target a specific host/port
+./build/bin/node_simulator --host 192.168.1.100 --port 29590 --test oversized
 
 # Run all test scenarios
 ./build/bin/node_simulator --test all
-
-# Target a specific host/port
-./build/bin/node_simulator --host 192.168.1.100 --port 29590 --test all
 ```
 
-## Options
+## Test Scenarios
 
-- `--host <host>` - Target host (default: 127.0.0.1)
-- `--port <port>` - Target port (default: 29590 regtest)
-- `--test <type>` - Test scenario type to perform
-- `--help` - Show help message
+### Header Attacks
+| Test | Description |
+|------|-------------|
+| `invalid-pow` | Send headers with invalid proof-of-work |
+| `oversized` | Send oversized headers message (>2000 headers) |
+| `non-continuous` | Send non-continuous headers (broken chain) |
+| `spam-continuous` | Spam with non-continuous headers (5x) |
+
+### Framing Attacks
+| Test | Description |
+|------|-------------|
+| `slow-loris` | Drip a large payload slowly (chunked) |
+| `bad-magic` | Wrong 4-byte message magic |
+| `bad-checksum` | Corrupted header checksum |
+| `bad-length` | Declared length > actual then close |
+| `truncation` | Send half payload then close |
+| `empty-command` | Message with empty command field |
+| `length-short` | Declared length < actual payload |
+| `length-max` | Declared length > MAX (16MB) |
+| `command-null` | Command with embedded null bytes |
+| `command-non-ascii` | Command with non-ASCII bytes |
+
+### Handshake Attacks
+| Test | Description |
+|------|-------------|
+| `pre-handshake` | Send HEADERS before VERSION/VERACK |
+| `pre-handshake-gh` | Send GETHEADERS before handshake |
+| `pre-handshake-inv` | Send INV before handshake |
+| `pre-handshake-gd` | Send GETDATA before handshake |
+| `verack-first` | Send VERACK without VERSION |
+| `multi-verack` | Send VERACK twice |
+| `silent` | Connect but send nothing |
+| `stalled-handshake` | Send VERSION, never send VERACK |
+| `duplicate-version` | Send VERSION twice |
+| `bad-version` | VERSION with invalid fields |
+| `partial-version` | Send truncated VERSION message |
+
+### VERSION Variants
+| Test | Description |
+|------|-------------|
+| `ver-bad-height` | VERSION with start_height = -1 |
+| `ver-long-ua` | VERSION with 300-char user agent |
+| `ver-old-proto` | VERSION with protocol version 209 |
+| `ver-future-time` | VERSION timestamp 1 year in future |
+| `sendheaders-pre` | SENDHEADERS before VERSION |
+
+### Rate Limit Attacks
+| Test | Description |
+|------|-------------|
+| `unknown-cmd` | Send unknown command |
+| `unknown-cmd-flood` | Flood unknown commands (25x) |
+
+### Header Validation Attacks
+| Test | Description |
+|------|-------------|
+| `future-timestamp` | Headers with time > now + 10min |
+| `timestamp-zero` | Headers with timestamp = 0 |
+| `nbits-zero` | Headers with nBits = 0 |
+| `nbits-max` | Headers with nBits = 0xFFFFFFFF |
+| `self-ref` | Header with self-referential prevblock |
+| `circular-chain` | Circular header chain (A->B->A) |
+| `version-zero-hdr` | Header with nVersion = 0 |
+| `neg-version-hdr` | Header with nVersion = -1 |
+| `orphan-flood` | Flood with orphan headers (100x) |
+| `getheaders-spam` | Rapid GETHEADERS requests (50x) |
+
+### Message Type Attacks
+| Test | Description |
+|------|-------------|
+| `addr-flood` | Large ADDR message (1000 addrs) |
+| `inv-spam` | Spam INV messages (100x) |
+| `inv-bad-type` | INV with invalid type (99) |
+| `inv-repeat` | Same INV hash 100 times |
+| `getaddr-spam` | 50 GETADDR requests |
+| `sendheaders-dbl` | SENDHEADERS twice |
+
+### PING/PONG Attacks
+| Test | Description |
+|------|-------------|
+| `pong-no-ping` | PONG without receiving PING |
+| `pong-wrong-nonce` | PONG with wrong nonce |
+| `ping-zero-nonce` | PING with nonce = 0 |
+| `ping-oversized` | PING with 100-byte payload |
+
+### Payload Boundary Tests
+| Test | Description |
+|------|-------------|
+| `payload-max` | 1MB payload message |
+| `getheaders-empty` | GETHEADERS with empty locator |
+| `locator-overflow` | GETHEADERS with 150 hashes (max 101) |
+
+### Header Chain Attacks
+| Test | Description |
+|------|-------------|
+| `headers-bad-merkle` | Header with 0xFFFF merkle root |
+| `headers-deep-fork` | Header forking from random block |
+| `headers-max-batch` | 2000 headers in one message |
+
+### Resource Exhaustion
+| Test | Description |
+|------|-------------|
+| `rapid-reconnect` | Connect/disconnect rapidly (20x) |
+| `rapid-fire` | Send 500 PINGs as fast as possible |
+
+### Meta
+| Test | Description |
+|------|-------------|
+| `all` | Run all test scenarios |
 
 ## Testing DoS Protection
 
@@ -72,109 +180,54 @@ Binary location: `build/bin/node_simulator`
 
 3. Check node logs for misbehavior scoring:
 ```bash
-tail -f /tmp/test-node/debug.log | grep -i misbehaving
+tail -f /tmp/test-node/debug.log | grep -i misbehav
 ```
 
 ### Expected Results
 
-**Invalid PoW:**
-- Misbehavior score: +100
-- Result: Instant disconnect
-
-**Oversized Headers:**
-- Misbehavior score: +20
-- Result: Disconnect after 5 violations (5×20=100)
-
-**Non-Continuous Headers:**
-- Misbehavior score: +20
-- Result: Disconnect after 5 violations (5×20=100)
-
-**Spam Scenario:**
-- Sends 5 non-continuous headers messages
-- Accumulated score: 100
-- Result: Peer disconnected and discouraged
-
-### Checking Misbehavior Scores
-
-Use the `getpeerinfo` RPC to check peer misbehavior scores:
-
-```bash
-./build/bin/unicity-cli --datadir=/tmp/test-node getpeerinfo
-```
-
-Output includes:
-- `misbehavior_score`: Current score for the peer
-- `should_disconnect`: Whether peer should be disconnected
+The node should:
+- Detect misbehavior and assign appropriate scores
+- Disconnect peers that exceed the misbehavior threshold (100)
+- Handle malformed messages gracefully without crashing
+- Enforce rate limits on repeated requests
+- Timeout slow/stalled connections
 
 ## Implementation Details
 
 ### P2P Handshake
 
-The tool performs a proper P2P handshake:
-1. Connects to target
+The tool performs a proper P2P handshake before most tests:
+1. Connects to target via TCP
 2. Sends VERSION message
-3. Waits for VERACK
+3. Waits for VERSION + VERACK from node
 4. Sends VERACK
 5. Executes test scenario
+6. Receives and displays response messages
 
 ### Message Construction
 
-- Uses the same P2P protocol as the main node
-- Creates properly formatted message headers
-- Deliberately constructs invalid payloads for testing
-
-### Test Scenarios
-
-#### 1. Invalid PoW
-```cpp
-header.nBits = 0x00000001;  // Impossible difficulty
-```
-
-#### 2. Oversized Headers
-```cpp
-// Send 2100 headers (limit is 2000)
-for (int i = 0; i < 2100; i++) {
-    headers.push_back(header);
-}
-```
-
-#### 3. Non-Continuous Headers
-```cpp
-header2.hashPrevBlock.SetNull();  // Wrong! Doesn't connect
-```
+- Uses the same P2P protocol serialization as the main node
+- Creates properly formatted message headers with magic, command, length, checksum
+- Deliberately constructs invalid/adversarial payloads for testing
 
 ## Files
 
-- `node_simulator.cpp` - Main implementation
-- Built via test/CMakeLists.txt (target: `node_simulator`)
+- `node_simulator.cpp` - Main implementation (~2000 lines)
 - `README.md` - This file
+
+Built via `test/CMakeLists.txt` (target: `node_simulator`)
 
 ## Related Testing
 
-This tool complements the unit tests in the test suite:
+This tool complements the automated test suite:
 - **Unit tests**: Test DoS protection logic directly (misbehavior scoring, thresholds)
-- **Node simulator**: Test end-to-end P2P behavior (real network messages)
+- **Integration tests**: Test multi-node scenarios with simulated network
+- **Node simulator**: Test end-to-end P2P behavior against real running node
 
 ## Safety
 
 This tool is designed for testing only:
-- ⚠️ Never use on production networks
-- ⚠️ Only use on private/regtest networks
-- ⚠️ The tool warns before execution
-- ⚠️ No persistence - single-shot tests
-
-## Future Enhancements
-
-Potential additions:
-- Slow-loris and framing tests (added):
-  - slow-loris: chunked drip with early close to exercise timeouts
-  - bad-magic: wrong 4-byte magic
-  - bad-checksum: corrupt header checksum
-  - bad-length: declared length larger than sent bytes
-  - truncation: send half payload then close
-- Low-work header spam
-- Future timestamp tests
-- Checkpoint violation tests
-- Ban evasion testing
-- Multiple concurrent connections
-- Fuzzing support
+- Never use on production networks
+- Only use on private/regtest networks
+- Tests may cause the target node to disconnect or ban the simulator's IP
+- No persistence - single-shot tests

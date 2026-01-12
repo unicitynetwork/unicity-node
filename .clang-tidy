@@ -11,9 +11,7 @@ Checks: >
   readability-*,
   -readability-identifier-length,
   -readability-magic-numbers,
-  -modern
-
-ize-use-trailing-return-type,
+  -modernize-use-trailing-return-type,
   -cppcoreguidelines-avoid-magic-numbers,
   -cppcoreguidelines-pro-type-reinterpret-cast,
   -cppcoreguidelines-pro-bounds-pointer-arithmetic

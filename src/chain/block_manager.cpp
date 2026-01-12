@@ -511,7 +511,7 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
     }
 
     // Validate genesis uniqueness: exactly one block with pprev == nullptr
-    CBlockIndex* found_genesis = nullptr;
+    const CBlockIndex* found_genesis = nullptr;
     int genesis_count = 0;
     for (auto& kv : m_block_index) {
       CBlockIndex* pindex = &kv.second;

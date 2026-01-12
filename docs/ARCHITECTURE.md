@@ -1,7 +1,7 @@
 # Unicity Architecture
 
 **Version:** 1.0
-**Last Updated:** 2025-11-05
+**Last Updated:** 2026-01-12
 
 ## Overview
 
@@ -11,7 +11,6 @@ Unicity is a headers-only blockchain that implements Bitcoin-compatible P2P netw
 
 - **Headers-Only**: No transactions, no UTXO set, no mempool
 - **100-byte Headers**: Extended from Bitcoin's 80 bytes for RandomX PoW
-- **Bitcoin Wire Compatible**: 91% protocol compatibility
 - **RandomX PoW**: ASIC-resistant proof-of-work
 - **ASERT Difficulty**: Per-block difficulty adjustment
 
@@ -46,43 +45,42 @@ Unicity is a headers-only blockchain that implements Bitcoin-compatible P2P netw
 The chain layer validates block headers and maintains the blockchain state:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      ChainstateManager                          │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                    Public Interface                       │  │
-│  │  • AcceptBlockHeader()      • ActivateBestChain()         │  │
-│  │  • ProcessNewBlockHeader()  • InvalidateBlock()           │  │
-│  │  • GetTip()                 • IsInitialBlockDownload()    │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              ▼                                  │
-│  ┌────────────────────┐  ┌──────────────────────────┐  ┌───────────┐  │
-│  │   BlockManager     │  │   ActiveTipCandidates    │  │Orphan Pool│  │
-│  │                    │  │                          │  │           │  │
-│  │ • Block storage    │  │ • Candidate tips         │  │• DoS      │  │
-│  │ • Active chain     │  │ • Best chain selection   │  │  limits   │  │
-│  │ • Persistence      │  │ • Pruning                │  │           │  │
-│  └────────────────────┘  └──────────────────────────┘  └───────────┘  │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                   Validation Layer                        │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌──────────────────┐   │  │
-│  │  │ CheckBlock  │  │Contextual   │  │   GetNextWork    │   │  │
-│  │  │   Header    │  │  Check      │  │   Required       │   │  │
-│  │  │             │  │             │  │   (ASERT)        │   │  │
-│  │  └─────────────┘  └─────────────┘  └──────────────────┘   │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                 Consensus Layer (PoW)                     │  │
-│  │  ┌─────────────────────────────────────────────────────┐  │  │
-│  │  │              CheckProofOfWork()                     │  │  │
-│  │  │  ┌──────────────────┐  ┌──────────────────────┐     │  │  │
-│  │  │  │ COMMITMENT_ONLY  │  │    FULL (RandomX)    │     │  │  │
-│  │  │  │  (~1ms, DoS)     │  │    (~50ms, cache)    │     │  │  │
-│  │  │  └──────────────────┘  └──────────────────────┘     │  │  │
-│  │  └─────────────────────────────────────────────────────┘  │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                        ChainstateManager                          │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │                      Public Interface                       │  │
+│  │  • AcceptBlockHeader()      • ActivateBestChain()           │  │
+│  │  • ProcessNewBlockHeader()  • InvalidateBlock()             │  │
+│  │  • GetTip()                 • IsInitialBlockDownload()      │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                               ▼                                   │
+│  ┌──────────────────┐ ┌────────────────────┐ ┌──────────────┐     │
+│  │  BlockManager    │ │ ActiveTipCandidates│ │ Orphan Pool  │     │
+│  │                  │ │                    │ │              │     │
+│  │ • Block storage  │ │ • Candidate tips   │ │ • DoS limits │     │
+│  │ • Active chain   │ │ • Best chain       │ │              │     │
+│  │ • Persistence    │ │ • Pruning          │ │              │     │
+│  └──────────────────┘ └────────────────────┘ └──────────────┘     │
+│                               ▼                                   │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │                     Validation Layer                        │  │
+│  │  ┌───────────────┐ ┌───────────────┐ ┌───────────────────┐  │  │
+│  │  │ CheckBlock    │ │ Contextual    │ │ GetNextWork       │  │  │
+│  │  │ Header        │ │ Check         │ │ Required (ASERT)  │  │  │
+│  │  └───────────────┘ └───────────────┘ └───────────────────┘  │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                               ▼                                   │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │                   Consensus Layer (PoW)                     │  │
+│  │  ┌───────────────────────────────────────────────────────┐  │  │
+│  │  │                CheckProofOfWork()                     │  │  │
+│  │  │  ┌───────────────────┐  ┌───────────────────────┐     │  │  │
+│  │  │  │  COMMITMENT_ONLY  │  │   FULL (RandomX)      │     │  │  │
+│  │  │  │  (~1ms, DoS)      │  │   (~50ms, cache)      │     │  │  │
+│  │  │  └───────────────────┘  └───────────────────────┘     │  │  │
+│  │  └───────────────────────────────────────────────────────┘  │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
 ### Data Structures
@@ -124,37 +122,37 @@ Linear view from genesis to current tip:
 Three-layer validation ensures security while maintaining performance:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    LAYER 1: Pre-Filtering                   │
-│               (Fast DoS Protection - ~1ms)                  │
-├─────────────────────────────────────────────────────────────┤
-│  CheckProofOfWork(COMMITMENT_ONLY)                          │
-│  • Validates: hashRandomX commitment meets nBits            │
-│  • Purpose: Reject invalid headers before expensive PoW     │
-└─────────────────────────────────────────────────────────────┘
-                            ↓ PASSED
-┌─────────────────────────────────────────────────────────────┐
-│              LAYER 2: Context-Free Validation               │
-│              (Full PoW Verification - ~50ms)                │
-├─────────────────────────────────────────────────────────────┤
-│  CheckBlockHeader()                                         │
-│  • Validates: Full RandomX hash matches hashRandomX         │
-│  • Purpose: Cryptographic PoW verification                  │
-└─────────────────────────────────────────────────────────────┘
-                            ↓ PASSED
-┌─────────────────────────────────────────────────────────────┐
-│              LAYER 3: Contextual Validation                 │
-│              (Consensus Rules - ~5ms)                       │
-├─────────────────────────────────────────────────────────────┤
-│  ContextualCheckBlockHeader()                               │
-│  • Validates:                                               │
-│    - nBits matches ASERT difficulty                         │
-│    - Timestamp > Median Time Past (MTP)                     │
-│    - Timestamp < now + 2 hours                              │
-│    - Version >= 1                                           │
-└─────────────────────────────────────────────────────────────┘
-                            ↓ PASSED
-                    ✓ Block Accepted
+┌───────────────────────────────────────────────────────────┐
+│                  LAYER 1: Pre-Filtering                   │
+│              (Fast DoS Protection - ~1ms)                 │
+├───────────────────────────────────────────────────────────┤
+│  CheckProofOfWork(COMMITMENT_ONLY)                        │
+│  • Validates: hashRandomX commitment meets nBits          │
+│  • Purpose: Reject invalid headers before expensive PoW   │
+└───────────────────────────────────────────────────────────┘
+                          ↓ PASSED
+┌───────────────────────────────────────────────────────────┐
+│             LAYER 2: Context-Free Validation              │
+│             (Full PoW Verification - ~50ms)               │
+├───────────────────────────────────────────────────────────┤
+│  CheckBlockHeader()                                       │
+│  • Validates: Full RandomX hash matches hashRandomX       │
+│  • Purpose: Cryptographic PoW verification                │
+└───────────────────────────────────────────────────────────┘
+                          ↓ PASSED
+┌───────────────────────────────────────────────────────────┐
+│             LAYER 3: Contextual Validation                │
+│              (Consensus Rules - ~5ms)                     │
+├───────────────────────────────────────────────────────────┤
+│  ContextualCheckBlockHeader()                             │
+│  • Validates:                                             │
+│    - nBits matches ASERT difficulty                       │
+│    - Timestamp > previous block (mainnet/testnet)         │
+│    - Timestamp < now + 10 minutes                         │
+│    - Version >= 1                                         │
+└───────────────────────────────────────────────────────────┘
+                          ↓ PASSED
+                   ✓ Block Accepted
 ```
 
 ### Chain Reorganization
@@ -187,7 +185,6 @@ After Reorg:
 #### RandomX Proof-of-Work
 
 - **Memory-hard**: Requires ~2GB dataset per epoch
-- **CPU-optimized**: JIT compilation for efficient hashing
 - **Epoch-based**: Dataset changes periodically
 - **Two-phase verification**: Fast commitment check, then full RandomX
 
@@ -202,11 +199,12 @@ Formula: `target_new = target_ref * 2^((time_diff - ideal_time) / half_life)`
   - Target spacing: 2.4 hours (8640 seconds)
   - Half-life: 48 hours (difficulty doubles/halves over this period)
 
-#### Median Time Past
+#### Timestamp Rules
 
 Prevents timestamp manipulation:
-- New block timestamp must exceed median of last 11 blocks
-- Prevents miners from artificially lowering difficulty
+- **Mainnet/Testnet**: Strictly increasing (timestamp > previous block)
+- **Regtest**: Median Time Past (timestamp > median of last 11 blocks)
+- Future limit: timestamp < now + 10 minutes
 - Ensures monotonic time progression
 
 ---
@@ -495,11 +493,11 @@ Block Arrives:
 
 **Fast Rejection**:
 - Commitment-only PoW check (~1ms) before expensive validation
-- Message size limits (4 MB maximum)
+- Message size limits (8 MB maximum)
 - Orphan header limits (1000 total, 50 per peer)
 
 **Resource Limits**:
-- Connection limits (8 outbound, 125 inbound)
+- Connection limits (10 outbound, 125 inbound)
 - Ban/discourage for misbehaving peers
 - Stall detection with timeouts
 

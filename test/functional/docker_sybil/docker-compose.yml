@@ -1,0 +1,51 @@
+# Sybil Attack Tests
+# Tests coordinated multi-node attacks including:
+# - ADDR flooding from multiple peers
+# - Partition-then-flood scenarios
+# - Coordinated header conflicts
+
+networks:
+  sybil_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.50.0.0/16
+
+services:
+  # Target node - the node under attack
+  sybil_target:
+    image: eclipse-test
+    container_name: sybil_target
+    hostname: sybil_target
+    cap_add:
+      - NET_ADMIN
+    networks:
+      sybil_net:
+        ipv4_address: 172.50.0.2
+    ports:
+      - "29790:29790"
+    volumes:
+      - target_data:/data
+    command: >
+      /app/build/bin/unicityd
+      --regtest
+      --datadir=/data
+      --port=29790
+      --debug=network
+
+  # Test runner for CLI commands
+  sybil_runner:
+    image: eclipse-test
+    container_name: sybil_runner
+    hostname: sybil_runner
+    cap_add:
+      - NET_ADMIN
+    networks:
+      sybil_net:
+        ipv4_address: 172.50.0.100
+    command: sleep infinity
+    depends_on:
+      - sybil_target
+
+volumes:
+  target_data:

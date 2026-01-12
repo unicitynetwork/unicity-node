@@ -186,7 +186,7 @@ TEST_CASE("Thread Safety - Concurrent Read/Write", "[orphan][thread][critical]")
 
         // Final state should be consistent
         size_t final_count = chainstate.GetOrphanHeaderCount();
-        REQUIRE(final_count >= 0);  // No crashes
+        REQUIRE(final_count <= 1000);  // Global limit enforced
     }
 }
 
@@ -300,9 +300,9 @@ TEST_CASE("Thread Safety - Add During Processing", "[orphan][thread][critical]")
         processor.join();
         adder.join();
 
-        // Verify no crashes and state is consistent
+        // Verify state is consistent and within limits
         size_t after_count = chainstate.GetOrphanHeaderCount();
-        REQUIRE(after_count >= 0);  // No crash
+        REQUIRE(after_count <= 1000);  // Global limit enforced
 
         // Some orphans should have been processed (removed from pool)
         // New orphans should have been added
@@ -336,8 +336,8 @@ TEST_CASE("Thread Safety - Add During Processing", "[orphan][thread][critical]")
         adder.join();
         parent_adder.join();
 
-        // Verify final state is consistent
+        // Verify final state is consistent and within limits
         size_t final_count = chainstate.GetOrphanHeaderCount();
-        REQUIRE(final_count >= 0);  // No crashes
+        REQUIRE(final_count <= 1000);  // Global limit enforced
     }
 }

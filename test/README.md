@@ -2,32 +2,6 @@
 
 Comprehensive test coverage for the Unicity node implementation.
 
-## Important: Docker Tests Use Raw P2P Sockets (NOT RPC)
-
-**Docker tests connect via raw TCP P2P protocol, not RPC.**
-
-The node does not expose RPC over HTTP in Docker tests. All communication uses:
-- Raw TCP sockets to port 29590 (P2P port)
-- Manual P2P message construction (VERSION, VERACK, HEADERS, etc.)
-- Binary protocol with magic bytes, checksums, and payloads
-
-```python
-# CORRECT: Raw P2P socket connection
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect((target_ip, 29590))  # P2P port
-s.send(create_version_message())  # Manual P2P message
-
-# WRONG: Do NOT use RPC in Docker tests
-# node.rpc("getpeerinfo")  # NO - RPC is not available
-# requests.post("http://node:8332", ...)  # NO - no HTTP RPC
-```
-
-See `functional/docker_eclipse/run_eclipse_tests.py` for the canonical pattern:
-- `create_message(command, payload)` - Build P2P message with checksum
-- `create_version_message()` - Build VERSION handshake
-- `docker_exec(container, script)` - Run Python socket code in container
-
 ## Quick Start
 
 ```bash
@@ -35,323 +9,276 @@ See `functional/docker_eclipse/run_eclipse_tests.py` for the canonical pattern:
 cmake -S . -B build
 cmake --build build
 
-# Run C++ unit tests (fast)
+# Run C++ tests
 ./build/bin/unicity_tests
 
-# Run specific test by tag
+# Run by tag
 ./build/bin/unicity_tests "[dos]"
 ./build/bin/unicity_tests "[adversarial]"
 
-# Run specific test by name pattern
+# Run by name pattern
 ./build/bin/unicity_tests "*header_sync*"
 
 # Run Python functional test
 python test/functional/p2p_invalid_messages.py
 
 # Run wire-level attack simulator
-./build/bin/node_simulator --test all
+./build/bin/node_simulator --host 127.0.0.1 --port 29590 --test all
 ```
 
 ## Directory Structure
 
 ```
 test/
-├── unit/                    # C++ unit tests (isolated component tests)
-├── network/                 # C++ network/P2P tests (simulated network)
-├── chain/                   # C++ chain integration tests
-├── security/                # C++ security regression tests
-├── wire/                    # Wire-level protocol tools (real TCP)
-├── functional/              # Python functional tests (real node)
-│   ├── docker_*/            # Docker-based multi-node test suites
-│   └── test_framework/      # Python test utilities
+├── unit/                    # Fast isolated component tests
+├── integration-network/     # P2P network tests (simulated)
+│   ├── dos/                 # DoS protection
+│   ├── peer/                # Peer lifecycle
+│   ├── security/            # Eclipse attack simulations
+│   └── infra/               # Test infrastructure
+├── integration-chain/       # Chain tests (orphans, reorgs)
+├── wire/                    # Wire-level protocol tools
+├── functional/              # Python tests against real node
+│   ├── docker_*/            # Multi-node Docker tests
+│   └── test_framework/      # Python utilities
 ├── benchmark/               # Performance benchmarks
-└── fuzz/                    # Fuzzing targets (in ../fuzz/)
+└── common/                  # Shared test utilities
 ```
 
 ## Test Categories
 
-### 1. Unit Tests (`unit/`)
+### Unit Tests (`unit/`)
 
-Isolated component tests using mocks. Fast, no I/O.
+Fast, isolated tests with no I/O. Organized by component:
 
-| File | Purpose |
-|------|---------|
-| `message_tests.cpp` | P2P message serialization/deserialization |
-| `protocol_tests.cpp` | Protocol constants, limits, validation |
-| `block_*.cpp` | Block/header structures and validation |
-| `chainstate_*.cpp` | Chain state management |
-| `banman_*.cpp` | Ban manager logic |
-| `anchor_manager_*.cpp` | Anchor connection persistence |
-| `miner_*.cpp` | Mining functionality |
-| `validation_*.cpp` | Consensus validation rules |
-| `randomx_*.cpp` | RandomX PoW integration |
+- `addr_manager/` - Address manager logic
+- `chain/` - Block, header, chainstate, validation
+- `network/` - Message serialization, protocol constants
+- `util/` - Utilities, serialization, threading
 
-Run: `./build/bin/unicity_tests "[unit]"` or by file pattern.
+### Network Integration Tests (`integration-network/`)
 
-### 2. Network Tests (`network/`)
+P2P tests using simulated network infrastructure.
 
-P2P networking tests using simulated network infrastructure.
-
-| Subdirectory | Purpose |
-|--------------|---------|
-| `dos/` | DoS protection (rate limiting, oversized messages, floods) |
-| `peer/` | Peer connection lifecycle, adversarial scenarios |
-| `manager/` | Header sync manager, IBD gating |
-| `handshake/` | P2P handshake edge cases, timeouts |
-| `block_announcement/` | Block relay, INV handling |
-| `addr/` | Address manager, GETADDR routing |
-| `eviction/` | Peer eviction under connection pressure |
-| `limits/` | Connection limits, slot exhaustion |
+| Directory | Purpose |
+|-----------|---------|
+| `dos/` | Rate limiting, floods, oversized messages |
+| `peer/` | Connection lifecycle, adversarial scenarios |
+| `handshake/` | Handshake edge cases, timeouts |
+| `manager/` | Header sync, IBD gating |
 | `security/` | Eclipse attack simulations |
-| `infra/` | Test infrastructure (SimulatedNetwork, SimulatedNode) |
+| `infra/` | SimulatedNetwork, TestOrchestrator |
 
-Key test files:
-- `peer/adversarial_tests.cpp` - Malformed messages, protocol attacks
-- `dos/ping_pong_tests.cpp` - PING/PONG flood handling
-- `manager/header_sync_adversarial_tests.cpp` - Header sync attacks
-- `malformed_message_tests.cpp` - Invalid message handling
-
-Run: `./build/bin/unicity_tests "[network]"` or `"[dos]"`, `"[adversarial]"`.
-
-### 3. Chain Tests (`chain/`)
-
-Blockchain integration tests (orphan handling, reorgs, threading).
+### Chain Integration Tests (`integration-chain/`)
 
 | File | Purpose |
 |------|---------|
-| `orphan_*.cpp` | Orphan pool DoS, edge cases, thread safety |
+| `orphan_*_tests.cpp` | Orphan pool DoS, edge cases, threading |
 | `chain_e2e_tests.cpp` | End-to-end chain operations |
-| `invalidateblock_chain_tests.cpp` | Block invalidation |
-| `stress_threading_tests.cpp` | Concurrent chain operations |
+| `reorg_multi_node_tests.cpp` | Multi-node reorganization |
 
-### 4. Security Tests (`security/`)
+### Wire Tests (`wire/`)
 
-Security-focused regression tests.
+Real TCP protocol testing via `node_simulator`. Connects to a live node and sends malformed P2P messages. See `wire/README.md` for the full list of 50+ test scenarios.
 
-| File | Purpose |
-|------|---------|
-| `security_quick_tests.cpp` | Fast security checks (VarInt limits, message sizes) |
-| `security_attack_simulations.cpp` | Attack scenario simulations |
+### Python Functional Tests (`functional/`)
 
-### 5. Wire Tests (`wire/`)
+Integration tests against a real running node:
 
-Real TCP protocol testing (not simulated).
+- `p2p_*.py` - P2P protocol tests
+- `consensus_*.py` - Consensus rule tests
+- `feature_*.py` - Feature tests (reorgs, persistence)
+- `adversarial_*_wire.py` - Wire attacks via node_simulator
+- `docker_*/` - Multi-node Docker test suites
 
-**node_simulator** - Connects to a live node and sends malformed P2P messages:
+### Benchmarks (`benchmark/`)
 
 ```bash
-./build/bin/node_simulator --help
-
-# Available tests:
-#   invalid-pow       - Headers with invalid PoW
-#   oversized         - Oversized headers message
-#   non-continuous    - Non-continuous headers
-#   bad-magic         - Wrong message magic bytes
-#   bad-checksum      - Corrupted checksum
-#   truncation        - Truncated payload
-#   slow-loris        - Slow data drip attack
+./build/bin/unicity_bench
 ```
 
-### 6. Python Functional Tests (`functional/`)
+## Writing C++ Tests
 
-Integration tests against a real running node.
-
-#### Standalone Tests
-
-| Test | Purpose |
-|------|---------|
-| `p2p_invalid_messages.py` | Invalid message handling (wrong magic, bad checksum) |
-| `p2p_misbehavior_scores.py` | Misbehavior scoring and banning |
-| `p2p_dos_headers.py` | Header-based DoS attacks |
-| `p2p_eclipse_resistance.py` | Eclipse attack resistance |
-| `p2p_eviction.py` | Peer eviction behavior |
-| `p2p_ibd.py` | Initial Block Download |
-| `consensus_*.py` | Consensus rules (difficulty, timestamps) |
-| `feature_*.py` | Feature tests (reorgs, persistence, sync) |
-| `adversarial_*_wire.py` | Wire-level attacks via node_simulator |
-
-Run: `python test/functional/<test>.py`
-
-#### Docker Test Suites (`functional/docker_*/`)
-
-Multi-node tests with isolated Docker networks.
-
-| Suite | Purpose |
-|-------|---------|
-| `docker_anchor/` | Anchor connection persistence for eclipse resistance |
-| `docker_ban/` | Ban manager behavior across restarts |
-| `docker_discovery/` | Peer discovery, ADDR relay, netgroup diversity |
-| `docker_eclipse/` | Eclipse attack scenarios with multiple attackers |
-| `docker_eviction/` | Eviction under connection pressure |
-| `docker_header_sync/` | Header synchronization adversarial scenarios |
-| `docker_partition/` | Network partition and healing |
-
-Each suite has:
-- `docker-compose.yml` - Network topology definition
-- `run_*.py` - Test runner script
-
-Run:
-```bash
-cd test/functional/docker_eclipse
-docker-compose up -d
-python run_eclipse_tests.py
-docker-compose down -v
-```
-
-### 7. Benchmarks (`benchmark/`)
-
-Performance measurement.
-
-| File | Purpose |
-|------|---------|
-| `randomx_bench.cpp` | RandomX hashing throughput |
-| `header_validation_bench.cpp` | Header validation speed |
-| `addr_manager_bench.cpp` | Address manager operations |
-
-Run: `./build/bin/unicity_bench`
-
-### 8. Fuzz Tests (`../fuzz/`)
-
-Fuzzing targets for AFL/libFuzzer.
-
-| Target | Purpose |
-|--------|---------|
-| `fuzz_messages.cpp` | All 9 message types (VERSION, HEADERS, INV, etc.) |
-| `fuzz_message_header.cpp` | 24-byte message header parsing |
-| `fuzz_varint.cpp` | VarInt encoding/decoding |
-| `fuzz_block_header.cpp` | Block header deserialization |
-| `fuzz_header_validation.cpp` | Header validation logic |
-| `fuzz_randomx_pow.cpp` | RandomX proof-of-work |
-| `fuzz_chain_reorg.cpp` | Chain reorganization |
-
-Run:
-```bash
-./build/bin/fuzz_messages corpus/ -max_len=4096
-```
-
-## Test Tags (Catch2)
-
-Common tags for filtering tests:
-
-| Tag | Description |
-|-----|-------------|
-| `[unit]` | Unit tests |
-| `[network]` | Network/P2P tests |
-| `[dos]` | DoS protection tests |
-| `[adversarial]` | Adversarial/attack scenarios |
-| `[security]` | Security-focused tests |
-| `[handshake]` | Handshake tests |
-| `[headers]` | Header-related tests |
-| `[sync]` | Synchronization tests |
-| `[eviction]` | Eviction tests |
-| `[quickwin]` | Fast-running tests |
-
-## Test Infrastructure
-
-### SimulatedNetwork (`network/infra/`)
-
-In-memory network simulation for deterministic testing:
+### Basic Structure
 
 ```cpp
-SimulatedNetwork network(port);
-SimulatedNode victim(1, &network);
-SimulatedNode attacker(2, &network);
-attacker.ConnectTo(victim.GetId());
-network.SendMessage(attacker.GetId(), victim.GetId(), malicious_msg);
-```
+#include "catch2/catch_amalgamated.hpp"
 
-### MockTransportConnection (`network/infra/`)
-
-Mock TCP connection for unit testing peer behavior:
-
-```cpp
-auto mock_conn = std::make_shared<MockTransportConnection>();
-auto peer = Peer::create_inbound(io_context, mock_conn, magic, 0);
-mock_conn->simulate_receive(malformed_message);
-CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
-```
-
-### Python Test Framework (`functional/test_framework/`)
-
-Utilities for Python functional tests:
-
-```python
-from test_framework.test_node import TestNode
-from test_framework.util import pick_free_port
-
-node = TestNode(0, datadir, binary_path, extra_args=["--regtest"])
-node.start()
-node.rpc("getinfo")
-node.stop()
-```
-
-## Adding New Tests
-
-### C++ Unit Test
-
-```cpp
-// test/unit/my_feature_tests.cpp
-#include "catch_amalgamated.hpp"
-
-TEST_CASE("My feature works", "[unit][myfeature]") {
+TEST_CASE("Feature works", "[unit][feature]") {
     SECTION("basic case") {
-        CHECK(my_function() == expected);
+        REQUIRE(my_function() == expected);
     }
     SECTION("edge case") {
-        CHECK_THROWS(my_function_with_bad_input());
+        REQUIRE_THROWS(my_function_with_bad_input());
     }
 }
 ```
 
-Add to `test/CMakeLists.txt`:
-```cmake
-set(TEST_SOURCES
-    ...
-    unit/my_feature_tests.cpp
-)
+Files in `unit/`, `integration-network/`, and `integration-chain/` are automatically discovered - no CMake registration needed.
+
+### Network Integration Test
+
+```cpp
+#include "catch2/catch_amalgamated.hpp"
+#include "test_orchestrator.hpp"
+#include "simulated_node.hpp"
+#include "attack_simulated_node.hpp"
+
+TEST_CASE("DoS: Invalid PoW headers", "[dos][adversarial]") {
+    auto params = chain::CreateRegtestParams();
+    SimulatedNetwork network(42);
+    TestOrchestrator orchestrator(&network);
+
+    SimulatedNode victim(1, &network, params.get());
+    AttackSimulatedNode attacker(2, &network, params.get());
+    victim.Start();
+    attacker.Start();
+
+    // Build chain
+    victim.SetBypassPOWValidation(true);
+    for (int i = 0; i < 10; i++) {
+        victim.MineBlock();
+    }
+
+    // Connect and sync
+    victim.ConnectTo(attacker.GetAddress());
+    REQUIRE(orchestrator.WaitForConnection(victim, attacker));
+    REQUIRE(orchestrator.WaitForSync(victim, attacker));
+
+    // Attack
+    victim.SetBypassPOWValidation(false);
+    attacker.SendInvalidPoWHeaders(1, victim.GetTipHash(), 1);
+    orchestrator.AdvanceTime(std::chrono::seconds(2));
+
+    // Verify protection
+    orchestrator.AssertPeerDiscouraged(victim, attacker);
+    REQUIRE(orchestrator.WaitForPeerCount(victim, 0));
+}
 ```
 
-### Python Functional Test
+### TestOrchestrator API
+
+```cpp
+// Connection
+orchestrator.WaitForConnection(node_a, node_b);
+orchestrator.WaitForDisconnect(victim, attacker);
+orchestrator.WaitForPeerCount(node, 2);
+
+// Sync
+orchestrator.WaitForSync(node_a, node_b);
+orchestrator.WaitForHeight(node, 10);
+orchestrator.WaitForTip(node, expected_hash);
+
+// Assertions
+orchestrator.AssertPeerDiscouraged(victim, attacker);
+orchestrator.AssertPeerNotDiscouraged(victim, trusted);
+orchestrator.AssertMisbehaviorScore(victim, attacker, 100);
+orchestrator.AssertPeerCount(node, 3);
+orchestrator.AssertHeight(node, 10);
+
+// Time control
+orchestrator.AdvanceTime(std::chrono::seconds(2));
+
+// Custom conditions
+orchestrator.WaitForCondition([]() { return check(); }, std::chrono::seconds(5));
+```
+
+### Attack Methods
+
+```cpp
+AttackSimulatedNode attacker(2, &network, params.get());
+
+attacker.SendInvalidPoWHeaders(victim_id, prev_hash, count);
+attacker.SendOrphanHeaders(victim_id, count);
+attacker.SendNonContinuousHeaders(victim_id, prev_hash);
+attacker.SendOversizedHeaders(victim_id, 2500);  // Max is 2000
+attacker.SendLowWorkHeaders(victim_id, header_hashes);
+attacker.EnableStalling(true);
+attacker.MineBlockPrivate();
+```
+
+## Writing Python Tests
 
 ```python
 #!/usr/bin/env python3
 """Test description."""
 
 import sys
+import tempfile
+import shutil
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent / "test_framework"))
 
+sys.path.insert(0, str(Path(__file__).parent / "test_framework"))
 from test_node import TestNode
 from util import pick_free_port
 
 def main():
-    # Setup, run tests, cleanup
-    return 0 if passed else 1
+    test_dir = Path(tempfile.mkdtemp(prefix="unicity_test_"))
+    binary = Path(__file__).parent.parent.parent / "build" / "bin" / "unicityd"
+
+    try:
+        port = pick_free_port()
+        node = TestNode(0, test_dir / "node0", binary, extra_args=[f"--port={port}"])
+        node.start()
+
+        # Test logic here
+        info = node.get_info()
+        assert "blocks" in info
+
+        print("PASSED")
+        return 0
+    except Exception as e:
+        print(f"FAILED: {e}")
+        return 1
+    finally:
+        if node.is_running():
+            node.stop()
+        shutil.rmtree(test_dir, ignore_errors=True)
 
 if __name__ == "__main__":
     sys.exit(main())
 ```
 
-## CI Integration
+### Docker Tests
 
-Tests are run in CI with:
+Docker test suites (`functional/docker_*/`) use raw P2P sockets, not RPC:
 
-```bash
-# Fast tests (unit + network simulation)
-./build/bin/unicity_tests --exclude-tags="[slow]"
-
-# Full test suite
-./build/bin/unicity_tests
-
-# Python functional tests
-python test/functional/test_runner.py
+```python
+# Raw TCP to P2P port
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect((node_ip, 29590))
+s.send(create_version_message())
 ```
 
-## Coverage
+See `functional/docker_eclipse/run_eclipse_tests.py` for the canonical pattern.
 
-Generate coverage report:
+## Test Tags
+
+| Tag | Description |
+|-----|-------------|
+| `[unit]` | Unit tests |
+| `[network]` | Network/P2P tests |
+| `[dos]` | DoS protection |
+| `[adversarial]` | Attack scenarios |
+| `[handshake]` | Handshake tests |
+| `[headers]` | Header tests |
+| `[sync]` | Sync tests |
+| `[eviction]` | Eviction tests |
+
+## CI / Coverage
 
 ```bash
+# Fast tests
+./build/bin/unicity_tests --exclude-tags="[slow]"
+
+# Full suite
+./build/bin/unicity_tests
+
+# Python tests
+python test/functional/test_runner.py
+
+# Coverage
 cmake -S . -B build -DCOVERAGE=ON
 cmake --build build
 ./build/bin/unicity_tests

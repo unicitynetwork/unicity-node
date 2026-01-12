@@ -406,9 +406,13 @@ def test_netgroup_limit() -> bool:
     if successful == MAX_INBOUND_PER_NETGROUP:
         print("PASS: Netgroup limit enforced correctly")
         return True
-    elif successful < MAX_INBOUND_PER_NETGROUP:
-        print(f"WARN: Fewer than expected ({successful} < {MAX_INBOUND_PER_NETGROUP})")
-        return True  # Still defensive
+    elif successful > 0 and successful < MAX_INBOUND_PER_NETGROUP:
+        # Fewer than limit but at least some accepted - still defensive
+        print(f"PASS: Netgroup limit enforced ({successful} < {MAX_INBOUND_PER_NETGROUP}, still defensive)")
+        return True
+    elif successful == 0:
+        print(f"FAIL: No connections accepted (node may be unresponsive)")
+        return False
     else:
         print(f"FAIL: Too many connections ({successful} > {MAX_INBOUND_PER_NETGROUP})")
         return False
@@ -589,9 +593,17 @@ def test_handshake_timeout() -> bool:
         print("PASS: Incomplete handshakes don't block slots permanently")
         return True
     else:
-        print("REJECTED")
-        print("INFO: Slots may still be held (timeout not yet expired)")
-        return True  # Not necessarily a failure
+        # Wait a bit more and retry - handshake timeout should eventually free slots
+        print("REJECTED - waiting for handshake timeout...")
+        time.sleep(5)
+        if connect_from_container(container, VICTIM_IPS["net1"], VICTIM_PORT, complete_handshake=True):
+            print("SUCCESS (after timeout)")
+            print("PASS: Handshake timeout freed slots")
+            return True
+        else:
+            print("FAILED")
+            print("FAIL: Incomplete handshakes blocking slots beyond timeout")
+            return False
 
 
 # =============================================================================
@@ -884,12 +896,17 @@ except Exception as e:
     if "SUCCESS" in output or "SENT" in output:
         print(f"  Sent small header announcements from attacker")
         print("  Note: Fix ensures these don't reset sync peer stall timer")
-        print("PASS: Attack attempted (fix prevents timer bypass)")
+        print("PASS: Attack sequence executed (fix prevents timer bypass)")
         return True
-    else:
+    elif "ERROR" in output:
         print(f"  Output: {output}")
-        print("WARN: Could not complete attack sequence")
-        return True  # Not a failure of the fix
+        print("FAIL: Attack execution failed - cannot verify stall timer fix")
+        return False
+    else:
+        # Partial send is OK - the attack was at least attempted
+        print(f"  Output: {output}")
+        print("PASS: Attack partially executed (connection may have timed out)")
+        return True
 
 
 def main():

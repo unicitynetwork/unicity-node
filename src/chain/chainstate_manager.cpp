@@ -299,7 +299,7 @@ ChainstateManager::ActivateResult ChainstateManager::TrySwitchToNewTip(chain::CB
     return ActivateResult::OK;
   }
 
-  chain::CBlockIndex* pindexOldTip = block_manager_.GetTip();
+  const chain::CBlockIndex* pindexOldTip = block_manager_.GetTip();
 
   // Early exits: same tip or insufficient work
   if (pindexOldTip == pindexMostWork) {

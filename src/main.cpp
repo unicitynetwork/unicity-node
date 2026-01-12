@@ -54,14 +54,14 @@ int main(int argc, char *argv[]) {
         std::cout << unicity::GetFullVersionString() << std::endl;
         std::cout << unicity::GetCopyrightString() << std::endl;
         return 0;
-      } else if (arg.find("--datadir=") == 0) {
+      } else if (arg.starts_with("--datadir=")) {
         std::string datadir = arg.substr(10);
         if (datadir.empty()) {
           std::cerr << "Error: --datadir requires a non-empty path" << std::endl;
           return 1;
         }
         config.datadir = datadir;
-      } else if (arg.find("--port=") == 0) {
+      } else if (arg.starts_with("--port=")) {
         auto port_opt = unicity::util::SafeParsePort(arg.substr(7));
         if (!port_opt) {
           std::cerr << "Error: Invalid port number: " << arg.substr(7) << std::endl;
@@ -73,7 +73,7 @@ int main(int argc, char *argv[]) {
         config.network_config.listen_enabled = false;
       } else if (arg == "--listen") {
         // Listen is enabled by default; this flag is a no-op for backwards compatibility
-      } else if (arg.find("--connect=") == 0) {
+      } else if (arg.starts_with("--connect=")) {
         auto connect_opt = unicity::util::SafeParseInt(arg.substr(10), 0, 10000);
         if (!connect_opt) {
           std::cerr << "Error: Invalid --connect value: " << arg.substr(10) << std::endl;
@@ -81,7 +81,7 @@ int main(int argc, char *argv[]) {
           return 1;
         }
         config.network_config.max_outbound_connections = *connect_opt;
-      } else if (arg.find("--suspiciousreorgdepth=") == 0) {
+      } else if (arg.starts_with("--suspiciousreorgdepth=")) {
         auto depth_opt = unicity::util::SafeParseInt(arg.substr(23), 0, 1000000);
         if (!depth_opt) {
           std::cerr << "Error: Invalid suspicious reorg depth: " << arg.substr(23) << std::endl;
@@ -106,11 +106,11 @@ int main(int argc, char *argv[]) {
       } else if (arg == "--verbose") {
         config.verbose = true;
         log_level = "debug";
-      } else if (arg.find("--loglevel=") == 0) {
+      } else if (arg.starts_with("--loglevel=")) {
         log_level = arg.substr(11);
       } else if (arg == "--revalidate-headers") {
         config.revalidate_headers = true;
-      } else if (arg.find("--debug=") == 0) {
+      } else if (arg.starts_with("--debug=")) {
         // Parse comma-separated components: --debug=net,sync,chain
         std::string components = arg.substr(8);
         size_t pos = 0;

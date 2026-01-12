@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "test_framework"))
 
 from test_node import TestNode
+from util import pick_free_port
 
 
 def main():
@@ -32,10 +33,13 @@ def main():
         # Test 1: Reorg within threshold should be accepted
         print("=== Test 1: Reorg within threshold ===\n")
 
+        port0 = pick_free_port()
+        port1 = pick_free_port()
+
         node0 = TestNode(0, test_dir / "test1_node0", binary_path,
-                        extra_args=["--listen", "--port=29590", "--suspiciousreorgdepth=20"])
+                        extra_args=["--listen", f"--port={port0}", "--suspiciousreorgdepth=20"])
         node1 = TestNode(1, test_dir / "test1_node1", binary_path,
-                        extra_args=["--listen", "--port=29591", "--suspiciousreorgdepth=20"])
+                        extra_args=["--listen", f"--port={port1}", "--suspiciousreorgdepth=20"])
 
         node0.start()
         node1.start()
@@ -70,8 +74,8 @@ def main():
 
         # Connect - node0 should accept the reorg (within threshold)
         print(f"\nConnecting (node0 should accept {reorg_depth}-block reorg)...")
-        node0.add_node("127.0.0.1:29591", "add")
-        node1.add_node("127.0.0.1:29590", "add")
+        node0.add_node(f"127.0.0.1:{port1}", "add")
+        node1.add_node(f"127.0.0.1:{port0}", "add")
 
         # Wait for sync
         time.sleep(3)
@@ -88,10 +92,13 @@ def main():
         # Test 2: Reorg exceeding threshold should trigger shutdown
         print("=== Test 2: Deep reorg triggers shutdown ===\n")
 
+        port0 = pick_free_port()
+        port1 = pick_free_port()
+
         node0 = TestNode(0, test_dir / "test2_node0", binary_path,
-                        extra_args=["--listen", "--port=29590", "--suspiciousreorgdepth=10"])
+                        extra_args=["--listen", f"--port={port0}", "--suspiciousreorgdepth=10"])
         node1 = TestNode(1, test_dir / "test2_node1", binary_path,
-                        extra_args=["--listen", "--port=29591", "--suspiciousreorgdepth=10"])
+                        extra_args=["--listen", f"--port={port1}", "--suspiciousreorgdepth=10"])
 
         node0.start()
         node1.start()
@@ -125,17 +132,19 @@ def main():
 
         # Connect - node0 should refuse and shut down
         print(f"\nConnecting (node0 should refuse {reorg_depth}-block reorg and shut down)...")
-        node0.add_node("127.0.0.1:29591", "add")
-        node1.add_node("127.0.0.1:29590", "add")
+        node0.add_node(f"127.0.0.1:{port1}", "add")
+        node1.add_node(f"127.0.0.1:{port0}", "add")
 
         # Wait for headers to be exchanged and reorg detected
-        # (need enough time for RandomX PoW validation of all headers)
-        time.sleep(5)
+        # (need enough time for RandomX PoW validation of all 70 headers)
+        # At ~50 blocks/sec, 70 headers takes ~1.4 seconds, but add buffer
+        time.sleep(10)
 
         # Check logs for shutdown message
+        # The code logs "CRITICAL: Reorg of X blocks refused" and "Deep reorg of X blocks refused"
         log = node0.read_log()
-        assert "Suspicious reorg detected" in log or "suspicious reorg" in log.lower(), \
-            "Expected suspicious reorg detection in logs"
+        assert "Reorg of" in log and "blocks refused" in log, \
+            f"Expected deep reorg refusal in logs. Got: {log[-2000:]}"
         assert "Shutting down" in log, "Expected shutdown initiation in logs"
         print("✓ Node0 detected deep reorg and initiated shutdown")
 

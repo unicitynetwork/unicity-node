@@ -114,6 +114,12 @@ if(CODE_COVERAGE)
     message(STATUS "Code coverage enabled - use 'make coverage' after building")
 endif()
 
+# Static analysis with cppcheck
+option(ENABLE_CPPCHECK "Enable cppcheck static analysis target" ON)
+if(ENABLE_CPPCHECK)
+    include(cmake/cppcheck.cmake)
+endif()
+
 # =============================================================================
 # Find System Dependencies
 # =============================================================================

@@ -124,50 +124,40 @@ def check_connection_from_container(container: str, target_ip: str,
     return "SUCCESS" in output
 
 
-def get_block_count_from_container(container: str, rpc_ip: str = "127.0.0.1") -> Optional[int]:
-    """Get block height via RPC from container."""
-    # Try using curl for RPC
-    cmd = f'''curl -s --data-binary '{{"jsonrpc":"1.0","id":"test","method":"getblockcount","params":[]}}' \
-              -H 'content-type:text/plain;' http://{rpc_ip}:{RPC_PORT}/ 2>/dev/null'''
-    code, output = docker_exec(container, cmd, timeout=10)
+def cli_command_on_container(container: str, cmd: str) -> Tuple[int, str]:
+    """Execute CLI command on a specific node container."""
+    full_cmd = f"/app/build/bin/unicity-cli --datadir=/data {cmd}"
+    return docker_exec(container, full_cmd, timeout=10)
 
-    if code == 0 and "result" in output:
+
+def get_block_count_from_container(container: str, rpc_ip: str = "127.0.0.1") -> Optional[int]:
+    """Get block height via CLI from container."""
+    # rpc_ip is ignored - we use the container directly
+    code, output = cli_command_on_container(container, "getblockcount")
+    if code == 0:
         try:
-            import json
-            data = json.loads(output)
-            return data.get("result")
+            return int(output.strip())
         except:
             pass
     return None
 
 
 def get_best_block_hash_from_container(container: str, rpc_ip: str = "127.0.0.1") -> Optional[str]:
-    """Get best block hash via RPC from container."""
-    cmd = f'''curl -s --data-binary '{{"jsonrpc":"1.0","id":"test","method":"getbestblockhash","params":[]}}' \
-              -H 'content-type:text/plain;' http://{rpc_ip}:{RPC_PORT}/ 2>/dev/null'''
-    code, output = docker_exec(container, cmd, timeout=10)
-
-    if code == 0 and "result" in output:
-        try:
-            import json
-            data = json.loads(output)
-            return data.get("result")
-        except:
-            pass
+    """Get best block hash via CLI from container."""
+    # rpc_ip is ignored - we use the container directly
+    code, output = cli_command_on_container(container, "getbestblockhash")
+    if code == 0:
+        return output.strip()
     return None
 
 
 def get_peer_count_from_container(container: str, rpc_ip: str = "127.0.0.1") -> Optional[int]:
-    """Get peer count via RPC from container."""
-    cmd = f'''curl -s --data-binary '{{"jsonrpc":"1.0","id":"test","method":"getconnectioncount","params":[]}}' \
-              -H 'content-type:text/plain;' http://{rpc_ip}:{RPC_PORT}/ 2>/dev/null'''
-    code, output = docker_exec(container, cmd, timeout=10)
-
-    if code == 0 and "result" in output:
+    """Get peer count via CLI from container."""
+    # rpc_ip is ignored - we use the container directly
+    code, output = cli_command_on_container(container, "getconnectioncount")
+    if code == 0:
         try:
-            import json
-            data = json.loads(output)
-            return data.get("result")
+            return int(output.strip())
         except:
             pass
     return None
@@ -339,7 +329,7 @@ def test_partition_sync() -> bool:
     print("  Checking peer connectivity...")
 
     # Get peer count from bridge (should see both partitions)
-    bridge_peers = get_peer_count_from_container("partition_test_runner", BRIDGE_NODE["ip_bridge"])
+    bridge_peers = get_peer_count_from_container(BRIDGE_NODE["container"])
     if bridge_peers is not None:
         print(f"    Bridge node peers: {bridge_peers}")
     else:
@@ -353,17 +343,26 @@ def test_partition_sync() -> bool:
         container = info["container"] if isinstance(info, dict) else info
         if isinstance(info, dict):
             container = info["container"]
-        height = get_block_count_from_container("partition_test_runner",
-                                                 info.get("ip_bridge", info.get("ip_a", info.get("ip_b", "127.0.0.1"))))
+        height = get_block_count_from_container(container)
         heights[name] = height
         if height is not None:
             print(f"    {name}: height {height}")
         else:
             print(f"    {name}: RPC unavailable")
 
-    # For now, just verify we can query the network
-    print("\nPASS: Partition sync test completed (network accessible)")
-    return True
+    # Verify we got at least some block heights
+    valid_heights = [h for h in heights.values() if h is not None]
+    if len(valid_heights) > 0:
+        # Check if heights are consistent (all same or within 1 of each other)
+        if len(set(valid_heights)) <= 2 and max(valid_heights) - min(valid_heights) <= 1:
+            print(f"\nPASS: Partition sync verified - {len(valid_heights)} nodes at consistent heights")
+            return True
+        else:
+            print(f"\nFAIL: Nodes have inconsistent heights: {valid_heights}")
+            return False
+    else:
+        print("\nFAIL: Could not get block heights from any node (RPC unavailable)")
+        return False
 
 
 # =============================================================================
@@ -381,13 +380,13 @@ def test_partition_divergence() -> bool:
 
     # Get initial state
     print("  Step 1: Record initial best block hash...")
-    initial_hash_bridge = get_best_block_hash_from_container("partition_test_runner", BRIDGE_NODE["ip_bridge"])
+    initial_hash_bridge = get_best_block_hash_from_container(BRIDGE_NODE["container"])
     if initial_hash_bridge:
         print(f"    Bridge best block: {initial_hash_bridge[:16]}...")
     else:
         print("    Could not get initial hash (RPC unavailable)")
-        print("SKIP: Test requires RPC to be enabled")
-        return True  # Skip but don't fail
+        print("FAIL: Test requires RPC - cannot verify partition divergence without it")
+        return False
 
     # Create partition
     print("\n  Step 2: Creating network partition...")
@@ -468,25 +467,27 @@ def test_partition_recovery() -> bool:
 # =============================================================================
 
 def test_stale_tip_detection() -> bool:
-    """Test that nodes detect stale tips after partition."""
+    """Test that nodes detect stale tips after partition.
+
+    NOTE: This test requires mining capability to fully execute.
+    Currently only verifies infrastructure connectivity.
+    """
     print("\n" + "=" * 60)
-    print("TEST 5: Stale Tip Detection")
+    print("TEST 5: Stale Tip Detection (Infrastructure Only)")
     print("=" * 60)
-    print("Verify nodes can detect when they have a stale tip\n")
+    print("NOTE: Full test requires mining - verifying infrastructure only\n")
 
     clear_all_iptables()
 
-    # This test would require:
+    # Full test would require:
     # 1. Create partition
     # 2. Mine blocks only on one side
     # 3. Reconnect
     # 4. Verify the side with fewer blocks updates
 
-    # For now, just verify the infrastructure works
-    print("  This test requires mining capability to fully execute")
-    print("  Verifying infrastructure is in place...")
+    # Infrastructure verification
+    print("  Verifying partition infrastructure is in place...")
 
-    # Check nodes are reachable
     bridge_container = BRIDGE_NODE["container"]
     a1_ip = PARTITION_A["node_a1"]["ip_a"]
     b1_ip = PARTITION_B["node_b1"]["ip_b"]
@@ -498,10 +499,10 @@ def test_stale_tip_detection() -> bool:
     print(f"    Partition B reachable from bridge: {b_reachable}")
 
     if a_reachable and b_reachable:
-        print("\nPASS: Infrastructure ready for stale tip detection tests")
+        print("\nPASS: Infrastructure verified (full stale tip test needs mining)")
         return True
     else:
-        print("\nFAIL: Not all partitions reachable")
+        print("\nFAIL: Not all partitions reachable - infrastructure broken")
         return False
 
 

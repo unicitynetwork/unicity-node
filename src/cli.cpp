@@ -60,6 +60,8 @@ void PrintUsage(const char *program_name) {
       << "  setmocktime <timestamp>      Set mock time for testing\n"
       << "  invalidateblock <hash>       Mark block as invalid\n"
       << "  submitheader <hex>           Submit block header\n"
+      << "  addconnection <addr> <type>  Add connection (type: outbound-full-relay,\n"
+      << "                               block-relay-only, feeler)\n"
       << "  reportmisbehavior <peerid> <score>  Report peer misbehavior\n"
       << "  addorphanheader <hex>        Add orphan header\n"
       << "  getorphanstats               Get orphan header statistics\n"
@@ -89,7 +91,7 @@ int main(int argc, char *argv[]) {
         std::cout << unicity::GetFullVersionString() << std::endl;
         std::cout << unicity::GetCopyrightString() << std::endl;
         return 0;
-      } else if (arg.find("--datadir=") == 0) {
+      } else if (arg.starts_with("--datadir=")) {
         datadir = arg.substr(10);
         if (datadir.empty()) {
           std::cerr << "Error: --datadir requires a non-empty path\n";

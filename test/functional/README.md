@@ -83,9 +83,13 @@ These RPCs exist solely to enable deterministic functional testing. They are dis
 Tip: Many tests use `setmocktime` to control future-time validation and expiry windows.
 
 ## Slow/advanced tests
-- `p2p_batching.py` syncs large header sets over P2P, performing full PoW verification per header; expect ~tens of headers/sec on a single validation thread.
+- `p2p_ibd_sync.py` tests basic P2P IBD sync with a 12k-block chain (~4 minutes).
+  - Run directly: `python3 test/functional/p2p_ibd_sync.py`
+  - Requires `chain_12000_blocks/` in test_chains/.
+- `p2p_batching.py` tests protocol-level header batching with a 200k-block chain (~60+ minutes).
   - Run directly: `python3 test/functional/p2p_batching.py`
-  - Requires prebuilt chain assets under `test/functional/test_chains/` (e.g., `chain_12000_blocks/`). If missing, generate with the helper script(s) in this directory.
+  - Requires `chain_200000_blocks/` in test_chains/.
+  - Verifies headers sync in batches of MAX_HEADERS_SIZE (80000 headers per batch).
 - `feature_multinode_sync.py`, `feature_chaos_convergence.py`, `feature_ibd_restart_resume.py` are also opt-in and can take longer.
 
 Wire-level adversarial injector
@@ -100,6 +104,7 @@ Performance tips (optional):
 ## Prebuilt chains (for batching and persistence tests)
 Some tests expect pre-mined chains under `test/functional/test_chains/`:
 - `chain_200_blocks/`, `chain_2500_blocks/`, `chain_12000_blocks/`
+- `chain_200000_blocks/` (for p2p_batching.py - large, takes ~1 hour to generate)
 
 If absent, you can regenerate them using the helper scripts here (these may take time):
 - `python3 test/functional/regenerate_test_chains.py`

@@ -71,9 +71,9 @@ PeerPtr Peer::create_outbound(asio::io_context& io_context, TransportConnectionP
 PeerPtr Peer::create_inbound(asio::io_context& io_context, TransportConnectionPtr connection, uint32_t network_magic,
                              int32_t start_height) {
   std::string addr = connection ? connection->remote_address() : "";
-  uint16_t port = connection ? connection->remote_port() : 0;
-  return std::make_shared<Peer>(PrivateTag{}, io_context, connection, network_magic, true, start_height, addr, port,
-                                ConnectionType::INBOUND);
+  uint16_t remote_port = connection ? connection->remote_port() : 0;
+  return std::make_shared<Peer>(PrivateTag{}, io_context, connection, network_magic, true, start_height, addr,
+                                remote_port, ConnectionType::INBOUND);
 }
 
 void Peer::start() {
@@ -425,7 +425,8 @@ void Peer::handle_version(const message::VersionMessage& msg) {
 
   // Cap size to 256 chars
   if (sanitized_ua.size() > protocol::MAX_SUBVERSION_LENGTH) {
-    sanitized_ua = sanitized_ua.substr(0, protocol::MAX_SUBVERSION_LENGTH) + "...[truncated]";
+    sanitized_ua.resize(protocol::MAX_SUBVERSION_LENGTH);
+    sanitized_ua += "...[truncated]";
   }
 
   // Remove control characters (except tab)
@@ -488,7 +489,7 @@ void Peer::handle_version(const message::VersionMessage& msg) {
       std::string ip = *our_addr_str;
       auto colon_pos = ip.rfind(':');
       if (colon_pos != std::string::npos) {
-        ip = ip.substr(0, colon_pos);
+        ip.resize(colon_pos);
       }
       local_addr_learned_handler_(ip);
     }

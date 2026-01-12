@@ -280,9 +280,7 @@ bool NetworkManager::start() {
       // Without this cleanup, destructors will call std::terminate() on joinable threads
 
       // Stop transport threads
-      if (transport_) {
-        transport_->stop();
-      }
+      transport_->stop();
 
       // Stop io_context and join io_threads_ that may have been created
       if (work_guard_) {
@@ -491,6 +489,9 @@ void NetworkManager::run_maintenance() {
   peer_manager_->SweepBanned();
   peer_manager_->SweepDiscouraged();
 
+  // Process pending ADDR relays 
+  discovery_manager_->ProcessPendingAddrRelays();
+
   // Periodically announce our tip to peers
   block_relay_manager_->AnnounceTipToAllPeers();
 
@@ -625,7 +626,7 @@ void NetworkManager::handle_message(PeerPtr peer, std::unique_ptr<message::Messa
 
   // Detect self-connections in VERSION handler
   if (msg->command() == protocol::commands::VERSION) {
-    auto* version_msg = dynamic_cast<message::VersionMessage*>(msg.get());
+    const auto* version_msg = dynamic_cast<const message::VersionMessage*>(msg.get());
     if (!version_msg) {
       LOG_NET_ERROR("VERSION message cast failed for peer {}", peer->id());
       return;
@@ -699,7 +700,7 @@ void NetworkManager::announce_tip_to_peers() {
   block_relay_manager_->AnnounceTipToAllPeers();
 }
 
-void NetworkManager::announce_tip_to_peer(Peer* peer) {
+void NetworkManager::announce_tip_to_peer(const Peer* peer) {
   block_relay_manager_->AnnounceTipToPeer(peer);
 }
 

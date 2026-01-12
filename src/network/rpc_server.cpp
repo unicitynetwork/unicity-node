@@ -139,6 +139,7 @@ void RPCServer::RegisterHandlers() {
   handlers_["clearbanned"] = [this](const auto& p) { return HandleClearBanned(p); };
   handlers_["getchaintips"] = [this](const auto& p) { return HandleGetChainTips(p); };
   handlers_["submitheader"] = [this](const auto& p) { return HandleSubmitHeader(p); };
+  handlers_["addconnection"] = [this](const auto& p) { return HandleAddConnection(p); };
 }
 
 bool RPCServer::Start() {
@@ -414,7 +415,7 @@ void RPCServer::HandleClient(int client_fd) {
     std::string json_rpc_response;
 
     // Check if response is an error
-    if (response.find("\"error\":") == 0 || response.find("{\"error\":") != std::string::npos) {
+    if (response.starts_with("\"error\":") || response.find("{\"error\":") != std::string::npos) {
       // Extract error message and wrap in JSON-RPC format
       json_rpc_response = "{\"result\":null,\"error\":" + response + ",\"id\":0}\n";
     } else {
@@ -733,7 +734,7 @@ std::string RPCServer::HandleGetPeerInfo(const std::vector<std::string>& params)
     // Get misbehavior status from peer manager
     bool should_disconnect = false;
     try {
-      auto& peer_mgr = network_manager_.peer_manager();
+      const auto& peer_mgr = network_manager_.peer_manager();
       should_disconnect = peer_mgr.ShouldDisconnect(peer->id());
     } catch (...) {
       // Peer might not be in sync manager yet (handshake incomplete)
@@ -1031,7 +1032,7 @@ std::string RPCServer::HandleListBanned(const std::vector<std::string>& params) 
 }
 
 std::string RPCServer::HandleGetAddrManInfo(const std::vector<std::string>& params) {
-  auto& discovery_man = network_manager_.discovery_manager();
+  const auto& discovery_man = network_manager_.discovery_manager();
 
   size_t total = discovery_man.Size();
   size_t tried = discovery_man.TriedCount();
@@ -2055,6 +2056,75 @@ std::string RPCServer::HandleSubmitBlock(const std::vector<std::string>& params)
   oss << "{\n"
       << "  \"success\": true,\n"
       << "  \"hash\": \"" << header.GetHash().GetHex() << "\"\n"
+      << "}\n";
+  return oss.str();
+}
+
+std::string RPCServer::HandleAddConnection(const std::vector<std::string>& params) {
+  // Test-only RPC: available on regtest only 
+  if (params_.GetChainType() != chain::ChainType::REGTEST) {
+    return util::JsonError("addconnection is for regression testing (-regtest mode) only");
+  }
+
+  if (params.size() < 2) {
+    return util::JsonError(
+        "Usage: addconnection <address> <connection_type>\n"
+        "  connection_type: \"outbound-full-relay\", \"block-relay-only\", or \"feeler\"");
+  }
+
+  const std::string& node_addr = params[0];
+  const std::string& conn_type_str = params[1];
+
+  // Parse connection type
+  network::ConnectionType conn_type;
+  if (conn_type_str == "outbound-full-relay") {
+    conn_type = network::ConnectionType::OUTBOUND_FULL_RELAY;
+  } else if (conn_type_str == "block-relay-only") {
+    conn_type = network::ConnectionType::BLOCK_RELAY;
+  } else if (conn_type_str == "feeler") {
+    conn_type = network::ConnectionType::FEELER;
+  } else {
+    return util::JsonError(
+        "Invalid connection_type. Must be one of: "
+        "\"outbound-full-relay\", \"block-relay-only\", \"feeler\"");
+  }
+
+  // Parse address:port using IPv6-safe parser
+  std::string host;
+  uint16_t port = 0;
+  if (!util::ParseIPPort(node_addr, host, port)) {
+    return util::JsonError("Invalid address format (use IP:port or [IPv6]:port)");
+  }
+
+  // Validate IP address
+  auto normalized_ip = util::ValidateAndNormalizeIP(host);
+  if (!normalized_ip.has_value()) {
+    return util::JsonError("Invalid IP address (hostnames not supported)");
+  }
+
+  // Create NetworkAddress
+  protocol::NetworkAddress addr =
+      protocol::NetworkAddress::from_string(*normalized_ip, port, protocol::ServiceFlags::NODE_NETWORK);
+
+  // Check if conversion failed
+  bool is_zero = std::all_of(addr.ip.begin(), addr.ip.end(), [](uint8_t b) { return b == 0; });
+  if (is_zero) {
+    return util::JsonError("Failed to parse IP address: " + *normalized_ip);
+  }
+
+  LOG_INFO("RPC addconnection: address={}, type={}", node_addr, conn_type_str);
+
+  // Connect with the specified connection type
+  auto result = network_manager_.connect_to(addr, network::NetPermissionFlags::None, conn_type);
+  if (result != network::ConnectionResult::Success) {
+    return util::JsonError("Failed to initiate connection");
+  }
+
+  // Return success with address and connection type
+  std::ostringstream oss;
+  oss << "{\n"
+      << "  \"address\": \"" << node_addr << "\",\n"
+      << "  \"connection_type\": \"" << conn_type_str << "\"\n"
       << "}\n";
   return oss.str();
 }

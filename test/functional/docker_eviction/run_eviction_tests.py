@@ -116,47 +116,31 @@ def restart_target():
     wait_for_target()
 
 
-def get_target_rpc(method: str, params: list = None) -> Optional[dict]:
-    """Call RPC on target node."""
-    if params is None:
-        params = []
-    try:
-        import json as json_mod
-        rpc_data = json_mod.dumps({
-            "jsonrpc": "1.0",
-            "id": "test",
-            "method": method,
-            "params": params
-        })
-        result = subprocess.run(
-            ["docker", "exec", "evict_target", "curl", "-s",
-             "--data-binary", rpc_data,
-             "-H", "content-type:text/plain;",
-             "http://127.0.0.1:29591/"],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if result.returncode == 0:
-            return json_mod.loads(result.stdout)
-        return None
-    except:
-        return None
+def cli_command(cmd: str) -> Tuple[int, str]:
+    """Execute CLI command on target node."""
+    full_cmd = f"/app/build/bin/unicity-cli --datadir=/data {cmd}"
+    return docker_exec("evict_target", full_cmd, timeout=10)
 
 
 def get_peer_info() -> Optional[List[dict]]:
     """Get peer info from target node."""
-    result = get_target_rpc("getpeerinfo")
-    if result and "result" in result:
-        return result["result"]
+    code, output = cli_command("getpeerinfo")
+    if code == 0:
+        try:
+            return json.loads(output.strip())
+        except:
+            pass
     return None
 
 
 def get_connection_count() -> int:
     """Get current connection count."""
-    result = get_target_rpc("getconnectioncount")
-    if result and "result" in result:
-        return result["result"]
+    code, output = cli_command("getconnectioncount")
+    if code == 0:
+        try:
+            return int(output.strip())
+        except:
+            pass
     return 0
 
 
@@ -464,8 +448,8 @@ def test_netgroup_diversity() -> bool:
         print("\nPASS: Netgroup diversity protected honest peers")
         return True
     else:
-        print("\nPARTIAL: Honest peers may have been evicted (check algorithm)")
-        return True
+        print("\nFAIL: Honest peers were evicted (netgroup diversity not protected)")
+        return False
 
 
 # =============================================================================
@@ -598,8 +582,8 @@ def test_uptime_protection() -> bool:
         print("\nPASS: Uptime protection verified")
         return True
     else:
-        print("\nPARTIAL: Long-lived peers may have been evicted")
-        return True
+        print("\nFAIL: Long-lived peers were evicted (uptime protection not working)")
+        return False
 
 
 # =============================================================================

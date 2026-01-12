@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Test P2P header batching behavior.
 
-Tests that headers sync happens in batches of 2000 (protocol limit).
+Tests that headers sync happens in batches of MAX_HEADERS_SIZE (80000).
 
 Scenario:
-1. Start node0 and mine 5000 blocks
+1. Start node0 with a pre-built chain (200000 blocks)
 2. Start node1 (fresh, at genesis)
 3. Connect node1 to node0
-4. Verify node1 syncs all 5000 blocks in batches of 2000
+4. Verify node1 syncs in multiple batches (200000 / 80000 = 3 batches)
+
+This is a SLOW test (~60+ minutes) and is excluded from the default test run.
+Run directly: python3 test/functional/p2p_batching.py
+
+Note: Requires chain_200000_blocks in test_chains/. Generate with:
+  python3 test/functional/regenerate_test_chains.py
 """
 
 import sys
@@ -22,11 +28,15 @@ sys.path.insert(0, str(Path(__file__).parent / "test_framework"))
 from test_node import TestNode
 from util import pick_free_port
 
+# Protocol limit for headers per message
+MAX_HEADERS_SIZE = 80000
+
 
 def main():
     """Run the test."""
     print("Starting P2P batching test...")
-    print("This test verifies that headers sync in batches of 2000")
+    print(f"This test verifies that headers sync in batches of {MAX_HEADERS_SIZE}")
+    print("WARNING: This is a slow test (~60+ minutes)")
     print()
 
     # Setup test directory
@@ -39,12 +49,12 @@ def main():
     try:
         # Load pre-built chain for node0
         print("\n=== Phase 1: Loading pre-built chain for node0 ===")
-        prebuilt_chain = Path(__file__).parent / "test_chains" / "chain_12000_blocks"
+        prebuilt_chain = Path(__file__).parent / "test_chains" / "chain_200000_blocks"
 
         if not prebuilt_chain.exists():
             print(f"✗ Error: Pre-built chain not found at {prebuilt_chain}")
             print("Please run: python3 test/functional/regenerate_test_chains.py")
-            print("(This will create chain_12000_blocks under test/functional/test_chains.)")
+            print("(This will create chain_200000_blocks - takes ~1 hour to generate)")
             return 1
 
         print(f"Copying pre-built chain from {prebuilt_chain}...")
@@ -60,12 +70,26 @@ def main():
         time.sleep(2)
 
         info0 = node0.get_info()
-        print(f"\nNode0 loaded with {info0['blocks']} blocks")
+        total = info0['blocks']
+        print(f"\nNode0 loaded with {total} blocks")
         print(f"  Tip: {info0['bestblockhash'][:16]}...")
 
-        # We'll test with whatever blocks we have (should be 12000)
-        total = info0['blocks']
-        assert total >= 2100, f"Node0 should have at least 2100 blocks for testing, got {total}"
+        # Set mock time to match chain timestamps (which were advanced during generation)
+        # Read tip timestamp from chain and add buffer
+        import json
+        headers_file = prebuilt_chain / "headers.json"
+        with open(headers_file) as f:
+            chain_data = json.load(f)
+        tip_timestamp = chain_data['blocks'][-1]['time']
+        mock_time = tip_timestamp + 600  # Add 10 min buffer
+        print(f"  Setting mock time to {mock_time} (tip timestamp + 600s)")
+        node0.setmocktime(mock_time)
+
+        expected_batches = (total // MAX_HEADERS_SIZE) + (1 if total % MAX_HEADERS_SIZE != 0 else 0)
+        print(f"  Expected batches: {expected_batches} (at {MAX_HEADERS_SIZE} headers/batch)")
+
+        assert total >= MAX_HEADERS_SIZE + 1, \
+            f"Node0 needs > {MAX_HEADERS_SIZE} blocks for batching test, got {total}"
 
         # Start node1 (fresh node at genesis)
         print("\n=== Phase 2: Starting fresh node (at genesis) ===")
@@ -77,10 +101,13 @@ def main():
 
         time.sleep(2)
 
-        # Verify node1 is at genesis
         info1 = node1.get_info()
         print(f"Node1 initial state: {info1['blocks']} blocks")
         assert info1['blocks'] == 0, f"Node1 should start at genesis, got {info1['blocks']}"
+
+        # Set mock time on node1 to match node0 (so it accepts future-dated headers)
+        print(f"  Setting mock time to {mock_time} (matching node0)")
+        node1.setmocktime(mock_time)
 
         # Connect node1 to node0 to trigger IBD
         print("\n=== Phase 3: Connecting node1 to node0 (triggering IBD with batching) ===")
@@ -88,70 +115,61 @@ def main():
         result = node1.add_node(f"127.0.0.1:{port0}", "add")
         print(f"Connection result: {result}")
 
-        # Wait for IBD to complete
-        expected_batches = (total // 2000) + (1 if total % 2000 != 0 else 0)
-        print("\nWaiting for IBD to complete (batches of 2000 headers)...")
-        print(f"Expected batches: {expected_batches} (total blocks: {total})")
+        print(f"\nWaiting for IBD to complete...")
+        print(f"Expecting {expected_batches} batches of ~{MAX_HEADERS_SIZE} headers each")
         print()
 
         # Track batches
         target_height = info0['blocks']
         last_height = 0
         batch_count = 0
+        batch_heights = []
         start_time = time.time()
-        last_update_time = start_time
-        max_wait = 600  # 10 minutes max (syncing 12000 blocks takes time)
+        max_wait = 7200  # 2 hours max for 200k blocks
 
         while time.time() - start_time < max_wait:
-            # Use long timeout during sync (RandomX verification is slow)
             try:
                 info1 = node1.get_info(timeout=120)
             except Exception as e:
                 print(f"  Warning: get_info() failed: {e}")
                 time.sleep(1)
                 continue
+
             current_height = info1['blocks']
             current_time = time.time()
 
-            # Detect batch completion (height jumps significantly)
             if current_height > last_height:
                 height_increase = current_height - last_height
+                elapsed = current_time - start_time
+                blocks_per_sec = current_height / elapsed if elapsed > 0 else 0
+                eta = (target_height - current_height) / blocks_per_sec if blocks_per_sec > 0 else 0
 
-                # If we got ~2000 headers or reached target, that's a batch
-                if height_increase >= 1000:  # Allow some variance
+                # Detect batch completion (large height jump, typically ~80000)
+                if height_increase >= MAX_HEADERS_SIZE * 0.9:  # Allow 10% variance
                     batch_count += 1
-                    elapsed = current_time - start_time
-                    blocks_per_sec = current_height / elapsed if elapsed > 0 else 0
-                    eta = (target_height - current_height) / blocks_per_sec if blocks_per_sec > 0 else 0
+                    batch_heights.append(current_height)
                     print(f"  [Batch {batch_count}] Synced to height {current_height} "
                           f"(+{height_increase} headers) - {elapsed:.1f}s elapsed, "
-                          f"{blocks_per_sec:.1f} blocks/sec, ETA: {eta:.1f}s")
-                    last_height = current_height
-                    last_update_time = current_time
-
-                # Show progress with performance stats every 0.5s
-                elif current_height < target_height and height_increase > 0:
+                          f"{blocks_per_sec:.1f} blocks/sec, ETA: {eta/60:.1f}min")
+                else:
+                    # Regular progress update
                     progress_pct = (current_height / target_height) * 100
-                    elapsed = current_time - start_time
-                    blocks_per_sec = current_height / elapsed if elapsed > 0 else 0
-                    eta = (target_height - current_height) / blocks_per_sec if blocks_per_sec > 0 else 0
-                    print(f"  Syncing: {current_height}/{target_height} headers ({progress_pct:.1f}%) - "
-                          f"{blocks_per_sec:.1f} blocks/sec, ETA: {eta:.1f}s")
-                    last_height = current_height
-                    last_update_time = current_time
+                    print(f"  Syncing: {current_height}/{target_height} ({progress_pct:.1f}%) - "
+                          f"{blocks_per_sec:.1f} blocks/sec, ETA: {eta/60:.1f}min")
 
-            # Check if done
+                last_height = current_height
+
             if current_height >= target_height:
                 elapsed = time.time() - start_time
                 avg_blocks_per_sec = target_height / elapsed if elapsed > 0 else 0
-                print(f"\n  IBD complete in {elapsed:.1f} seconds!")
+                print(f"\n  IBD complete in {elapsed/60:.1f} minutes!")
                 print(f"  Average sync rate: {avg_blocks_per_sec:.1f} blocks/sec")
                 break
 
-            time.sleep(0.5)
+            time.sleep(1)
 
         # Final verification
-        print("\n=== Phase 4: Verifying sync ===")
+        print("\n=== Phase 4: Verifying sync and batching ===")
         info0 = node0.get_info()
         info1 = node1.get_info()
 
@@ -159,30 +177,33 @@ def main():
         print(f"Node1: height={info1['blocks']}, tip={info1['bestblockhash'][:16]}...")
 
         # Assert both nodes have same height
-        assert info1['blocks'] == info0['blocks'], f"Node1 should have synced to {info0['blocks']} blocks, got {info1['blocks']}"
+        assert info1['blocks'] == info0['blocks'], \
+            f"Node1 should have synced to {info0['blocks']} blocks, got {info1['blocks']}"
 
         # Assert both nodes have same tip
         assert info0['bestblockhash'] == info1['bestblockhash'], \
             f"Nodes have different tips:\n  node0={info0['bestblockhash']}\n  node1={info1['bestblockhash']}"
 
-        # Note about batch detection
-        expected_batches = (info0['blocks'] // 2000) + (1 if info0['blocks'] % 2000 != 0 else 0)
-        if batch_count < expected_batches:
-            print(f"\n⚠ Note: Expected {expected_batches} batches, detected {batch_count}")
-            print("  (Headers may have synced faster than detection polling interval)")
-            print(f"  The important thing is all {info0['blocks']} blocks synced successfully!")
+        # Verify batching occurred
+        print(f"\nBatching results:")
+        print(f"  Detected {batch_count} batches")
+        print(f"  Expected {expected_batches} batches")
 
-        print("\n✓ Test passed! Batching works correctly:")
-        print(f"  Node1 synced all {info0['blocks']} blocks from node0")
-        print(f"  Detected {batch_count} batch completions")
-        print(f"  Both nodes at height {info0['blocks']} with matching tip")
+        if batch_count >= expected_batches - 1:  # Allow some detection variance
+            print(f"\n✓ Test passed! Batching works correctly:")
+            print(f"  Node1 synced all {info0['blocks']} headers in {batch_count} batches")
+            print(f"  Protocol limit: {MAX_HEADERS_SIZE} headers/batch")
+            print(f"  Both nodes at height {info0['blocks']} with matching tip")
+        else:
+            print(f"\n⚠ Warning: Expected ~{expected_batches} batches, only detected {batch_count}")
+            print("  (Polling may have missed some batch boundaries)")
+            print(f"  Sync still completed successfully with {info0['blocks']} headers")
 
     except Exception as e:
         print(f"\n✗ Test failed: {e}")
         import traceback
         traceback.print_exc()
 
-        # Print logs on failure
         if node0:
             print("\n--- Node0 last 30 lines ---")
             print(node0.read_log(30))
@@ -192,7 +213,6 @@ def main():
         return 1
 
     finally:
-        # Cleanup
         if node0 and node0.is_running():
             print("\nStopping node0...")
             node0.stop()

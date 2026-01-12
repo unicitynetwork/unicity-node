@@ -38,7 +38,7 @@ public:
   void AnnounceTipToAllPeers();
 
   // Announce current tip to a specific peer (called when peer becomes READY)
-  void AnnounceTipToPeer(Peer* peer);
+  void AnnounceTipToPeer(const Peer* peer);
 
   // Flush pending block announcements from all peers' queues
   // (sends queued blocks as INV messages)

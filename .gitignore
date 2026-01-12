@@ -40,6 +40,8 @@ cppcheck-report.txt
 iwyu_results/
 *.iwyu
 sonar-project.properties
+cov-int/
+*.tgz
 
 # Local testing configuration
 lsan.supp
@@ -66,6 +68,7 @@ deploy/ansible/local/
 # Runtime generated files (node data directories)
 debug.log
 *.log
+*.lock
 banlist.json
 peers.json
 anchors.json
@@ -73,7 +76,7 @@ node.sock
 
 # Temporary local files (not checked in)
 tmp/
-tmpDec/
+
 
 # Python
 __pycache__/

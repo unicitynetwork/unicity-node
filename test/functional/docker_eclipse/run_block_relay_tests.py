@@ -473,8 +473,8 @@ except Exception as e:
             print("PASS: ADDR messages processed with rate limiting")
             return True
         else:
-            print("WARN: More addresses added than expected")
-            return True  # Still pass, but note the warning
+            print(f"FAIL: Too many addresses added ({added} > 50 rate limit)")
+            return False
     else:
         print("  Could not get AddrMan info after")
         return False

@@ -76,11 +76,52 @@ TEST_CASE("Orphan Integration - Reorg Scenarios", "[orphan][integration]") {
     auto params = ChainParams::CreateRegTest(); TestChainstateManager chainstate(*params);
 
     SECTION("Orphan chain with more work triggers reorg") {
-        chainstate.Initialize(params->GenesisBlock()); const auto& genesis=params->GenesisBlock();
-        CBlockHeader A=CreateTestHeader(genesis.GetHash(), genesis.nTime+120,1000); A.nBits=0x207fffff; ValidationState st; chain::CBlockIndex* pA=chainstate.AcceptBlockHeader(A, st); if(pA){ chainstate.TryAddBlockIndexCandidate(pA); chainstate.ActivateBestChain(); }
-        REQUIRE(chainstate.GetChainHeight()==1);
-        CBlockHeader B1=CreateTestHeader(genesis.GetHash(), genesis.nTime+120,2000); B1.nBits=0x207fffff; uint256 hB1=B1.GetHash(); CBlockHeader B2=CreateTestHeader(hB1, genesis.nTime+240,2001); B2.nBits=0x207fffff; ValidationState st2; chain::CBlockIndex* rB2 = chainstate.AcceptBlockHeader(B2, st2); REQUIRE(rB2==nullptr); REQUIRE(st2.GetRejectReason()=="prev-blk-not-found"); REQUIRE(chainstate.AddOrphanHeader(B2, /*peer_id=*/2)); REQUIRE(chainstate.GetOrphanHeaderCount()==1);
-        chain::CBlockIndex* pB1=chainstate.AcceptBlockHeader(B1, st); if(pB1) chainstate.TryAddBlockIndexCandidate(pB1); chainstate.ActivateBestChain();
-        REQUIRE(chainstate.GetOrphanHeaderCount()==0);
+        chainstate.Initialize(params->GenesisBlock());
+        chainstate.SetBypassPOWValidation(true);
+        const auto& genesis = params->GenesisBlock();
+
+        // Build initial chain: genesis -> A (height 1)
+        CBlockHeader A = CreateTestHeader(genesis.GetHash(), genesis.nTime + 120, 1000);
+        ValidationState st;
+        chain::CBlockIndex* pA = chainstate.AcceptBlockHeader(A, st);
+        REQUIRE(pA != nullptr);
+        chainstate.TryAddBlockIndexCandidate(pA);
+        REQUIRE(chainstate.ActivateBestChain());
+        REQUIRE(chainstate.GetChainHeight() == 1);
+        REQUIRE(chainstate.GetTip()->GetBlockHash() == A.GetHash());
+
+        // Build competing chain: genesis -> B1 -> B2 (height 2, more work)
+        CBlockHeader B1 = CreateTestHeader(genesis.GetHash(), genesis.nTime + 120, 2000);
+        uint256 hB1 = B1.GetHash();
+        CBlockHeader B2 = CreateTestHeader(hB1, genesis.nTime + 240, 2001);
+        uint256 hB2 = B2.GetHash();
+
+        // Add B2 as orphan first (parent B1 not yet known)
+        ValidationState st2;
+        chain::CBlockIndex* rB2 = chainstate.AcceptBlockHeader(B2, st2);
+        REQUIRE(rB2 == nullptr);
+        REQUIRE(st2.GetRejectReason() == "prev-blk-not-found");
+        REQUIRE(chainstate.AddOrphanHeader(B2, /*peer_id=*/2));
+        REQUIRE(chainstate.GetOrphanHeaderCount() == 1);
+
+        // Still on chain A
+        REQUIRE(chainstate.GetChainHeight() == 1);
+        REQUIRE(chainstate.GetTip()->GetBlockHash() == A.GetHash());
+
+        // Now add B1 - should resolve orphan B2 and trigger reorg
+        chain::CBlockIndex* pB1 = chainstate.AcceptBlockHeader(B1, st);
+        REQUIRE(pB1 != nullptr);
+        chainstate.TryAddBlockIndexCandidate(pB1);
+        REQUIRE(chainstate.ActivateBestChain());
+
+        // Verify orphan resolved
+        REQUIRE(chainstate.GetOrphanHeaderCount() == 0);
+
+        // CRITICAL: Verify reorg actually happened
+        REQUIRE(chainstate.GetChainHeight() == 2);
+        REQUIRE(chainstate.GetTip()->GetBlockHash() == hB2);
+
+        // Verify old chain A is not the tip
+        REQUIRE(chainstate.GetTip()->GetBlockHash() != A.GetHash());
     }
 }

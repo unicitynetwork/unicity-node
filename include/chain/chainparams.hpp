@@ -89,7 +89,7 @@ public:
   static std::unique_ptr<ChainParams> CreateRegTest();
 
 protected:
-  ConsensusParams consensus;
+  ConsensusParams consensus{};
   uint16_t nDefaultPort{};
   ChainType chainType{ChainType::MAIN};
   CBlockHeader genesis;

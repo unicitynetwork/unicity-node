@@ -58,9 +58,9 @@ std::optional<std::string> RPCClient::Connect() {
   }
 
   // Set recv() timeout to prevent client from hanging on slow/hung server
-  // Timeout: 30 seconds (matches RPC server timeout)
+  // Timeout: 10 minutes for long-running commands like 'generate' 
   struct timeval timeout;
-  timeout.tv_sec = 30;
+  timeout.tv_sec = 600;
   timeout.tv_usec = 0;
   if (setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
     close(socket_fd_);

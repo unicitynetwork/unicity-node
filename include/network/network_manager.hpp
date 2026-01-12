@@ -146,7 +146,7 @@ public:
   void announce_tip_to_peers();
 
   // Announce tip to a single peer (called when peer becomes READY)
-  void announce_tip_to_peer(Peer* peer);
+  void announce_tip_to_peer(const Peer* peer);
 
   // Flush pending block announcements from all peers' queues
   void flush_block_announcements();

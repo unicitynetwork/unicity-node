@@ -1,10 +1,10 @@
 #!/bin/bash
-# Quick build and run script for test2
+# Quick build and run script for unicity_tests
 
 set -e
 
 echo "========================================"
-echo "Building test2 with improved framework"
+echo "Building unicity_tests"
 echo "========================================"
 
 # Go to project root
@@ -22,17 +22,17 @@ echo ""
 echo "Running CMake..."
 cmake ..
 
-# Build test2
+# Build tests
 echo ""
-echo "Building unicity_tests2..."
-make unicity_tests2 -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+echo "Building unicity_tests..."
+make unicity_tests -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 # Run tests
 echo ""
 echo "========================================"
 echo "Running tests..."
 echo "========================================"
-./unicity_tests2 "$@"
+./bin/unicity_tests "$@"
 
 echo ""
 echo "========================================"

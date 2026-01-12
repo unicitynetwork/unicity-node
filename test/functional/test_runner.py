@@ -47,17 +47,16 @@ def main():
         "test_runner.py",
         "regenerate_test_chains.py", # Setup script, not a test
         "debug_sync_issue.py",       # Debug script, not a test
-        "p2p_batching.py",           # Slow test (opt-in via -k)
+        "p2p_batching.py",           # Very slow test (~60min, 200k blocks, opt-in via -k)
+        "p2p_ibd_sync.py",           # Slow test (~4min, 12k blocks, opt-in via -k)
         "feature_multinode_sync.py",  # Slow/complex (opt-in via -k)
         "feature_chaos_convergence.py",  # Slow/complex (opt-in via -k)
-        "feature_ibd_restart_resume.py",  # Unstable/advanced (opt-in via -k)
         "feature_suspicious_reorg.py",  # Advanced behavior (opt-in via -k)
         "adversarial_headers_wire.py",   # Wire-level adversarial (opt-in; uses node_simulator)
         "adversarial_oversized_wire.py", # Wire-level: oversized headers (opt-in)
         "adversarial_spam_non_continuous_wire.py", # Wire-level: spam non-continuous (opt-in)
         "adversarial_slow_loris_wire.py",  # Wire-level: slow-loris (opt-in)
         "adversarial_framing_wire.py",     # Wire-level: framing errors (opt-in)
-        "test_sync_100k.py",               # 100k-block sync perf test (requires local chain_100000_blocks)
         "feature_large_concurrent_reorg_cascade.py",  # Slow test (opt-in via -k)
         "feature_massive_reorg.py",  # Slow test (opt-in via -k)
     }

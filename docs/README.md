@@ -7,14 +7,12 @@ Central index for Unicity PoW documentation. These links point to the canonical 
 - Protocol
   - [Protocol Specification](SPECIFICATION.md)
 - Testing
-  - [Testing Quick Reference](../test/QUICK_REFERENCE.md) — Unit/functional testing quick reference
-  - [Functional Tests](../test/functional/README.md) — Runner, categories, RPCs, slow tests, tips
+  - [Test Suite](../test/README.md) — Test suite documentation
+  - [Functional Tests](../test/functional/README.md) — Python functional tests
 - Deployment
   - [Deployment](../deploy/README.md) — Docker images, Compose, Ansible
 - Fuzzing
   - [Fuzzing](../fuzz/README.md) — Building/running fuzz targets, corpus
-- Scripts
-  - [Scripts](../scripts/README.md) — Dev scripts and utilities
 - Tools
   - [Genesis Miner](../tools/genesis_miner/README.md) — Genesis/mining utilities
 - Wire Testing

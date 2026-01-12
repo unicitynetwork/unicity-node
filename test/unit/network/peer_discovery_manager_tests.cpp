@@ -1194,6 +1194,10 @@ TEST_CASE("PeerDiscoveryManager - AddressManager integration", "[discovery][addr
 // ============================================================================
 
 TEST_CASE("PeerDiscoveryManager - Address relay to other peers", "[discovery][relay]") {
+    // Set up mock time for trickle delay tests
+    constexpr int64_t TEST_TIME = 1700000000;
+    util::MockTimeScope mock_time(TEST_TIME);
+
     DiscoveryManagerTestFixture fixture;
 
     // Seed deterministic random for predictable tests
@@ -1229,9 +1233,13 @@ TEST_CASE("PeerDiscoveryManager - Address relay to other peers", "[discovery][re
     SECTION("Addresses are relayed to other peers") {
         // Send ADDR from sender
         message::AddrMessage addr_msg;
-        addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100));
+        addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100, TEST_TIME));
 
         fixture.discovery_manager->HandleAddr(sender, &addr_msg);
+
+        // Advance time past trickle delay and process pending relays
+        util::SetMockTime(TEST_TIME + 60);
+        fixture.discovery_manager->ProcessPendingAddrRelays();
 
         // Check that target peers received relayed messages
         size_t target1_msgs = mock_conn2->sent_message_count();
@@ -1248,10 +1256,14 @@ TEST_CASE("PeerDiscoveryManager - Address relay to other peers", "[discovery][re
     SECTION("Addresses are NOT relayed back to sender") {
         // Send ADDR from sender
         message::AddrMessage addr_msg;
-        addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100));
+        addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100, TEST_TIME));
 
         mock_conn1->clear_sent_messages();
         fixture.discovery_manager->HandleAddr(sender, &addr_msg);
+
+        // Advance time and process trickle queue
+        util::SetMockTime(TEST_TIME + 60);
+        fixture.discovery_manager->ProcessPendingAddrRelays();
 
         // Sender should NOT receive any relay (no echo)
         REQUIRE(mock_conn1->sent_message_count() == 0);
@@ -1469,6 +1481,10 @@ TEST_CASE("PeerDiscoveryManager - Address relay with no eligible targets", "[dis
 }
 
 TEST_CASE("PeerDiscoveryManager - Address relay limits to 2 peers", "[discovery][relay]") {
+    // Set up mock time for trickle delay
+    constexpr int64_t TEST_TIME = 1700000000;
+    util::MockTimeScope mock_time(TEST_TIME);
+
     DiscoveryManagerTestFixture fixture;
 
     fixture.discovery_manager->TestSeedRng(12345);
@@ -1499,8 +1515,12 @@ TEST_CASE("PeerDiscoveryManager - Address relay limits to 2 peers", "[discovery]
 
     // Send ADDR from sender
     message::AddrMessage addr_msg;
-    addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100));
+    addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100, TEST_TIME));
     fixture.discovery_manager->HandleAddr(sender, &addr_msg);
+
+    // Advance time past trickle delay and process pending relays
+    util::SetMockTime(TEST_TIME + 60);
+    fixture.discovery_manager->ProcessPendingAddrRelays();
 
     // Count how many targets received the relay
     int targets_with_messages = 0;
@@ -1526,6 +1546,10 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for large ADDR messages (>10)", 
     // Bitcoin Core only relays from ADDR messages with ≤10 addresses
     // to prevent relay amplification attacks
 
+    // Set up mock time for trickle delay
+    constexpr int64_t TEST_TIME = 1700000000;
+    util::MockTimeScope mock_time(TEST_TIME);
+
     DiscoveryManagerTestFixture fixture;
     fixture.discovery_manager->TestSeedRng(12345);
 
@@ -1533,7 +1557,7 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for large ADDR messages (>10)", 
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
-    fixture.peer_manager->add_peer(sender);
+    fixture.peer_manager->add_peer(sender, NetPermissionFlags::Addr);  // Bypass rate limiting for 10+ addresses
     sender->set_successfully_connected_for_test(true);
 
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
@@ -1547,10 +1571,14 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for large ADDR messages (>10)", 
     SECTION("Message with 11 addresses is NOT relayed") {
         message::AddrMessage addr_msg;
         for (int i = 0; i < 11; i++) {
-            addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(i));
+            addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(i, TEST_TIME));
         }
 
         fixture.discovery_manager->HandleAddr(sender, &addr_msg);
+
+        // Advance time and process - still no relay because msg > 10 addresses
+        util::SetMockTime(TEST_TIME + 60);
+        fixture.discovery_manager->ProcessPendingAddrRelays();
 
         // No relay should occur
         REQUIRE(mock_conn2->sent_message_count() == 0);
@@ -1559,10 +1587,14 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for large ADDR messages (>10)", 
     SECTION("Message with 10 addresses IS relayed") {
         message::AddrMessage addr_msg;
         for (int i = 0; i < 10; i++) {
-            addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(i));
+            addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(i, TEST_TIME));
         }
 
         fixture.discovery_manager->HandleAddr(sender, &addr_msg);
+
+        // Advance time and process trickle queue
+        util::SetMockTime(TEST_TIME + 60);
+        fixture.discovery_manager->ProcessPendingAddrRelays();
 
         // Relay should occur
         REQUIRE(mock_conn2->sent_message_count() > 0);
@@ -1637,6 +1669,10 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for old timestamps", "[discovery
 
         fixture.discovery_manager->HandleAddr(sender, &addr_msg);
 
+        // Advance time and process - still no relay because timestamp too old
+        util::SetMockTime(TEST_TIME + 60);
+        fixture.discovery_manager->ProcessPendingAddrRelays();
+
         // No relay should occur (address too old)
         REQUIRE(mock_conn2->sent_message_count() == 0);
     }
@@ -1649,6 +1685,10 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for old timestamps", "[discovery
         addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100, TEST_TIME - 300));
 
         fixture.discovery_manager->HandleAddr(sender, &addr_msg);
+
+        // Advance time and process trickle queue
+        util::SetMockTime(TEST_TIME + 60);
+        fixture.discovery_manager->ProcessPendingAddrRelays();
 
         // Relay should occur
         REQUIRE(mock_conn2->sent_message_count() > 0);
@@ -1801,4 +1841,200 @@ TEST_CASE("AddressKey works correctly in unordered_map", "[network][hash]") {
     map[k3] = 300;
     REQUIRE(map[k1] == 300);
     REQUIRE(map.size() == 2);
+}
+
+// ============================================================================
+// ADDR Trickle Delay Tests
+// ============================================================================
+
+TEST_CASE("PeerDiscoveryManager - ProcessPendingAddrRelays with empty queue", "[discovery][trickle]") {
+    DiscoveryManagerTestFixture fixture;
+
+    // Should not crash with empty queue
+    fixture.discovery_manager->ProcessPendingAddrRelays();
+
+    // No side effects expected
+    REQUIRE(true);
+}
+
+TEST_CASE("PeerDiscoveryManager - ADDR relay is queued with trickle delay", "[discovery][trickle][relay]") {
+    // Use mock time for deterministic testing
+    util::SetMockTime(0);
+    constexpr int64_t TEST_TIME = 1700000000;
+    util::MockTimeScope mock_time(TEST_TIME);
+
+    DiscoveryManagerTestFixture fixture;
+    fixture.discovery_manager->TestSeedRng(12345);
+
+    // Create sender and target
+    auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
+    mock_conn1->set_inbound(false);
+    auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
+    fixture.peer_manager->add_peer(sender);
+    sender->set_successfully_connected_for_test(true);
+
+    auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
+    mock_conn2->set_inbound(false);
+    auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
+    fixture.peer_manager->add_peer(target);
+    target->set_successfully_connected_for_test(true);
+
+    mock_conn2->clear_sent_messages();
+
+    // Send ADDR from sender
+    message::AddrMessage addr_msg;
+    addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100, TEST_TIME));
+
+    fixture.discovery_manager->HandleAddr(sender, &addr_msg);
+
+    // With trickle delay, message should NOT be sent immediately
+    // (it's queued for later)
+    REQUIRE(mock_conn2->sent_message_count() == 0);
+
+    // Now advance time past the trickle delay (mean is 5 seconds, use 20 to be safe)
+    util::SetMockTime(TEST_TIME + 20);
+
+    // Process pending relays
+    fixture.discovery_manager->ProcessPendingAddrRelays();
+
+    // Now the message should have been sent
+    REQUIRE(mock_conn2->sent_message_count() == 1);
+}
+
+TEST_CASE("PeerDiscoveryManager - Trickle delay respects mock time", "[discovery][trickle][time]") {
+    util::SetMockTime(0);
+    constexpr int64_t TEST_TIME = 1700000000;
+    util::MockTimeScope mock_time(TEST_TIME);
+
+    DiscoveryManagerTestFixture fixture;
+    fixture.discovery_manager->TestSeedRng(42);  // Deterministic seed
+
+    // Create sender and target
+    auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
+    mock_conn1->set_inbound(false);
+    auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
+    fixture.peer_manager->add_peer(sender);
+    sender->set_successfully_connected_for_test(true);
+
+    auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
+    mock_conn2->set_inbound(false);
+    auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
+    fixture.peer_manager->add_peer(target);
+    target->set_successfully_connected_for_test(true);
+
+    mock_conn2->clear_sent_messages();
+
+    // Queue a relay
+    message::AddrMessage addr_msg;
+    addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100, TEST_TIME));
+    fixture.discovery_manager->HandleAddr(sender, &addr_msg);
+
+    // Advance time by only 1 second (less than typical delay)
+    util::SetMockTime(TEST_TIME + 1);
+    fixture.discovery_manager->ProcessPendingAddrRelays();
+
+    // Message might not be sent yet (depends on random delay)
+    // But after 30 seconds it should definitely be sent
+    util::SetMockTime(TEST_TIME + 30);
+    fixture.discovery_manager->ProcessPendingAddrRelays();
+
+    REQUIRE(mock_conn2->sent_message_count() == 1);
+}
+
+TEST_CASE("PeerDiscoveryManager - Trickle handles peer disconnect", "[discovery][trickle][disconnect]") {
+    util::SetMockTime(0);
+    constexpr int64_t TEST_TIME = 1700000000;
+    util::MockTimeScope mock_time(TEST_TIME);
+
+    DiscoveryManagerTestFixture fixture;
+    fixture.discovery_manager->TestSeedRng(12345);
+
+    // Create sender and target
+    auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
+    mock_conn1->set_inbound(false);
+    auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
+    fixture.peer_manager->add_peer(sender);
+    sender->set_successfully_connected_for_test(true);
+
+    auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
+    mock_conn2->set_inbound(false);
+    auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
+    int target_id = fixture.peer_manager->add_peer(target);
+    REQUIRE(target_id >= 0);
+    target->set_successfully_connected_for_test(true);
+
+    mock_conn2->clear_sent_messages();
+
+    // Queue a relay
+    message::AddrMessage addr_msg;
+    addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100, TEST_TIME));
+    fixture.discovery_manager->HandleAddr(sender, &addr_msg);
+
+    // Disconnect the target before delay expires
+    mock_conn2->close();
+
+    // Advance time past delay
+    util::SetMockTime(TEST_TIME + 30);
+
+    // Should not crash when processing (peer is gone)
+    fixture.discovery_manager->ProcessPendingAddrRelays();
+
+    // No message sent (peer disconnected)
+    REQUIRE(mock_conn2->sent_message_count() == 0);
+}
+
+TEST_CASE("PeerDiscoveryManager - Multiple pending relays processed correctly", "[discovery][trickle]") {
+    util::SetMockTime(0);
+    constexpr int64_t TEST_TIME = 1700000000;
+    util::MockTimeScope mock_time(TEST_TIME);
+
+    DiscoveryManagerTestFixture fixture;
+    fixture.discovery_manager->TestSeedRng(99999);
+
+    // Create sender with Addr permission to bypass rate limiting
+    auto mock_conn0 = std::make_shared<MockTransportConnection>("193.0.0.0", 9590);
+    mock_conn0->set_inbound(false);
+    auto sender = Peer::create_outbound(fixture.io_context, mock_conn0, magic::REGTEST, 0, "193.0.0.0", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
+    int sender_id = fixture.peer_manager->add_peer(sender, NetPermissionFlags::Addr);
+    sender->set_successfully_connected_for_test(true);
+
+    // Create single target (eliminates randomness in peer selection)
+    auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
+    mock_conn1->set_inbound(false);
+    auto target = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
+    int target_id = fixture.peer_manager->add_peer(target);
+    target->set_successfully_connected_for_test(true);
+    mock_conn1->clear_sent_messages();
+
+    // Verify peer setup
+    INFO("Sender ID: " << sender_id << ", Target ID: " << target_id);
+    REQUIRE(sender_id >= 0);
+    REQUIRE(target_id >= 0);
+    REQUIRE(sender_id != target_id);
+    auto all_peers = fixture.peer_manager->get_all_peers();
+    INFO("Total peers: " << all_peers.size());
+    REQUIRE(all_peers.size() == 2);
+
+    // Send multiple ADDR messages to queue multiple relays
+    // With only 1 target, each ADDR queues exactly 1 relay
+    // Sender has Addr permission to bypass rate limiting (separate tests cover rate limiting)
+    for (int i = 0; i < 3; i++) {
+        message::AddrMessage addr_msg;
+        addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(100 + i, TEST_TIME));
+        fixture.discovery_manager->HandleAddr(sender, &addr_msg);
+    }
+
+    // Verify 3 relays were queued
+    REQUIRE(fixture.discovery_manager->PendingAddrRelayCountForTest() == 3);
+
+    // No messages should be sent yet (trickle delay)
+    REQUIRE(mock_conn1->sent_message_count() == 0);
+
+    // Advance time past all delays (60 seconds beyond the last HandleAddr)
+    util::SetMockTime(TEST_TIME + 63);
+    fixture.discovery_manager->ProcessPendingAddrRelays();
+
+    // Should have sent 3 messages (1 per ADDR message to the single target)
+    INFO("Total messages sent: " << mock_conn1->sent_message_count());
+    REQUIRE(mock_conn1->sent_message_count() == 3);
 }

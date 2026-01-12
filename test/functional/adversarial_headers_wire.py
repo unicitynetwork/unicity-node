@@ -44,8 +44,8 @@ def main():
         node = TestNode(0, test_dir / "node0", binary_path, extra_args=["--listen", f"--port={port}"])
         node.start()
 
-        # Give node time to bind
-        time.sleep(1)
+        # Give node time to fully start and bind to port
+        time.sleep(2)
 
         # Run invalid-pow scenario – expect peer disconnect
         print("Running node_simulator --test invalid-pow ...")

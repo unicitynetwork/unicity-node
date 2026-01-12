@@ -102,6 +102,7 @@ private:
   std::string HandleClearBanned(const std::vector<std::string>& params);
   std::string HandleGetChainTips(const std::vector<std::string>& params);
   std::string HandleSubmitHeader(const std::vector<std::string>& params);
+  std::string HandleAddConnection(const std::vector<std::string>& params);
 
 private:
   std::string socket_path_;

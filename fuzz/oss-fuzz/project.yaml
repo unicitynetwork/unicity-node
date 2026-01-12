@@ -1,5 +1,5 @@
 # OSS-Fuzz project configuration for Unicity
-homepage: "https://github.com/unicitynetwork/unicity-pow"
+homepage: "https://github.com/unicitynetwork/unicity-node"
 language: c++
 primary_contact: "0xt1mo@users.noreply.github.com"
 auto_ccs:
@@ -18,7 +18,7 @@ fuzzing_engines:
   - honggfuzz
 
 # Main language
-main_repo: "https://github.com/unicitynetwork/unicity-pow.git"
+main_repo: "https://github.com/unicitynetwork/unicity-node.git"
 
 # File issue tracker
 file_github_issue: true

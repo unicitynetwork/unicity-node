@@ -285,6 +285,14 @@ class TestNode:
         """Get peer connection info with configurable timeout."""
         return self.rpc("getpeerinfo", timeout=timeout)
 
+    def setmocktime(self, timestamp, timeout=30):
+        """Set mock time for testing.
+
+        Args:
+            timestamp: Unix timestamp to set, or 0 to disable mock time
+        """
+        return self.rpc("setmocktime", timestamp, timeout=timeout)
+
     def add_node(self, node_addr, command="add", timeout=30):
         """Add a peer node with configurable timeout."""
         return self.rpc("addnode", node_addr, command, timeout=timeout)

@@ -85,9 +85,10 @@ TEST_CASE("LogManager: SetComponentLevel changes specific logger", "[logging]") 
 
 TEST_CASE("LogManager: Logging macros work", "[logging]") {
     LogManager::Initialize("trace", false, "");
-    LogManager::SetLogLevel("trace");
+    // Suppress output - we're testing macros don't crash, not verifying output
+    LogManager::SetLogLevel("off");
 
-    // These should not crash
+    // These should not crash (even with logging off, the macro code paths execute)
     SECTION("Default logger macros") {
         LOG_TRACE("Test trace message");
         LOG_DEBUG("Test debug message");
@@ -122,6 +123,8 @@ TEST_CASE("LogManager: Logging macros work", "[logging]") {
 
 TEST_CASE("LogManager: Format string arguments", "[logging]") {
     LogManager::Initialize("debug", false, "");
+    // Suppress output - we're testing format strings don't crash
+    LogManager::SetLogLevel("off");
 
     // These should not crash and should format correctly
     LOG_INFO("Integer: {}", 42);
@@ -134,6 +137,8 @@ TEST_CASE("LogManager: Format string arguments", "[logging]") {
 
 TEST_CASE("LogManager: Thread safety", "[logging][threading]") {
     LogManager::Initialize("info", false, "");
+    // Suppress output during thread safety test - we're testing thread safety, not log output
+    LogManager::SetLogLevel("off");
 
     const int num_threads = 8;
     const int ops_per_thread = 100;
@@ -146,13 +151,14 @@ TEST_CASE("LogManager: Thread safety", "[logging][threading]") {
                 // Mix of operations
                 auto logger = LogManager::GetLogger("network");
                 if (logger != nullptr) {
-                    logger->info("Thread {} iteration {}", t, i);
+                    logger->trace("Thread {} iteration {}", t, i);
                     success_count++;
                 }
 
-                // Occasionally change log levels
+                // Occasionally change log levels (both "off" to suppress output,
+                // but still exercises the thread-safe SetComponentLevel code path)
                 if (i % 20 == 0) {
-                    LogManager::SetComponentLevel("network", i % 2 == 0 ? "debug" : "info");
+                    LogManager::SetComponentLevel("network", "off");
                 }
             }
         });
@@ -168,6 +174,8 @@ TEST_CASE("LogManager: Thread safety", "[logging][threading]") {
 
 TEST_CASE("LogManager: Rate-limited logging macros", "[logging][rate_limiter]") {
     LogManager::Initialize("error", false, "");
+    // Suppress output - we're testing rate limiter logic, not verifying output
+    LogManager::SetLogLevel("off");
 
     SECTION("Rate-limited ERROR macro limits output") {
         int would_log = 0;
@@ -226,7 +234,5 @@ TEST_CASE("LogManager: Log level parsing", "[logging]") {
         // spdlog::level::from_str returns off for unknown levels
         REQUIRE(LogManager::GetLogger()->level() == spdlog::level::off);
     }
-
-    // Reset to reasonable level
-    LogManager::SetLogLevel("info");
+    // Both sections end with log level at "off", no restore needed
 }

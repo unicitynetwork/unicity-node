@@ -37,7 +37,8 @@ def main():
         node = TestNode(0, test_dir / "node0", binary_path, extra_args=["--listen", f"--port={port}"])
         node.start()
 
-        time.sleep(1)
+        # Give node time to fully start and bind to port
+        time.sleep(2)
 
         print("Running node_simulator --test spam-continuous ...")
         proc = run_node_simulator(port, "spam-continuous", timeout=40)

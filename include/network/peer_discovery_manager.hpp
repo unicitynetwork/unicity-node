@@ -128,6 +128,9 @@ private:
   static constexpr double EVICTION_TRIGGER_RATIO = 1.1;
   static constexpr double EVICTION_TARGET_RATIO = 0.9;
 
+  // ADDR trickle delay constants 
+  static constexpr int64_t ADDR_TRICKLE_MEAN_MS = 5000;  // Mean delay before relay (Poisson)
+
   std::atomic<uint64_t> stats_getaddr_total_{0};
   std::atomic<uint64_t> stats_getaddr_served_{0};
   std::atomic<uint64_t> stats_getaddr_ignored_outbound_{0};
@@ -149,6 +152,21 @@ private:
   static constexpr double MAX_ADDR_PROCESSING_TOKEN_BUCKET = protocol::MAX_ADDR_SIZE;
 
   void BootstrapFromFixedSeeds(const chain::ChainParams& params);
+
+  // Pending ADDR relay queue 
+  struct PendingAddrRelay {
+    std::chrono::steady_clock::time_point send_time;
+    int target_peer_id;
+    std::vector<protocol::TimestampedAddress> addresses;
+  };
+  std::vector<PendingAddrRelay> pending_addr_relays_;
+
+public:
+  // Process pending ADDR relays (called periodically from NetworkManager)
+  void ProcessPendingAddrRelays();
+
+  // Test-only: get pending relay queue size
+  size_t PendingAddrRelayCountForTest() const { return pending_addr_relays_.size(); }
 };
 
 }  // namespace network

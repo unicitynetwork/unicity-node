@@ -73,7 +73,7 @@ void BlockRelayManager::AnnounceTipToAllPeers() {
   }
 }
 
-void BlockRelayManager::AnnounceTipToPeer(Peer* peer) {
+void BlockRelayManager::AnnounceTipToPeer(const Peer* peer) {
   // Announce current tip to a single peer (called when peer becomes READY)
 
   if (!peer || !peer->is_connected() || peer->state() != PeerConnectionState::READY) {

@@ -1,7 +1,7 @@
 # Unicity Network Protocol
 
 **Version:** 1.0
-**Last Updated:** 2025-11-05
+**Last Updated:** 2026-01-12
 
 ## Overview
 
@@ -245,5 +245,5 @@ Node A                  Node B
 
 | Type | Default |
 |------|---------|
-| Outbound Connections | 8 |
+| Outbound Connections | 10 |
 | Inbound Connections | 125 |

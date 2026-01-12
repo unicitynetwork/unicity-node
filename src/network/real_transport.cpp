@@ -367,7 +367,9 @@ void RealTransportConnection::close_impl() {
   //
   // NOTE: disconnect_callback_ may already be empty if deliver_disconnect_once() was
   // called from an error path before close_impl().
+  // cppcheck-suppress unreadVariable ; RAII lifetime extension - kept alive until scope exit
   ReceiveCallback saved_receive_cb = std::move(receive_callback_);
+  // cppcheck-suppress unreadVariable ; RAII lifetime extension - kept alive until scope exit
   DisconnectCallback saved_disconnect_cb = std::move(disconnect_callback_);
 
   // CRITICAL: Cancel outstanding I/O operations before destroying member state.

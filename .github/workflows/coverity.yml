@@ -1,0 +1,31 @@
+name: Coverity Scan
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday (Coverity allows max 7 builds/week)
+  workflow_dispatch:      # Manual trigger
+
+jobs:
+  coverity:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake libboost-dev
+
+    - name: Configure
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Coverity Scan
+      uses: vapier/coverity-scan-action@v1
+      with:
+        email: ${{ secrets.COVERITY_SCAN_EMAIL }}
+        token: ${{ secrets.COVERITY_SCAN_TOKEN }}
+        command: cmake --build build -j$(nproc)

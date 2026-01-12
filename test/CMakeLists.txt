@@ -2,16 +2,16 @@
 
 # Network test infrastructure
 add_library(test2_network_infra
-    network-integration/infra/simulated_network.cpp
-    network-integration/infra/simulated_node.cpp
-    network-integration/infra/node_simulator.cpp
-    network-integration/infra/network_bridged_transport.cpp
+    integration-network/infra/simulated_network.cpp
+    integration-network/infra/simulated_node.cpp
+    integration-network/infra/node_simulator.cpp
+    integration-network/infra/network_bridged_transport.cpp
 )
 
 target_include_directories(test2_network_infra PUBLIC
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/test/network-integration/infra
-    ${CMAKE_SOURCE_DIR}/test/network-integration
+    ${CMAKE_SOURCE_DIR}/test/integration-network/infra
+    ${CMAKE_SOURCE_DIR}/test/integration-network
     ${CMAKE_SOURCE_DIR}/test
     ${CMAKE_SOURCE_DIR}/test/common
     ${Boost_INCLUDE_DIRS}
@@ -47,7 +47,7 @@ target_link_libraries(transport_only PUBLIC
 add_executable(transport_tests
     ${CMAKE_SOURCE_DIR}/test/common/catch_amalgamated.cpp
     common/test_logging.cpp
-    network-integration/real_transport_tests.cpp
+    integration-network/real_transport_tests.cpp
 )
 
 target_include_directories(transport_tests PRIVATE
@@ -71,79 +71,91 @@ add_test(NAME transport_tests COMMAND $<TARGET_FILE:transport_tests>)
 add_executable(unicity_tests
     ${CMAKE_SOURCE_DIR}/test/common/catch_amalgamated.cpp  # Use existing Catch2
     common/test_logging.cpp
-    network-integration/simple_test.cpp
-    network-integration/malformed_message_tests.cpp
-    network-integration/headers_sync_tests.cpp
-    network-integration/multi_peer_sync_tests.cpp
-    network-integration/dos/invalid_pow_tests.cpp
-    network-integration/dos/orphan_spam_tests.cpp
-    network-integration/dos/oversized_headers_tests.cpp
-    network-integration/dos/low_work_headers_tests.cpp
-    network-integration/dos/stalling_peer_tests.cpp
-    network-integration/dos/out_of_order_headers_tests.cpp
-    network-integration/dos/overflow_compactsize_tests.cpp
-    network-integration/dos/reserve_guard_tests.cpp
-    network-integration/dos/oversized_inv_tests.cpp
-    network-integration/dos/oversized_addr_tests.cpp
-    network-integration/dos/getheaders_oversize_tests.cpp
-    network-integration/dos/per_peer_buffer_tests.cpp
-    network-integration/dos/flood_buffer_overflow_tests.cpp
-    network-integration/dos/inv_storm_throttling_tests.cpp
-    network-integration/dos/addr_valid_flood_tests.cpp
-    network-integration/dos/addr_echo_suppression_tests.cpp
-    network-integration/dos/addr_rate_limiting_tests.cpp
-    network-integration/dos/addr_eviction_performance_tests.cpp
-    network-integration/dos/ping_pong_tests.cpp
-    network-integration/dos/connect_churn_tests.cpp
-    network-integration/dos/reannounce_ttl_tests.cpp
-    network-integration/dos/dos_simulator_tests.cpp
-    network-integration/dos/dos_portfolio_tests.cpp
-    network-integration/dos/unknown_command_rate_limit_tests.cpp
-    network-integration/dos/pre_verack_message_tests.cpp
-    network-integration/dos/unconnecting_headers_tests.cpp
-    network-integration/dos/misbehavior_overflow_tests.cpp
-    network-integration/dos/subversion_length_tests.cpp
-    network-integration/dos/timeout_dos_tests.cpp
-    network-integration/block_announcement/basic_tests.cpp
-    network-integration/block_announcement/edge_case_tests.cpp
-    network-integration/block_announcement/peer_states_tests.cpp
-    network-integration/block_announcement/block_relay_comprehensive_tests.cpp
-    network-integration/block_announcement/block_relay_policy_tests.cpp
-    network-integration/handshake/edge_case_tests.cpp
-    network-integration/handshake/timeout_tests.cpp
-    network-integration/handshake/handshake_session_attacks.cpp
-    network-integration/limits/connection_limit_tests.cpp
-    network-integration/limits/netgroup_boundary_tests.cpp
-    network-integration/limits/slot_exhaustion_proof.cpp
-    network-integration/limits/manual_slot_exclusion_tests.cpp
-    network-integration/limits/outbound_dedup_tests.cpp
-    network-integration/penalty_tests.cpp
-    network-integration/peer/connection_tests.cpp
-    network-integration/peer/peer_unit_tests.cpp
-    network-integration/peer/adversarial_tests.cpp
-    network-integration/peer/peer_regression_tests.cpp
-    network-integration/peer/duplicate_connection_tests.cpp
-    network-integration/peer/feeler_id_allocation_tests.cpp
-    network-integration/peer/feeler_adversarial_tests.cpp
-    network-integration/peer/sync_callback_connect_tests.cpp
-    network-integration/peer/inbound_reject_cleanup_tests.cpp
-    network-integration/peer/namespace_consistency_tests.cpp
-    network-integration/peer/single_use_start_tests.cpp
-    network-integration/peer/connection_metrics_tests.cpp
-    network-integration/edge_case_tests.cpp
-    network-integration/reorg_partition_tests.cpp
-    network-integration/sync_ibd_tests.cpp
-    network-integration/nat_manager_tests.cpp
-    network-integration/invalidateblock_tests.cpp
-    network-integration/conditions_tests.cpp
-    network-integration/peer/peer_discovery_tests.cpp
-    network-integration/banman_adversarial_tests.cpp
-    network-integration/manager/header_sync_adversarial_tests.cpp
-    network-integration/manager/header_sync_ibd_gating_tests.cpp
-    network-integration/manager/header_sync_reselection_regression_tests.cpp
-    network-integration/manager/ibd_gating_tests.cpp
-    network-integration/manager/sync_started_reset_tests.cpp
-    network-integration/manager/sync_peer_switching_tests.cpp
+    integration-network/simple_test.cpp
+    integration-network/network_component_tests.cpp
+    integration-network/network_header_sync_tests.cpp
+    integration-network/network_header_sync_edge_tests.cpp
+    integration-network/permission_tests.cpp
+    integration-network/post_ibd_inv_sync_tests.cpp
+    integration-network/rate_limiter_integration_tests.cpp
+    integration-network/malformed_message_tests.cpp
+    integration-network/headers_sync_tests.cpp
+    integration-network/multi_peer_sync_tests.cpp
+    integration-network/dos/invalid_pow_tests.cpp
+    integration-network/dos/orphan_spam_tests.cpp
+    integration-network/dos/oversized_headers_tests.cpp
+    integration-network/dos/low_work_headers_tests.cpp
+    integration-network/dos/stalling_peer_tests.cpp
+    integration-network/dos/header_withholding_tests.cpp
+    integration-network/dos/orphan_attack_tests.cpp
+    integration-network/dos/out_of_order_headers_tests.cpp
+    integration-network/dos/overflow_compactsize_tests.cpp
+    integration-network/dos/reserve_guard_tests.cpp
+    integration-network/dos/oversized_inv_tests.cpp
+    integration-network/dos/oversized_addr_tests.cpp
+    integration-network/dos/getheaders_oversize_tests.cpp
+    integration-network/dos/per_peer_buffer_tests.cpp
+    integration-network/dos/flood_buffer_overflow_tests.cpp
+    integration-network/dos/inv_storm_throttling_tests.cpp
+    integration-network/dos/addr_valid_flood_tests.cpp
+    integration-network/dos/addr_echo_suppression_tests.cpp
+    integration-network/dos/addr_rate_limiting_tests.cpp
+    integration-network/dos/addr_eviction_performance_tests.cpp
+    integration-network/dos/ping_pong_tests.cpp
+    integration-network/dos/connect_churn_tests.cpp
+    integration-network/dos/reannounce_ttl_tests.cpp
+    integration-network/dos/dos_simulator_tests.cpp
+    integration-network/dos/dos_portfolio_tests.cpp
+    integration-network/dos/unknown_command_rate_limit_tests.cpp
+    integration-network/dos/pre_verack_message_tests.cpp
+    integration-network/dos/unconnecting_headers_tests.cpp
+    integration-network/dos/misbehavior_overflow_tests.cpp
+    integration-network/dos/subversion_length_tests.cpp
+    integration-network/dos/timeout_dos_tests.cpp
+    integration-network/block_announcement/basic_tests.cpp
+    integration-network/block_announcement/edge_case_tests.cpp
+    integration-network/block_announcement/peer_states_tests.cpp
+    integration-network/block_announcement/block_relay_comprehensive_tests.cpp
+    integration-network/block_announcement/block_relay_policy_tests.cpp
+    integration-network/block_announcement/core_aligned_smoke_tests.cpp
+    integration-network/block_announcement/integration_tests.cpp
+    integration-network/handshake/edge_case_tests.cpp
+    integration-network/handshake/timeout_tests.cpp
+    integration-network/handshake/handshake_session_attacks.cpp
+    integration-network/limits/connection_limit_tests.cpp
+    integration-network/limits/netgroup_boundary_tests.cpp
+    integration-network/limits/slot_exhaustion_proof.cpp
+    integration-network/limits/manual_slot_exclusion_tests.cpp
+    integration-network/limits/outbound_dedup_tests.cpp
+    integration-network/penalty_tests.cpp
+    integration-network/peer/connection_tests.cpp
+    integration-network/peer/peer_unit_tests.cpp
+    integration-network/peer/adversarial_tests.cpp
+    integration-network/peer/peer_regression_tests.cpp
+    integration-network/peer/duplicate_connection_tests.cpp
+    integration-network/peer/feeler_id_allocation_tests.cpp
+    integration-network/peer/feeler_adversarial_tests.cpp
+    integration-network/peer/sync_callback_connect_tests.cpp
+    integration-network/peer/inbound_reject_cleanup_tests.cpp
+    integration-network/peer/namespace_consistency_tests.cpp
+    integration-network/peer/single_use_start_tests.cpp
+    integration-network/peer/connection_metrics_tests.cpp
+    integration-network/edge_case_tests.cpp
+    integration-network/reorg_partition_tests.cpp
+    integration-network/sync_ibd_tests.cpp
+    integration-network/ibd_resume_tests.cpp
+    integration-network/nat_manager_tests.cpp
+    integration-network/invalidateblock_tests.cpp
+    integration-network/conditions_tests.cpp
+    integration-network/peer/peer_discovery_tests.cpp
+    integration-network/banman_adversarial_tests.cpp
+    integration-network/bitcoin_core_parity_tests.cpp
+    integration-network/manager/header_sync_adversarial_tests.cpp
+    integration-network/manager/header_sync_ibd_gating_tests.cpp
+    integration-network/manager/header_sync_reselection_regression_tests.cpp
+    integration-network/manager/ibd_gating_tests.cpp
+    integration-network/manager/sync_started_reset_tests.cpp
+    integration-network/manager/sync_peer_switching_tests.cpp
     integration-chain/orphan_dos_tests.cpp
     integration-chain/orphan_edge_case_tests.cpp
     integration-chain/orphan_integration_tests.cpp
@@ -151,34 +163,37 @@ add_executable(unicity_tests
     integration-chain/orphan_time_eviction_tests.cpp
     integration-chain/invalidateblock_chain_tests.cpp
     integration-chain/chain_e2e_tests.cpp
-    network-integration/security/eclipse_attack_simulations.cpp
-    network-integration/security/silent_peer_eclipse_tests.cpp
-    network-integration/addr_manager_tests2.cpp
-    network-integration/feeler_anchor_tests.cpp
-    network-integration/anchors_integration_tests.cpp
-    network-integration/addr/getaddr_router_tests.cpp
-    network-integration/addr/getaddr_multi_node_tests.cpp
-    network-integration/addr/addr_manager_netgroup_tests.cpp
-    network-integration/addr/self_advertisement_integration_tests.cpp
-    network-integration/addr/address_promotion_e2e_tests.cpp
-    network-integration/self_advertisement_tests.cpp
-    network-integration/real_transport_tests.cpp
-    network-integration/real_transport_dos_tests.cpp
-    network-integration/idle_timeout_tests.cpp
-    network-integration/message_dispatcher_tests.cpp
-    network-integration/rpc_integration_tests.cpp
-    network-integration/infra/address_factory_tests.cpp
-    network-integration/infra/peer_factory_tests.cpp
-    network-integration/eviction/basic_eviction_tests.cpp
-    network-integration/eviction/eviction_manager_tests.cpp
-    network-integration/connection_flooding_tests.cpp
-    network-integration/outbound_diversity_tests.cpp
+    integration-chain/reorg_multi_node_tests.cpp
+    integration-network/security/eclipse_attack_simulations.cpp
+    integration-network/security/silent_peer_eclipse_tests.cpp
+    integration-network/addr_manager_tests2.cpp
+    integration-network/feeler_anchor_tests.cpp
+    integration-network/anchors_integration_tests.cpp
+    integration-network/addr/getaddr_router_tests.cpp
+    integration-network/addr/getaddr_multi_node_tests.cpp
+    integration-network/addr/topology_privacy_tests.cpp
+    integration-network/addr/addr_relay_timing_tests.cpp
+    integration-network/addr/addr_manager_netgroup_tests.cpp
+    integration-network/addr/self_advertisement_integration_tests.cpp
+    integration-network/addr/address_promotion_e2e_tests.cpp
+    integration-network/self_advertisement_tests.cpp
+    integration-network/real_transport_tests.cpp
+    integration-network/real_transport_dos_tests.cpp
+    integration-network/idle_timeout_tests.cpp
+    integration-network/message_dispatcher_tests.cpp
+    integration-network/rpc_integration_tests.cpp
+    integration-network/infra/address_factory_tests.cpp
+    integration-network/infra/peer_factory_tests.cpp
+    integration-network/eviction/basic_eviction_tests.cpp
+    integration-network/eviction/eviction_manager_tests.cpp
+    integration-network/connection_flooding_tests.cpp
+    integration-network/outbound_diversity_tests.cpp
 )
 
 target_include_directories(unicity_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/test/network-integration/infra
-    ${CMAKE_SOURCE_DIR}/test/network-integration
+    ${CMAKE_SOURCE_DIR}/test/integration-network/infra
+    ${CMAKE_SOURCE_DIR}/test/integration-network
     ${CMAKE_SOURCE_DIR}/test
     ${CMAKE_SOURCE_DIR}/test/common  # For catch_amalgamated.hpp
     ${Boost_INCLUDE_DIRS}
@@ -225,7 +240,7 @@ add_executable(unicity_tests_stress
     ${CMAKE_SOURCE_DIR}/test/common/catch_amalgamated.cpp
     common/test_logging.cpp
     integration-chain/stress_threading_tests.cpp
-    network-integration/startup_shutdown_tests.cpp
+    integration-network/startup_shutdown_tests.cpp
     unit/chain/timedata_stress_tests.cpp
     unit/chain/randomx_threading_stress_tests.cpp
 )
@@ -318,15 +333,15 @@ set_target_properties(unicity_bench PROPERTIES
 add_executable(nat_manager_mock_tests
     ${CMAKE_SOURCE_DIR}/test/common/catch_amalgamated.cpp
     common/test_logging.cpp
-    network-integration/infra/mock_upnp.cpp
-    network-integration/nat_manager_mock_tests.cpp
+    integration-network/infra/mock_upnp.cpp
+    integration-network/nat_manager_mock_tests.cpp
     # Compile nat_manager.cpp directly (not via network library)
     ${CMAKE_SOURCE_DIR}/src/network/nat_manager.cpp
 )
 
 target_include_directories(nat_manager_mock_tests PRIVATE
     # Mock headers FIRST - so miniupnpc includes resolve to mocks
-    ${CMAKE_SOURCE_DIR}/test/network-integration/infra
+    ${CMAKE_SOURCE_DIR}/test/integration-network/infra
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/test
     ${CMAKE_SOURCE_DIR}/test/common
