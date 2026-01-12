@@ -482,6 +482,8 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr echo suppression (addresses peer
     DiscoveryManagerTestFixture fixture;
 
     // Add addresses to AddrMan
+    // Note: We add all addresses to the learned map below to ensure deterministic
+    // suppression regardless of hash table ordering (which varies by compiler/platform)
     for (int i = 0; i < 50; i++) {
         fixture.discovery_manager->addr_manager_for_test().add(DiscoveryManagerTestFixture::MakeAddress(i));
     }
@@ -492,10 +494,12 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr echo suppression (addresses peer
     REQUIRE(peer_id >= 0);
     peer->set_successfully_connected_for_test(true);
 
-    // Simulate that peer sent us addresses 0-9 (add to learned map)
+    // Simulate that peer sent us ALL addresses (add to learned map)
+    // This ensures deterministic behavior across different hash table implementations
+    // (GCC libstdc++ vs Clang libc++ have different iteration orders)
     const int64_t now_s = util::GetTime();  // Use mock-aware time
     fixture.peer_manager->ModifyLearnedAddresses(peer_id, [&](LearnedMap& learned) {
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 50; i++) {
             auto addr = DiscoveryManagerTestFixture::MakeAddress(i);
             AddressKey key;
             key.ip = addr.ip;
@@ -510,13 +514,15 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr echo suppression (addresses peer
         }
     });
 
-    // HandleGetAddr should suppress the 10 addresses peer sent us
+    // HandleGetAddr should suppress all addresses since peer already knows them
     bool result = fixture.discovery_manager->HandleGetAddr(peer);
     REQUIRE(result == true);
 
     auto stats = fixture.discovery_manager->GetGetAddrDebugStats();
-    // Should have suppressed some addresses
+    // All addresses returned from AddrMan should be suppressed
     REQUIRE(stats.last_suppressed > 0);
+    // Verify NO addresses were sent (all suppressed)
+    REQUIRE(stats.last_from_addrman == 0);
     INFO("Suppressed " << stats.last_suppressed << " addresses that peer already knows");
 }
 
