@@ -61,8 +61,11 @@ void PeerLifecycleManager::SetHeaderSyncManager(HeaderSyncManager* sync_mgr) {
 }
 
 PeerLifecycleManager::~PeerLifecycleManager() {
-  Shutdown();
-  disconnect_all();
+  try {
+    Shutdown();
+    disconnect_all();
+  } catch (...) {
+  }
 }
 
 void PeerLifecycleManager::Shutdown() {

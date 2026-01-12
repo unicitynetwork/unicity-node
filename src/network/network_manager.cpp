@@ -196,7 +196,10 @@ NetworkManager::NetworkManager(validation::ChainstateManager& chainstate_manager
 }
 
 NetworkManager::~NetworkManager() {
-  stop();
+  try {
+    stop();
+  } catch (...) {
+  }
 }
 
 PeerLifecycleManager& NetworkManager::peer_manager() {
@@ -229,9 +232,7 @@ bool NetworkManager::start() {
   fully_stopped_ = false;  // Mark that we're now running (threads will be spawned)
 
   // Start transport
-  if (transport_) {
-    transport_->run();
-  }
+  transport_->run();
 
   // Create work guard and timers only if we own the io_context
   // When using external io_context (tests), the external code controls event processing

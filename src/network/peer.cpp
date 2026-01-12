@@ -47,17 +47,20 @@ Peer::Peer(PrivateTag, asio::io_context& io_context, TransportConnectionPtr conn
       last_unknown_reset_(util::GetSteadyTime()) {}
 
 Peer::~Peer() {
-  // Correct lifecycle: disconnect() is called -> callbacks cleared -> connection closed
-  // Then later: destructor runs on already-cleaned-up object
-  if (state_ != PeerConnectionState::DISCONNECTED) {
-    LOG_NET_ERROR("CRITICAL: Peer destructor called without prior disconnect() - "
-                  "peer={}, state={}, address={}. This indicates a lifecycle bug. "
-                  "disconnect() must be called while shared_ptr is alive.",
-                  id_, static_cast<int>(state_), address());
-  }
+  try {
+    // Correct lifecycle: disconnect() is called -> callbacks cleared -> connection closed
+    // Then later: destructor runs on already-cleaned-up object
+    if (state_ != PeerConnectionState::DISCONNECTED) {
+      LOG_NET_ERROR("CRITICAL: Peer destructor called without prior disconnect() - "
+                    "peer={}, state={}, address={}. This indicates a lifecycle bug. "
+                    "disconnect() must be called while shared_ptr is alive.",
+                    id_, static_cast<int>(state_), address());
+    }
 
-  // Prevent UB if disconnect() was not called (bug logged above)
-  cancel_all_timers();
+    // Prevent UB if disconnect() was not called (bug logged above)
+    cancel_all_timers();
+  } catch (...) {
+  }
 }
 
 // Factory methods enforce shared_ptr ownership (required by enable_shared_from_this)

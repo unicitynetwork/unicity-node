@@ -26,7 +26,10 @@ CPUMiner::CPUMiner(const chain::ChainParams& params, validation::ChainstateManag
     : params_(params), chainstate_(chainstate) {}
 
 CPUMiner::~CPUMiner() {
-  Stop();
+  try {
+    Stop();
+  } catch (...) {
+  }
 }
 
 bool CPUMiner::Start(int target_height) {

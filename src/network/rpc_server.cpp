@@ -147,8 +147,8 @@ bool RPCServer::Start() {
     return true;
   }
 
-  // Remove old socket file if it exists
-  unlink(socket_path_.c_str());
+  // Remove old socket file if it exists (ignore failure - file may not exist)
+  (void)unlink(socket_path_.c_str());
 
   // Validate socket path length BEFORE attempting bind
   // sockaddr_un::sun_path is 108 bytes on Linux/BSD, 104 on some systems
@@ -187,10 +187,12 @@ bool RPCServer::Start() {
   // Restore umask
   umask(old_umask);
 
-  chmod(socket_path_.c_str(), 0600);  // Only owner can access
+  if (chmod(socket_path_.c_str(), 0600) < 0) {  // Only owner can access
+    LOG_WARN("Failed to set RPC socket permissions");
+  }
 
-  // Listen for connections
-  if (listen(server_fd_, 5) < 0) {
+  // Listen for connections (backlog handles burst of concurrent connections)
+  if (listen(server_fd_, 20) < 0) {
     LOG_ERROR("Failed to listen on RPC socket");
     close(server_fd_);
     server_fd_ = -1;

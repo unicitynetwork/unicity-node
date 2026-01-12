@@ -25,7 +25,13 @@ Application::Application(const AppConfig &config) : config_(config) {
 }
 
 Application::~Application() {
-  stop();
+  try {
+    stop();
+  } catch (const std::exception& e) {
+    LOG_ERROR("Exception during Application shutdown: {}", e.what());
+  } catch (...) {
+    LOG_ERROR("Unknown exception during Application shutdown");
+  }
   instance_ = nullptr;
 }
 
