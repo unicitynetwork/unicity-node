@@ -25,7 +25,7 @@ using namespace unicity::protocol;
 static void AddPeers(const std::vector<int64_t>& offsets) {
     for (size_t i = 0; i < offsets.size(); i++) {
         NetworkAddress addr = NetworkAddress::from_string(
-            "192.168.1." + std::to_string(i), 8333, NODE_NETWORK);
+            "192.168.1." + std::to_string(i), 9590, NODE_NETWORK);
         AddTimeData(addr, offsets[i]);
     }
 }
@@ -104,7 +104,7 @@ TEST_CASE("TimeData - 5 peers = 6 total (even), no update from previous", "[time
     AddPeers({10, 20, 15, 12});
     REQUIRE(GetTimeOffset() == 12);
 
-    NetworkAddress addr_extra = NetworkAddress::from_string("192.168.1.100", 8333, NODE_NETWORK);
+    NetworkAddress addr_extra = NetworkAddress::from_string("192.168.1.100", 9590, NODE_NETWORK);
     AddTimeData(addr_extra, 18);
 
     REQUIRE(GetTimeOffset() == 12);
@@ -208,10 +208,10 @@ TEST_CASE("TimeData - Offsets near limit", "[timedata]") {
 TEST_CASE("TimeData - Duplicate peer addresses ignored", "[timedata]") {
     TestOnlyResetTimeData();
 
-    NetworkAddress addr1 = NetworkAddress::from_string("192.168.1.1", 8333, NODE_NETWORK);
-    NetworkAddress addr2 = NetworkAddress::from_string("192.168.1.2", 8333, NODE_NETWORK);
-    NetworkAddress addr3 = NetworkAddress::from_string("192.168.1.3", 8333, NODE_NETWORK);
-    NetworkAddress addr4 = NetworkAddress::from_string("192.168.1.4", 8333, NODE_NETWORK);
+    NetworkAddress addr1 = NetworkAddress::from_string("192.168.1.1", 9590, NODE_NETWORK);
+    NetworkAddress addr2 = NetworkAddress::from_string("192.168.1.2", 9590, NODE_NETWORK);
+    NetworkAddress addr3 = NetworkAddress::from_string("192.168.1.3", 9590, NODE_NETWORK);
+    NetworkAddress addr4 = NetworkAddress::from_string("192.168.1.4", 9590, NODE_NETWORK);
 
     AddTimeData(addr1, 10);
     AddTimeData(addr1, 50);  // Ignored
@@ -259,27 +259,27 @@ TEST_CASE("TimeData - duplicate source ignored and size cap", "[timedata][add]")
 TEST_CASE("TimeData - Gradual accumulation", "[timedata]") {
     TestOnlyResetTimeData();
 
-    NetworkAddress peer1 = NetworkAddress::from_string("10.0.0.1", 8333, NODE_NETWORK);
+    NetworkAddress peer1 = NetworkAddress::from_string("10.0.0.1", 9590, NODE_NETWORK);
     AddTimeData(peer1, 10);
     REQUIRE(GetTimeOffset() == 0);
 
-    NetworkAddress peer2 = NetworkAddress::from_string("10.0.0.2", 8333, NODE_NETWORK);
+    NetworkAddress peer2 = NetworkAddress::from_string("10.0.0.2", 9590, NODE_NETWORK);
     AddTimeData(peer2, 20);
     REQUIRE(GetTimeOffset() == 0);
 
-    NetworkAddress peer3 = NetworkAddress::from_string("10.0.0.3", 8333, NODE_NETWORK);
+    NetworkAddress peer3 = NetworkAddress::from_string("10.0.0.3", 9590, NODE_NETWORK);
     AddTimeData(peer3, 15);
     REQUIRE(GetTimeOffset() == 0);
 
-    NetworkAddress peer4 = NetworkAddress::from_string("10.0.0.4", 8333, NODE_NETWORK);
+    NetworkAddress peer4 = NetworkAddress::from_string("10.0.0.4", 9590, NODE_NETWORK);
     AddTimeData(peer4, 12);
     REQUIRE(GetTimeOffset() == 12);
 
-    NetworkAddress peer5 = NetworkAddress::from_string("10.0.0.5", 8333, NODE_NETWORK);
+    NetworkAddress peer5 = NetworkAddress::from_string("10.0.0.5", 9590, NODE_NETWORK);
     AddTimeData(peer5, 18);
     REQUIRE(GetTimeOffset() == 12);
 
-    NetworkAddress peer6 = NetworkAddress::from_string("10.0.0.6", 8333, NODE_NETWORK);
+    NetworkAddress peer6 = NetworkAddress::from_string("10.0.0.6", 9590, NODE_NETWORK);
     AddTimeData(peer6, 14);
     REQUIRE(GetTimeOffset() == 14);
 }

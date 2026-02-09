@@ -4,7 +4,7 @@
 #include "network/anchor_manager.hpp"
 
 #include "network/peer.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/connection_manager.hpp"
 #include "util/files.hpp"
 #include "util/logging.hpp"
 #include "util/time.hpp"
@@ -14,7 +14,6 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
-#include <random>
 
 #include <asio.hpp>
 #include <nlohmann/json.hpp>
@@ -22,12 +21,11 @@
 namespace unicity {
 namespace network {
 
-AnchorManager::AnchorManager(PeerLifecycleManager& peer_mgr) : peer_manager_(peer_mgr) {}
+AnchorManager::AnchorManager(ConnectionManager& peer_mgr) : peer_manager_(peer_mgr) {}
 
 std::vector<protocol::NetworkAddress> AnchorManager::GetAnchors() const {
   std::vector<protocol::NetworkAddress> anchors;
 
-  // Get all outbound peers
   auto outbound_peers = peer_manager_.get_outbound_peers();
 
   struct Candidate {
@@ -43,7 +41,7 @@ std::vector<protocol::NetworkAddress> AnchorManager::GetAnchors() const {
   for (const auto& peer : outbound_peers) {
     if (!peer)
       continue;
-    if (!peer->is_connected() || peer->state() != PeerConnectionState::READY)
+    if (peer->state() != PeerConnectionState::READY)
       continue;
     if (peer->is_feeler())
       continue;  // never anchor a feeler
@@ -65,46 +63,37 @@ std::vector<protocol::NetworkAddress> AnchorManager::GetAnchors() const {
       continue;
     }
 
-    try {
-      Candidate c;
-      c.peer = peer;
-      c.addr = addr;
-      // Load atomic durations
-      auto connected_time = peer->stats().connected_time.load(std::memory_order_relaxed);
-      auto connected_tp = std::chrono::steady_clock::time_point(connected_time);
-      auto age = std::chrono::duration_cast<std::chrono::seconds>(now - connected_tp).count();
-      c.age_s = std::max<int64_t>(0, age);
-      auto ping_ms_val = peer->stats().ping_time_ms.load(std::memory_order_relaxed);
-      c.ping_ms = (ping_ms_val.count() >= 0) ? ping_ms_val.count() : std::numeric_limits<int64_t>::max();
-      candidates.push_back(std::move(c));
-    } catch (const std::exception& e) {
-      LOG_NET_WARN("Exception parsing IP address '{}': {}", ip_str, e.what());
-      continue;
-    }
+    Candidate c;
+    c.peer = peer;
+    c.addr = addr;
+    // connected_time is duration-since-epoch stored as seconds
+    auto connected_time = peer->stats().connected_time.load();
+    auto connected_tp = std::chrono::steady_clock::time_point(connected_time);
+    auto age = std::chrono::duration_cast<std::chrono::seconds>(now - connected_tp).count();
+    c.age_s = std::max<int64_t>(0, age);
+    auto ping_ms_val = peer->stats().ping_time_ms.load();
+    c.ping_ms = (ping_ms_val.count() >= 0) ? ping_ms_val.count() : std::numeric_limits<int64_t>::max();
+    candidates.push_back(std::move(c));
   }
 
   if (candidates.empty()) {
-    LOG_NET_INFO("Selected 0 anchor peers");
+    LOG_NET_INFO("selected 0 anchor peers");
     return anchors;
   }
 
-  // Randomize then favor older connections and lower ping
-  std::mt19937 rng{std::random_device{}()};
-  std::shuffle(candidates.begin(), candidates.end(), rng);
+  // Favor older connections and lower ping
   std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
     if (a.age_s != b.age_s)
       return a.age_s > b.age_s;    // older first
     return a.ping_ms < b.ping_ms;  // lower ping first
   });
 
-  // Take top 2
-  const size_t MAX_ANCHORS = 2;
   const size_t count = std::min(candidates.size(), MAX_ANCHORS);
   for (size_t i = 0; i < count; ++i) {
     anchors.push_back(candidates[i].addr);
   }
 
-  LOG_NET_INFO("Selected {} anchor peers", anchors.size());
+  LOG_NET_INFO("selected {} anchor peers", anchors.size());
   return anchors;
 }
 
@@ -119,7 +108,7 @@ bool AnchorManager::SaveAnchors(const std::string& filepath) {
       return true;  // Not an error
     }
 
-    LOG_NET_INFO("Saving {} anchor addresses to {}", anchors.size(), filepath);
+    LOG_NET_INFO("saving {} anchor addresses to {}", anchors.size(), filepath);
 
     json root;
     root["version"] = 1;
@@ -148,7 +137,7 @@ bool AnchorManager::SaveAnchors(const std::string& filepath) {
       return false;
     }
 
-    LOG_NET_DEBUG("Successfully saved {} anchors (atomic)", anchors.size());
+    LOG_NET_DEBUG("successfully saved {} anchors (atomic)", anchors.size());
     return true;
 
   } catch (const std::exception& e) {
@@ -207,23 +196,23 @@ std::vector<protocol::NetworkAddress> AnchorManager::LoadAnchors(const std::stri
 
     for (const auto& anchor_json : anchors_array) {
       if (!anchor_json.is_object()) {
-        LOG_NET_WARN("Skipping malformed anchor (not object)");
+        LOG_NET_WARN("skipping malformed anchor (not object)");
         continue;
       }
 
       if (!anchor_json.contains("ip") || !anchor_json.contains("port") || !anchor_json.contains("services")) {
-        LOG_NET_WARN("Skipping malformed anchor (missing fields)");
+        LOG_NET_WARN("skipping malformed anchor (missing fields)");
         continue;
       }
 
       const auto& ip_array = anchor_json["ip"];
       if (!valid_ip_array(ip_array)) {
-        LOG_NET_WARN("Skipping anchor with invalid IP array");
+        LOG_NET_WARN("skipping anchor with invalid IP array");
         continue;
       }
 
       if (!anchor_json["port"].is_number_unsigned() || !anchor_json["services"].is_number_unsigned()) {
-        LOG_NET_WARN("Skipping anchor with invalid port/services types");
+        LOG_NET_WARN("skipping anchor with invalid port/services types");
         continue;
       }
 
@@ -239,7 +228,7 @@ std::vector<protocol::NetworkAddress> AnchorManager::LoadAnchors(const std::stri
         break;  // cap attempts
     }
 
-    LOG_NET_INFO("Loaded {} anchor addresses from {} (passive - caller will connect)", anchors.size(), filepath);
+    LOG_NET_INFO("loaded {} anchor addresses from {} (passive - caller will connect)", anchors.size(), filepath);
 
     // Single-use file: delete after reading
     std::error_code ec;
@@ -247,7 +236,7 @@ std::vector<protocol::NetworkAddress> AnchorManager::LoadAnchors(const std::stri
     if (ec) {
       LOG_NET_WARN("Failed to delete anchors file {}: {}", filepath, ec.message());
     } else {
-      LOG_NET_DEBUG("Deleted anchors file after reading");
+      LOG_NET_DEBUG("deleted anchors file after reading");
     }
 
     return anchors;
@@ -257,6 +246,7 @@ std::vector<protocol::NetworkAddress> AnchorManager::LoadAnchors(const std::stri
     try {
       std::filesystem::remove(filepath);
     } catch (...) {
+      // Best-effort cleanup - if removal fails, we'll try again next time
     }
     return {};
   }

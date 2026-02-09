@@ -190,8 +190,34 @@ inline bool TestOrchestrator::WaitForConnection(
     return WaitForCondition(
         [&]() {
             // Check that both nodes can find each other as peers (by address match)
-            // This ensures the specific connection is established, not just any connection
-            return GetPeerId(node_a, node_b) >= 0 && GetPeerId(node_b, node_a) >= 0;
+            // AND that both peers are in READY state (handshake complete).
+            // This prevents tests from sending messages before VERSION/VERACK exchange
+            // completes, which would cause messages to be silently ignored or
+            // processed by peers not yet in the expected state.
+            auto& pm_a = node_a.GetNetworkManager().peer_manager();
+            auto& pm_b = node_b.GetNetworkManager().peer_manager();
+
+            network::PeerPtr peer_a_to_b = nullptr;
+            network::PeerPtr peer_b_to_a = nullptr;
+
+            for (const auto& peer : pm_a.get_all_peers()) {
+                if (peer->address() == node_b.GetAddress()) {
+                    peer_a_to_b = peer;
+                    break;
+                }
+            }
+
+            for (const auto& peer : pm_b.get_all_peers()) {
+                if (peer->address() == node_a.GetAddress()) {
+                    peer_b_to_a = peer;
+                    break;
+                }
+            }
+
+            // Both peers must exist and be in READY state (handshake complete)
+            return peer_a_to_b && peer_b_to_a &&
+                   peer_a_to_b->state() == network::PeerConnectionState::READY &&
+                   peer_b_to_a->state() == network::PeerConnectionState::READY;
         },
         timeout
     );
@@ -364,15 +390,15 @@ inline int TestOrchestrator::GetPeerId(SimulatedNode& node, SimulatedNode& peer_
 }
 
 inline void TestOrchestrator::AdvanceTime(std::chrono::milliseconds duration) {
-    // Prevent time from going backwards relative to the network's clock.
-    // Also ensure we always advance at least by 1ms beyond the current network time.
-    uint64_t target = time_ms_ + static_cast<uint64_t>(duration.count());
-    uint64_t net_now = network_ ? network_->GetCurrentTime() : 0;
-    if (target <= net_now) {
-        target = net_now + 1;
+    // Advance the network by the specified duration
+    // SimulatedNetwork::AdvanceTime now takes a relative duration, not absolute time
+    uint64_t duration_ms = static_cast<uint64_t>(duration.count());
+    if (duration_ms < 1) {
+        duration_ms = 1;  // Always advance by at least 1ms
     }
-    time_ms_ = target;
-    network_->AdvanceTime(time_ms_);
+    network_->AdvanceTime(duration_ms);
+    // Update local tracking to match network time
+    time_ms_ = network_->GetCurrentTime();
 }
 
 inline bool TestOrchestrator::WaitForCondition(

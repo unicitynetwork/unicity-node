@@ -20,12 +20,7 @@ using json = nlohmann::json;
 namespace unicity {
 namespace network {
 
-// Policy constants
-static constexpr size_t MAX_DISCOURAGED = 10000;
-
 BanManager::BanManager(const std::string& datadir) {
-  // Initialize ban_file_path_ if datadir is provided
-  // This ensures auto-save works correctly from the start
   if (!datadir.empty()) {
     std::filesystem::path dir(datadir);
     ban_file_path_ = (dir / "banlist.json").string();
@@ -42,7 +37,6 @@ std::string BanManager::GetBanlistPath() const {
 bool BanManager::LoadBans(const std::string& datadir) {
   std::lock_guard<std::mutex> lock(banned_mutex_);
 
-  // Set path if not already set by constructor
   if (ban_file_path_.empty()) {
     if (datadir.empty()) {
       LOG_NET_TRACE("BanManager: no datadir specified, skipping ban load");
@@ -67,10 +61,10 @@ bool BanManager::LoadBans(const std::string& datadir) {
     size_t expired = 0;
 
     for (const auto& [address, ban_data] : j.items()) {
-      CBanEntry entry;
-      entry.nVersion = ban_data.value("version", CBanEntry::CURRENT_VERSION);
-      entry.nCreateTime = ban_data.value("create_time", int64_t(0));
-      entry.nBanUntil = ban_data.value("ban_until", int64_t(0));
+      BanEntry entry;
+      entry.version = ban_data.value("version", BanEntry::CURRENT_VERSION);
+      entry.create_time = ban_data.value("create_time", int64_t(0));
+      entry.ban_until = ban_data.value("ban_until", int64_t(0));
 
       // Skip expired bans
       if (entry.IsExpired(now)) {
@@ -105,8 +99,10 @@ bool BanManager::SaveBansInternal() {
     return true;
   }
 
-  // Sweep expired bans before saving
-  // Note: This is done inline to avoid code duplication with SweepBanned()
+  // Defensive sweep: remove expired entries before writing to ensure clean data.
+  // Note: We intentionally do NOT set is_dirty_ here. If is_dirty_ is false,
+  // we skip the save entirely. Expired entries remain on disk but are skipped
+  // on next LoadBans() which handles cleanup. Use SweepBanned() for active cleanup.
   int64_t now = util::GetTime();
   for (auto it = banned_.begin(); it != banned_.end();) {
     if (it->second.IsExpired(now)) {
@@ -116,7 +112,6 @@ bool BanManager::SaveBansInternal() {
     }
   }
 
-  // Skip save if nothing changed
   if (!is_dirty_) {
     return true;
   }
@@ -124,7 +119,7 @@ bool BanManager::SaveBansInternal() {
   try {
     json j;
     for (const auto& [address, entry] : banned_) {
-      j[address] = {{"version", entry.nVersion}, {"create_time", entry.nCreateTime}, {"ban_until", entry.nBanUntil}};
+      j[address] = {{"version", entry.version}, {"create_time", entry.create_time}, {"ban_until", entry.ban_until}};
     }
 
     std::string data = j.dump(2);
@@ -155,7 +150,6 @@ bool BanManager::SaveBans() {
 }
 
 void BanManager::Ban(const std::string& address, int64_t ban_time_offset) {
-  // Validate and normalize the address before banning
   auto normalized = util::ValidateAndNormalizeIP(address);
   if (!normalized.has_value()) {
     LOG_NET_ERROR("BanManager: refusing to ban invalid IP address: {}", address);
@@ -166,17 +160,24 @@ void BanManager::Ban(const std::string& address, int64_t ban_time_offset) {
   std::lock_guard<std::mutex> lock(banned_mutex_);
 
   int64_t now = util::GetTime();
-  int64_t ban_until = ban_time_offset > 0 ? now + ban_time_offset : 0;  // 0 = permanent
 
-  CBanEntry entry(now, ban_until);
+  // ban_time_offset <= 0 means "use default ban time"
+  int64_t actual_duration = ban_time_offset > 0 ? ban_time_offset : DEFAULT_BAN_TIME_SEC;
+  int64_t ban_until = now + actual_duration;
+
+  // only update if new ban extends the existing ban
+  auto it = banned_.find(*normalized);
+  if (it != banned_.end() && it->second.ban_until >= ban_until) {
+    LOG_NET_TRACE("BanManager: {} already banned until {} (not shortening to {})", *normalized, it->second.ban_until,
+                  ban_until);
+    return;
+  }
+
+  BanEntry entry(now, ban_until);
   banned_[*normalized] = entry;
   is_dirty_ = true;  // Mark as modified
 
-  if (ban_time_offset > 0) {
-    LOG_NET_WARN("BanManager: banned {} until {} ({}s)", *normalized, ban_until, ban_time_offset);
-  } else {
-    LOG_NET_WARN("BanManager: permanently banned {}", *normalized);
-  }
+  LOG_NET_WARN("BanManager: banned {} until {} ({}s)", *normalized, ban_until, actual_duration);
   // Auto-save
   if (ban_auto_save_ && !ban_file_path_.empty()) {
     SaveBansInternal();
@@ -184,7 +185,6 @@ void BanManager::Ban(const std::string& address, int64_t ban_time_offset) {
 }
 
 void BanManager::Unban(const std::string& address) {
-  // Validate and normalize the address
   auto normalized = util::ValidateAndNormalizeIP(address);
   if (!normalized.has_value()) {
     LOG_NET_ERROR("BanManager: refusing to unban invalid IP address: {}", address);
@@ -209,10 +209,8 @@ void BanManager::Unban(const std::string& address) {
 }
 
 bool BanManager::IsBanned(const std::string& address) const {
-  // Validate and normalize the address
   auto normalized = util::ValidateAndNormalizeIP(address);
   if (!normalized.has_value()) {
-    // Invalid address cannot be banned
     return false;
   }
 
@@ -242,39 +240,33 @@ void BanManager::Discourage(const std::string& address) {
   std::lock_guard<std::mutex> lock(discouraged_mutex_);
 
   int64_t now = util::GetTime();
-  int64_t expiry = now + DISCOURAGE_DURATION_SEC;
 
-  // Enforce upper bound BEFORE insertion
+  // Check if already discouraged - if so, don't update insertion time
+  // (preserves eviction ordering based on first discouragement)
+  if (discouraged_.find(*normalized) != discouraged_.end()) {
+    return;  // Already discouraged
+  }
+
+  // Enforce upper bound BEFORE insertion - evict oldest entry
   if (discouraged_.size() >= MAX_DISCOURAGED) {
-    // First sweep expired
-    for (auto it = discouraged_.begin(); it != discouraged_.end();) {
-      if (now >= it->second) {
-        it = discouraged_.erase(it);
-      } else {
-        ++it;
+    auto victim = discouraged_.end();
+    int64_t oldest_time = std::numeric_limits<int64_t>::max();
+    for (auto it = discouraged_.begin(); it != discouraged_.end(); ++it) {
+      if (it->second < oldest_time) {
+        oldest_time = it->second;
+        victim = it;
       }
     }
-    // If still at capacity, evict the entry with the earliest expiry
-    if (discouraged_.size() >= MAX_DISCOURAGED) {
-      auto victim = discouraged_.end();
-      int64_t min_expiry = std::numeric_limits<int64_t>::max();
-      for (auto it = discouraged_.begin(); it != discouraged_.end(); ++it) {
-        if (it->second < min_expiry) {
-          min_expiry = it->second;
-          victim = it;
-        }
-      }
-      if (victim != discouraged_.end()) {
-        LOG_NET_TRACE("BanManager: evicting discouraged entry {} to enforce size cap ({} >= {})", victim->first,
-                      discouraged_.size(), MAX_DISCOURAGED);
-        discouraged_.erase(victim);
-      }
+    if (victim != discouraged_.end()) {
+      LOG_NET_TRACE("BanManager: evicting oldest discouraged entry {} to enforce size cap ({} >= {})", victim->first,
+                    discouraged_.size(), MAX_DISCOURAGED);
+      discouraged_.erase(victim);
     }
   }
 
-  // Now safe to insert (size < MAX_DISCOURAGED or we just made space)
-  discouraged_[*normalized] = expiry;
-  LOG_NET_INFO("BanManager: discouraged {} until {} (~24h)", *normalized, expiry);
+  // Insert with current time (for eviction ordering - oldest first)
+  discouraged_[*normalized] = now;
+  LOG_NET_INFO("BanManager: discouraged {}", *normalized);
 }
 
 bool BanManager::IsDiscouraged(const std::string& address) const {
@@ -287,18 +279,8 @@ bool BanManager::IsDiscouraged(const std::string& address) const {
 
   std::lock_guard<std::mutex> lock(discouraged_mutex_);
 
-  auto it = discouraged_.find(*normalized);
-  if (it == discouraged_.end()) {
-    return false;
-  }
-
-  // Check if expired (do not mutate here; cleanup is done in SweepDiscouraged())
-  int64_t now = util::GetTime();
-  if (now >= it->second) {
-    return false;
-  }
-
-  return true;
+  // No expiry - entries persist until evicted by capacity pressure
+  return discouraged_.find(*normalized) != discouraged_.end();
 }
 
 void BanManager::ClearDiscouraged() {
@@ -308,23 +290,12 @@ void BanManager::ClearDiscouraged() {
 }
 
 void BanManager::SweepDiscouraged() {
-  std::lock_guard<std::mutex> lock(discouraged_mutex_);
-  const int64_t now = util::GetTime();
-  size_t before = discouraged_.size();
-  for (auto it = discouraged_.begin(); it != discouraged_.end();) {
-    if (now >= it->second) {
-      it = discouraged_.erase(it);
-    } else {
-      ++it;
-    }
-  }
-  size_t removed = before - discouraged_.size();
-  if (removed > 0) {
-    LOG_NET_TRACE("BanManager: swept {} expired discouraged entries", removed);
-  }
+  // No-op: discouraged entries no longer expire
+  // Entries are only removed when evicted due to capacity pressure
+  // Keep method for API compatibility
 }
 
-std::map<std::string, BanManager::CBanEntry> BanManager::GetBanned() const {
+std::map<std::string, BanManager::BanEntry> BanManager::GetBanned() const {
   std::lock_guard<std::mutex> lock(banned_mutex_);
   return banned_;
 }
@@ -366,47 +337,6 @@ void BanManager::SweepBanned() {
       SaveBansInternal();
     }
   }
-}
-
-void BanManager::AddToWhitelist(const std::string& address) {
-  // Validate and normalize the address
-  auto normalized = util::ValidateAndNormalizeIP(address);
-  if (!normalized.has_value()) {
-    LOG_NET_ERROR("BanManager: refusing to whitelist invalid IP address: {}", address);
-    return;
-  }
-
-  // Whitelist and ban/discourage are independent.
-  // We allow whitelisted addresses to also be banned/discouraged.
-  // The whitelist overrides the ban only at connection acceptance time.
-  std::lock_guard<std::mutex> guard(whitelist_mutex_);
-  whitelist_.insert(*normalized);
-  LOG_NET_INFO("BanManager: whitelisted {}", *normalized);
-}
-
-void BanManager::RemoveFromWhitelist(const std::string& address) {
-  // Validate and normalize the address
-  auto normalized = util::ValidateAndNormalizeIP(address);
-  if (!normalized.has_value()) {
-    LOG_NET_ERROR("BanManager: refusing to remove invalid IP address from whitelist: {}", address);
-    return;
-  }
-
-  std::lock_guard<std::mutex> lock(whitelist_mutex_);
-  whitelist_.erase(*normalized);
-  LOG_NET_TRACE("BanManager: removed {} from whitelist", *normalized);
-}
-
-bool BanManager::IsWhitelisted(const std::string& address) const {
-  // Validate and normalize the address
-  auto normalized = util::ValidateAndNormalizeIP(address);
-  if (!normalized.has_value()) {
-    // Invalid address cannot be whitelisted
-    return false;
-  }
-
-  std::lock_guard<std::mutex> lock(whitelist_mutex_);
-  return whitelist_.find(*normalized) != whitelist_.end();
 }
 
 }  // namespace network

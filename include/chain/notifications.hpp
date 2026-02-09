@@ -14,17 +14,18 @@
 namespace unicity {
 
 // Event value types - immutable snapshots of what happened
-// No pointers, no lifetime concerns, thread-safe by construction
 
 struct BlockConnectedEvent {
   uint256 hash;
   int height;
   uint32_t time;
+  bool is_initial_download;  // True if block was connected during IBD (don't relay)
 };
 
 struct ChainTipEvent {
   uint256 hash;
   int height;
+  bool is_initial_download;  // True if batch started during IBD (don't announce tip)
 };
 
 // Notification system for blockchain events

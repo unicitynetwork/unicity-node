@@ -14,7 +14,7 @@
 // Manual address tracking is an internal implementation detail of ConnectTo().
 
 #include "catch_amalgamated.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/connection_manager.hpp"
 #include "network/anchor_manager.hpp"
 #include "network/eviction_manager.hpp"
 #include "network/misbehavior_manager.hpp"
@@ -36,7 +36,7 @@ struct BitcoinCoreParityFixture {
 
     PeerPtr create_outbound_peer(ConnectionType conn_type,
                                   const std::string& address = "10.0.0.1",
-                                  uint16_t port = 8333) {
+                                  uint16_t port = 9590) {
         return Peer::create_outbound(
             io_context,
             nullptr,  // No transport needed for unit tests
@@ -67,9 +67,9 @@ TEST_CASE("Discouraged peer conditional acceptance - Bitcoin Core parity",
     BitcoinCoreParityFixture fixture;
 
     SECTION("Discouraged peer rejected when inbound slots almost full") {
-        PeerLifecycleManager::Config config;
+        ConnectionManager::Config config;
         config.max_inbound_peers = 3;  // Small limit for testing
-        PeerLifecycleManager pm(fixture.io_context, config);
+        ConnectionManager pm(fixture.io_context, config);
 
         // Discourage the address we'll try to connect from
         pm.Discourage("10.0.0.100");
@@ -79,21 +79,17 @@ TEST_CASE("Discouraged peer conditional acceptance - Bitcoin Core parity",
         auto conn1 = fixture.create_inbound_connection("10.0.0.1");
         auto conn2 = fixture.create_inbound_connection("10.0.0.2");
 
-        auto is_running = [](){ return true; };
-        auto setup_handler = [](Peer*){};
+        pm.Init(nullptr, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/42);
 
-        pm.HandleInboundConnection(conn1, is_running, setup_handler,
-            protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
-        pm.HandleInboundConnection(conn2, is_running, setup_handler,
-            protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
+        pm.HandleInboundConnection(conn1, /*current_height=*/0, NetPermissionFlags::None);
+        pm.HandleInboundConnection(conn2, /*current_height=*/0, NetPermissionFlags::None);
 
         REQUIRE(pm.inbound_count() == 2);
 
         // Now try to connect from discouraged address - should be rejected
         // because adding one more would fill slots (3/3)
         auto discouraged_conn = fixture.create_inbound_connection("10.0.0.100");
-        pm.HandleInboundConnection(discouraged_conn, is_running, setup_handler,
-            protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
+        pm.HandleInboundConnection(discouraged_conn, /*current_height=*/0, NetPermissionFlags::None);
 
         // Connection should be closed (rejected)
         REQUIRE_FALSE(discouraged_conn->is_open());
@@ -101,9 +97,9 @@ TEST_CASE("Discouraged peer conditional acceptance - Bitcoin Core parity",
     }
 
     SECTION("Discouraged peer accepted when slots available") {
-        PeerLifecycleManager::Config config;
+        ConnectionManager::Config config;
         config.max_inbound_peers = 10;  // Plenty of room
-        PeerLifecycleManager pm(fixture.io_context, config);
+        ConnectionManager pm(fixture.io_context, config);
 
         // Discourage the address
         pm.Discourage("10.0.0.100");
@@ -114,11 +110,9 @@ TEST_CASE("Discouraged peer conditional acceptance - Bitcoin Core parity",
 
         // Try to connect from discouraged address - should be accepted
         auto discouraged_conn = fixture.create_inbound_connection("10.0.0.100");
-        auto is_running = [](){ return true; };
-        auto setup_handler = [](Peer*){};
+        pm.Init(nullptr, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/42);
 
-        pm.HandleInboundConnection(discouraged_conn, is_running, setup_handler,
-            protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
+        pm.HandleInboundConnection(discouraged_conn, /*current_height=*/0, NetPermissionFlags::None);
 
         // Connection should be accepted (not closed)
         REQUIRE(discouraged_conn->is_open());
@@ -126,26 +120,23 @@ TEST_CASE("Discouraged peer conditional acceptance - Bitcoin Core parity",
     }
 
     SECTION("NoBan permission bypasses discouragement check") {
-        PeerLifecycleManager::Config config;
+        ConnectionManager::Config config;
         config.max_inbound_peers = 2;  // Limited slots
-        PeerLifecycleManager pm(fixture.io_context, config);
+        ConnectionManager pm(fixture.io_context, config);
 
         // Discourage the address
         pm.Discourage("10.0.0.100");
 
         // Fill one slot (leaving slots almost full)
         auto conn1 = fixture.create_inbound_connection("10.0.0.1");
-        auto is_running = [](){ return true; };
-        auto setup_handler = [](Peer*){};
+        pm.Init(nullptr, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/42);
 
-        pm.HandleInboundConnection(conn1, is_running, setup_handler,
-            protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
+        pm.HandleInboundConnection(conn1, /*current_height=*/0, NetPermissionFlags::None);
         REQUIRE(pm.inbound_count() == 1);
 
         // Try discouraged peer WITH NoBan permission - should be accepted
         auto discouraged_conn = fixture.create_inbound_connection("10.0.0.100");
-        pm.HandleInboundConnection(discouraged_conn, is_running, setup_handler,
-            protocol::magic::REGTEST, 0, 42, NetPermissionFlags::NoBan);
+        pm.HandleInboundConnection(discouraged_conn, /*current_height=*/0, NetPermissionFlags::NoBan);
 
         // NoBan bypasses the discouragement check
         REQUIRE(discouraged_conn->is_open());
@@ -161,9 +152,9 @@ TEST_CASE("HandleInboundConnection - banned address rejected",
           "[network][bitcoin_core][inbound][unit]") {
     BitcoinCoreParityFixture fixture;
 
-    PeerLifecycleManager::Config config;
+    ConnectionManager::Config config;
     config.max_inbound_peers = 10;
-    PeerLifecycleManager pm(fixture.io_context, config);
+    ConnectionManager pm(fixture.io_context, config);
 
     // Ban the address
     pm.Ban("10.0.0.50", 3600);
@@ -171,31 +162,50 @@ TEST_CASE("HandleInboundConnection - banned address rejected",
 
     // Try to connect from banned address
     auto banned_conn = fixture.create_inbound_connection("10.0.0.50");
-    auto is_running = [](){ return true; };
-    auto setup_handler = [](Peer*){};
+    pm.Init(nullptr, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/42);
 
-    pm.HandleInboundConnection(banned_conn, is_running, setup_handler,
-        protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
+    pm.HandleInboundConnection(banned_conn, /*current_height=*/0, NetPermissionFlags::None);
 
     // Connection should be closed (rejected)
     REQUIRE_FALSE(banned_conn->is_open());
     REQUIRE(pm.inbound_count() == 0);
 }
 
+TEST_CASE("HandleInboundConnection - NoBan peer accepted despite ban (Core parity: net.cpp:1802)",
+          "[network][bitcoin_core][inbound][noban][unit]") {
+    BitcoinCoreParityFixture fixture;
+
+    ConnectionManager::Config config;
+    config.max_inbound_peers = 10;
+    ConnectionManager pm(fixture.io_context, config);
+
+    // Ban the address
+    pm.Ban("10.0.0.50", 3600);
+    REQUIRE(pm.IsBanned("10.0.0.50"));
+
+    // Connect from banned address WITH NoBan permission
+    auto conn = fixture.create_inbound_connection("10.0.0.50");
+    pm.Init(nullptr, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/42);
+
+    pm.HandleInboundConnection(conn, /*current_height=*/0, NetPermissionFlags::NoBan);
+
+    // NoBan overrides ban — connection accepted (Core: net.cpp:1802)
+    CHECK(conn->is_open());
+    CHECK(pm.inbound_count() == 1);
+}
+
 TEST_CASE("HandleInboundConnection - early exit when not running",
           "[network][bitcoin_core][inbound][unit]") {
     BitcoinCoreParityFixture fixture;
 
-    PeerLifecycleManager::Config config;
+    ConnectionManager::Config config;
     config.max_inbound_peers = 10;
-    PeerLifecycleManager pm(fixture.io_context, config);
+    ConnectionManager pm(fixture.io_context, config);
 
     auto conn = fixture.create_inbound_connection("10.0.0.1");
-    auto is_running = [](){ return false; };  // Not running
-    auto setup_handler = [](Peer*){};
+    pm.Init(nullptr, [](Peer*){}, [](){ return false; }, protocol::magic::REGTEST, /*local_nonce=*/42);
 
-    pm.HandleInboundConnection(conn, is_running, setup_handler,
-        protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
+    pm.HandleInboundConnection(conn, /*current_height=*/0, NetPermissionFlags::None);
 
     // No peer should be added (early exit)
     REQUIRE(pm.inbound_count() == 0);
@@ -207,16 +217,14 @@ TEST_CASE("HandleInboundConnection - null connection handled gracefully",
           "[network][bitcoin_core][inbound][unit]") {
     BitcoinCoreParityFixture fixture;
 
-    PeerLifecycleManager::Config config;
+    ConnectionManager::Config config;
     config.max_inbound_peers = 10;
-    PeerLifecycleManager pm(fixture.io_context, config);
+    ConnectionManager pm(fixture.io_context, config);
 
-    auto is_running = [](){ return true; };
-    auto setup_handler = [](Peer*){};
+    pm.Init(nullptr, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/42);
 
     // Pass null connection - should not crash
-    pm.HandleInboundConnection(nullptr, is_running, setup_handler,
-        protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
+    pm.HandleInboundConnection(nullptr, /*current_height=*/0, NetPermissionFlags::None);
 
     // No peer should be added
     REQUIRE(pm.inbound_count() == 0);
@@ -232,10 +240,10 @@ TEST_CASE("Anchor peers select from BLOCK_RELAY only - Bitcoin Core parity",
     BitcoinCoreParityFixture fixture;
 
     SECTION("GetAnchors only returns BLOCK_RELAY peers") {
-        PeerLifecycleManager::Config config;
+        ConnectionManager::Config config;
         config.max_full_relay_outbound = 8;
         config.max_block_relay_outbound = 2;
-        PeerLifecycleManager pm(fixture.io_context, config);
+        ConnectionManager pm(fixture.io_context, config);
 
         AnchorManager am(pm);
 
@@ -270,8 +278,8 @@ TEST_CASE("Anchor peers select from BLOCK_RELAY only - Bitcoin Core parity",
     }
 
     SECTION("Feeler peers are never selected as anchors") {
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(fixture.io_context, config);
+        ConnectionManager::Config config;
+        ConnectionManager pm(fixture.io_context, config);
         AnchorManager am(pm);
 
         // Add feeler peer
@@ -290,8 +298,8 @@ TEST_CASE("Anchor peers select from BLOCK_RELAY only - Bitcoin Core parity",
     }
 
     SECTION("Full-relay peers are never selected as anchors") {
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(fixture.io_context, config);
+        ConnectionManager::Config config;
+        ConnectionManager pm(fixture.io_context, config);
         AnchorManager am(pm);
 
         // Add only full-relay peers
@@ -351,7 +359,7 @@ TEST_CASE("Connection type classification - Bitcoin Core parity",
         auto manual = fixture.create_outbound_peer(ConnectionType::MANUAL, "10.0.0.1");
         REQUIRE(manual->is_manual() == true);
         REQUIRE(manual->is_block_relay_only() == false);
-        REQUIRE(manual->relays_addr() == false);  // Manual peers don't relay addresses
+        REQUIRE(manual->relays_addr() == true);  // Manual peers relay addresses (Core parity)
     }
 }
 
@@ -365,10 +373,10 @@ TEST_CASE("Slot accounting by connection type - Bitcoin Core parity",
     BitcoinCoreParityFixture fixture;
 
     SECTION("Manual peers don't count toward full-relay slots") {
-        PeerLifecycleManager::Config config;
+        ConnectionManager::Config config;
         config.max_full_relay_outbound = 2;
         config.max_block_relay_outbound = 0;
-        PeerLifecycleManager pm(fixture.io_context, config);
+        ConnectionManager pm(fixture.io_context, config);
 
         // Add a manual peer
         auto manual_peer = fixture.create_outbound_peer(ConnectionType::MANUAL, "10.0.0.50", 9590);
@@ -383,10 +391,10 @@ TEST_CASE("Slot accounting by connection type - Bitcoin Core parity",
     }
 
     SECTION("Feeler peers don't count toward outbound slots") {
-        PeerLifecycleManager::Config config;
+        ConnectionManager::Config config;
         config.max_full_relay_outbound = 2;
         config.max_block_relay_outbound = 0;
-        PeerLifecycleManager pm(fixture.io_context, config);
+        ConnectionManager pm(fixture.io_context, config);
 
         // Add a feeler peer
         auto feeler_peer = fixture.create_outbound_peer(ConnectionType::FEELER, "10.0.0.50", 9590);
@@ -402,10 +410,10 @@ TEST_CASE("Slot accounting by connection type - Bitcoin Core parity",
     }
 
     SECTION("Full-relay and block-relay have separate slot pools") {
-        PeerLifecycleManager::Config config;
+        ConnectionManager::Config config;
         config.max_full_relay_outbound = 2;
         config.max_block_relay_outbound = 1;
-        PeerLifecycleManager pm(fixture.io_context, config);
+        ConnectionManager pm(fixture.io_context, config);
 
         // Add full-relay peers up to limit
         auto full1 = fixture.create_outbound_peer(ConnectionType::OUTBOUND_FULL_RELAY, "10.0.0.1");
@@ -433,13 +441,16 @@ TEST_CASE("Slot accounting by connection type - Bitcoin Core parity",
 TEST_CASE("Misbehavior instant discourage - Bitcoin Core parity",
           "[network][bitcoin_core][misbehavior][unit]") {
 
+    asio::io_context io;
+
     SECTION("Any misbehavior results in instant discourage") {
         // Bitcoin Core removed score-based misbehavior in commit ae60d485da (March 2024)
         // Any misbehavior now results in instant discouragement - no score accumulation
-        util::ThreadSafeMap<int, PeerTrackingData> peer_states;
-        PeerTrackingData data;
-        data.misbehavior.permissions = NetPermissionFlags::None;
-        peer_states.InsertOrUpdate(1, data);
+        auto peer = Peer::create_outbound(io, nullptr, 0, 0, "1.2.3.4", 9590);
+        peer->set_permissions(NetPermissionFlags::None);
+
+        util::ThreadSafeMap<int, PeerPtr> peer_states;
+        peer_states.InsertOrUpdate(1, peer);
 
         MisbehaviorManager mm(peer_states);
 
@@ -449,64 +460,16 @@ TEST_CASE("Misbehavior instant discourage - Bitcoin Core parity",
         REQUIRE(mm.ShouldDisconnect(1));
     }
 
-    SECTION("Unconnecting headers threshold is 10 messages") {
-        // Bitcoin Core disconnects after 10 unconnecting header messages
-        // This prevents memory exhaustion from orphan header spam
-        REQUIRE(MAX_UNCONNECTING_HEADERS == 10);
-    }
-
-    SECTION("Unconnecting headers threshold triggers instant discourage") {
-        // Create peer state tracking manually to test MisbehaviorManager directly
-        util::ThreadSafeMap<int, PeerTrackingData> peer_states;
-
-        // Initialize peer state
-        PeerTrackingData data;
-        data.misbehavior.permissions = NetPermissionFlags::None;
-        peer_states.InsertOrUpdate(1, data);
-
-        MisbehaviorManager mm(peer_states);
-
-        // Send 9 unconnecting headers - should NOT trigger discourage yet
-        for (int i = 0; i < 9; ++i) {
-            mm.IncrementUnconnectingHeaders(1);
-            REQUIRE_FALSE(mm.IsMisbehaving(1));  // No discourage until threshold
-            REQUIRE_FALSE(mm.ShouldDisconnect(1));
-        }
-
-        // 10th unconnecting headers message triggers instant discourage
-        mm.IncrementUnconnectingHeaders(1);
-        REQUIRE(mm.IsMisbehaving(1));
-        REQUIRE(mm.ShouldDisconnect(1));
-    }
-
-    SECTION("Unconnecting headers reset clears counter") {
-        util::ThreadSafeMap<int, PeerTrackingData> peer_states;
-        PeerTrackingData data;
-        data.misbehavior.permissions = NetPermissionFlags::None;
-        peer_states.InsertOrUpdate(1, data);
-
-        MisbehaviorManager mm(peer_states);
-
-        // Increment several times
-        for (int i = 0; i < 5; ++i) {
-            mm.IncrementUnconnectingHeaders(1);
-        }
-        REQUIRE(mm.GetUnconnectingHeadersCount(1) == 5);
-
-        // Reset when progress is made
-        mm.ResetUnconnectingHeaders(1);
-        REQUIRE(mm.GetUnconnectingHeadersCount(1) == 0);
-
-        // Can increment again from zero
-        mm.IncrementUnconnectingHeaders(1);
-        REQUIRE(mm.GetUnconnectingHeadersCount(1) == 1);
-    }
+    // NOTE: Removed "Unconnecting headers threshold" test sections.
+    // Bitcoin Core (March 2024+) no longer penalizes unconnecting headers - they are just ignored.
+    // The getheaders throttling (2-minute ignore window) provides sufficient DoS protection.
 
     SECTION("Duplicate invalid header does not re-trigger discourage") {
-        util::ThreadSafeMap<int, PeerTrackingData> peer_states;
-        PeerTrackingData data;
-        data.misbehavior.permissions = NetPermissionFlags::None;
-        peer_states.InsertOrUpdate(1, data);
+        auto peer = Peer::create_outbound(io, nullptr, 0, 0, "1.2.3.4", 9590);
+        peer->set_permissions(NetPermissionFlags::None);
+
+        util::ThreadSafeMap<int, PeerPtr> peer_states;
+        peer_states.InsertOrUpdate(1, peer);
 
         MisbehaviorManager mm(peer_states);
 
@@ -533,10 +496,11 @@ TEST_CASE("Misbehavior instant discourage - Bitcoin Core parity",
     }
 
     SECTION("NoBan peers tracked but not disconnected") {
-        util::ThreadSafeMap<int, PeerTrackingData> peer_states;
-        PeerTrackingData data;
-        data.misbehavior.permissions = NetPermissionFlags::NoBan;  // Protected peer
-        peer_states.InsertOrUpdate(1, data);
+        auto peer = Peer::create_outbound(io, nullptr, 0, 0, "1.2.3.4", 9590);
+        peer->set_permissions(NetPermissionFlags::NoBan);  // Protected peer
+
+        util::ThreadSafeMap<int, PeerPtr> peer_states;
+        peer_states.InsertOrUpdate(1, peer);
 
         MisbehaviorManager mm(peer_states);
 
@@ -682,58 +646,72 @@ TEST_CASE("Eviction protection rules - Bitcoin Core parity",
 }
 
 // =============================================================================
-// Per-Netgroup Inbound Limit Tests - Bitcoin Core Parity
-// Prevent Sybil attacks from same /16 subnet
+// Inbound Eviction Integration Tests - Bitcoin Core Parity
+// Core: net.cpp:1816-1823 — at capacity, try eviction before rejecting
 // =============================================================================
 
-TEST_CASE("Per-netgroup inbound limits - Bitcoin Core parity",
-          "[network][bitcoin_core][netgroup][unit]") {
+TEST_CASE("HandleInboundConnection triggers eviction at capacity (Core parity)",
+          "[network][bitcoin_core][eviction][inbound]") {
+    BitcoinCoreParityFixture fixture;
 
-    SECTION("Max inbound per netgroup constant is defined") {
-        REQUIRE(PeerLifecycleManager::MAX_INBOUND_PER_NETGROUP == 4);
+    // Use a small inbound limit so we can fill it easily
+    // Need enough peers to survive all protection phases:
+    //   4 netgroup + 8 ping + 4 headers + 50% uptime = ~20 protected
+    // So use 25 to ensure some remain evictable
+    ConnectionManager::Config config;
+    config.max_inbound_peers = 25;
+    ConnectionManager pm(fixture.io_context, config);
+
+    pm.Init(nullptr, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/42);
+
+    // Fill to capacity with diverse peers (different /16 netgroups)
+    std::vector<std::shared_ptr<MockTransportConnection>> conns;
+    for (size_t i = 0; i < config.max_inbound_peers; i++) {
+        std::string addr = std::to_string(10 + i) + ".0.0.1";
+        auto conn = fixture.create_inbound_connection(addr, 12345 + i);
+        pm.HandleInboundConnection(conn, /*current_height=*/0, NetPermissionFlags::None);
+        conns.push_back(conn);
     }
+    REQUIRE(pm.inbound_count() == config.max_inbound_peers);
 
-    SECTION("Connections from same /16 subnet are limited") {
-        asio::io_context io_context;
-        PeerLifecycleManager::Config config;
-        config.max_inbound_peers = 100;  // Plenty of total room
-        PeerLifecycleManager pm(io_context, config);
+    // Now connect one more — this should trigger eviction, not rejection
+    auto new_conn = fixture.create_inbound_connection("200.0.0.1", 54321);
+    pm.HandleInboundConnection(new_conn, /*current_height=*/0, NetPermissionFlags::None);
 
-        auto is_running = [](){ return true; };
-        auto setup_handler = [](Peer*){};
-
-        // First 4 connections from same /16 should succeed
-        // Use RFC1918 addresses (10.x.x.x) which are common in local networks
-        for (int i = 0; i < 4; ++i) {
-            // All in 10.0.x.x /16 (10.0.0.1, 10.0.1.2, 10.0.2.3, 10.0.3.4)
-            std::string ip = "10.0." + std::to_string(i) + "." + std::to_string(i + 1);
-            auto conn = std::make_shared<MockTransportConnection>(ip, 12345);
-            conn->set_inbound(true);
-
-            pm.HandleInboundConnection(conn, is_running, setup_handler,
-                protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
-        }
-        REQUIRE(pm.inbound_count() == 4);
-
-        // 5th connection from same /16 (10.0.x.x) should be rejected
-        auto conn5 = std::make_shared<MockTransportConnection>("10.0.100.200", 12345);
-        conn5->set_inbound(true);
-
-        pm.HandleInboundConnection(conn5, is_running, setup_handler,
-            protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
-
-        // Peer should NOT have been added (per-netgroup limit)
-        // Note: connection->is_open() may still be true because peer->disconnect()
-        // posts to io_context which isn't run in this test
-        REQUIRE(pm.inbound_count() == 4);
-
-        // But connection from DIFFERENT /16 should succeed (10.1.x.x)
-        auto conn_other = std::make_shared<MockTransportConnection>("10.1.0.1", 12345);
-        conn_other->set_inbound(true);
-
-        pm.HandleInboundConnection(conn_other, is_running, setup_handler,
-            protocol::magic::REGTEST, 0, 42, NetPermissionFlags::None);
-
-        REQUIRE(pm.inbound_count() == 5);
-    }
+    // The new connection should have been accepted (eviction made room)
+    CHECK(new_conn->is_open());
+    // Inbound count should still be at max (one evicted, one added)
+    CHECK(pm.inbound_count() == config.max_inbound_peers);
 }
+
+TEST_CASE("HandleInboundConnection rejects when all peers are NoBan protected",
+          "[network][bitcoin_core][eviction][inbound]") {
+    BitcoinCoreParityFixture fixture;
+
+    // Fill with NoBan peers — eviction cannot remove them
+    ConnectionManager::Config config;
+    config.max_inbound_peers = 2;
+    ConnectionManager pm(fixture.io_context, config);
+
+    pm.Init(nullptr, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/42);
+
+    // Fill to capacity with NoBan peers
+    auto conn1 = fixture.create_inbound_connection("10.0.0.1");
+    auto conn2 = fixture.create_inbound_connection("20.0.0.1");
+    pm.HandleInboundConnection(conn1, /*current_height=*/0, NetPermissionFlags::NoBan);
+    pm.HandleInboundConnection(conn2, /*current_height=*/0, NetPermissionFlags::NoBan);
+    REQUIRE(pm.inbound_count() == 2);
+
+    // Try one more — eviction fails (all NoBan protected), connection rejected
+    auto new_conn = fixture.create_inbound_connection("30.0.0.1");
+    pm.HandleInboundConnection(new_conn, /*current_height=*/0, NetPermissionFlags::None);
+
+    CHECK_FALSE(new_conn->is_open());
+    CHECK(pm.inbound_count() == 2);
+}
+
+// =============================================================================
+// Netgroup Diversity Tests - Bitcoin Core Parity
+// Note: Core handles netgroup diversity at EVICTION time, not connection time.
+// See eviction_manager_tests.cpp for comprehensive netgroup eviction tests.
+// =============================================================================

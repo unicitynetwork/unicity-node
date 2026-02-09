@@ -501,7 +501,9 @@ TEST_CASE("Peer - DuplicateVersionRejection", "[peer][security][critical]") {
     CHECK(peer->is_connected());
 }
 
-TEST_CASE("Peer - MessageBeforeVersionRejected", "[peer][security][critical]") {
+TEST_CASE("Peer - MessageBeforeVersionIgnored", "[peer][security][critical]") {
+    // Bitcoin Core behavior: ignore non-version messages before handshake (no disconnect)
+    // Core: net_processing.cpp:3657-3660 - logs and returns without disconnecting
     asio::io_context io_context;
     auto mock_conn = std::make_shared<MockTransportConnection>();
     const uint32_t magic = protocol::magic::REGTEST;
@@ -510,32 +512,38 @@ TEST_CASE("Peer - MessageBeforeVersionRejected", "[peer][security][critical]") {
     io_context.poll();
     REQUIRE(peer->state() == PeerConnectionState::CONNECTED);
     REQUIRE(peer->version() == 0);
-    SECTION("PING before VERSION disconnects") {
+    SECTION("PING before VERSION is ignored") {
+        size_t initial_count = mock_conn->sent_message_count();
         auto ping_msg = create_ping_message(magic, 99999);
         mock_conn->simulate_receive(ping_msg);
         io_context.poll();
-        CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
+        // Core parity: message is ignored, peer stays connected
+        CHECK(peer->state() == PeerConnectionState::CONNECTED);
+        CHECK(peer->version() == 0);  // Still waiting for VERSION
+        // No response sent (PING ignored, no PONG)
+        CHECK(mock_conn->sent_message_count() == initial_count);
     }
-    SECTION("VERACK before VERSION disconnects") {
-        // Track initial message count (inbound peer sends nothing initially, should be 0)
+    SECTION("VERACK before VERSION is ignored") {
         size_t initial_count = mock_conn->sent_message_count();
-
         auto verack_msg = create_verack_message(magic);
         mock_conn->simulate_receive(verack_msg);
         io_context.poll();
-
-        // SECURITY: Peer must disconnect AND send no response messages
-        // Premature VERACK (before sending/receiving VERSION) is invalid protocol state
-        CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
-
-        // Assert no egress: peer must not send any messages in response to invalid VERACK
+        // Core parity: message is ignored, peer stays connected
+        CHECK(peer->state() == PeerConnectionState::CONNECTED);
+        CHECK(peer->version() == 0);  // Still waiting for VERSION
+        // No response sent
         CHECK(mock_conn->sent_message_count() == initial_count);
     }
-    SECTION("PONG before VERSION disconnects") {
+    SECTION("PONG before VERSION is ignored") {
+        size_t initial_count = mock_conn->sent_message_count();
         auto pong_msg = create_pong_message(magic, 12345);
         mock_conn->simulate_receive(pong_msg);
         io_context.poll();
-        CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
+        // Core parity: message is ignored, peer stays connected
+        CHECK(peer->state() == PeerConnectionState::CONNECTED);
+        CHECK(peer->version() == 0);  // Still waiting for VERSION
+        // No response sent
+        CHECK(mock_conn->sent_message_count() == initial_count);
     }
 }
 
@@ -685,7 +693,9 @@ static std::vector<uint8_t> create_unknown_command_message(uint32_t magic, const
     return create_test_message(magic, cmd, payload);
 }
 
-TEST_CASE("Peer - UnknownCommandRateLimiting", "[peer][security][dos]") {
+TEST_CASE("Peer - UnknownCommandsIgnored", "[peer][security][parity]") {
+    // Bitcoin Core parity: unknown commands are silently ignored
+    // This provides forward compatibility for protocol upgrades
     asio::io_context io_context;
     auto mock_conn = std::make_shared<MockTransportConnection>();
     const uint32_t magic = protocol::magic::REGTEST;
@@ -705,41 +715,9 @@ TEST_CASE("Peer - UnknownCommandRateLimiting", "[peer][security][dos]") {
 
     REQUIRE(peer->state() == PeerConnectionState::READY);
 
-    // Send many unknown commands - should eventually disconnect
-    // MAX_UNKNOWN_COMMANDS_PER_MINUTE is defined in protocol.hpp
-    for (size_t i = 0; i <= protocol::MAX_UNKNOWN_COMMANDS_PER_MINUTE + 1; i++) {
-        if (peer->state() == PeerConnectionState::DISCONNECTED) break;
+    // Send many unknown commands - should all be ignored, peer stays connected
+    for (int i = 0; i < 100; i++) {
         auto unknown_msg = create_unknown_command_message(magic, "unknowncmd");
-        mock_conn->simulate_receive(unknown_msg);
-        io_context.poll();
-    }
-
-    CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
-}
-
-TEST_CASE("Peer - UnknownCommandAcceptedUnderLimit", "[peer][security][dos]") {
-    asio::io_context io_context;
-    auto mock_conn = std::make_shared<MockTransportConnection>();
-    const uint32_t magic = protocol::magic::REGTEST;
-
-    auto peer = Peer::create_outbound(io_context, mock_conn, magic, 0);
-    peer->start();
-    io_context.poll();
-
-    // Complete handshake first
-    auto version_msg = create_version_message(magic, 54321);
-    mock_conn->simulate_receive(version_msg);
-    io_context.poll();
-
-    auto verack_msg = create_verack_message(magic);
-    mock_conn->simulate_receive(verack_msg);
-    io_context.poll();
-
-    REQUIRE(peer->state() == PeerConnectionState::READY);
-
-    // Send a few unknown commands - should stay connected
-    for (int i = 0; i < 3; i++) {
-        auto unknown_msg = create_unknown_command_message(magic, "testcmd");
         mock_conn->simulate_receive(unknown_msg);
         io_context.poll();
     }
@@ -992,6 +970,84 @@ TEST_CASE("Peer - LocalAddrLearnedHandlerCalled", "[peer][callback]") {
     CHECK(learned_ip == "203.0.113.50");
 }
 
+TEST_CASE("Peer - LocalAddrLearnedHandler IPv6", "[peer][callback][ipv6]") {
+    asio::io_context io_context;
+    auto mock_conn = std::make_shared<MockTransportConnection>();
+    const uint32_t magic = protocol::magic::REGTEST;
+
+    auto peer = Peer::create_inbound(io_context, mock_conn, magic, 0);
+
+    bool handler_called = false;
+    std::string learned_ip;
+    peer->set_local_addr_learned_handler([&](const std::string& ip) {
+        handler_called = true;
+        learned_ip = ip;
+    });
+
+    peer->start();
+    io_context.poll();
+
+    SECTION("Standard IPv6 address preserved") {
+        message::VersionMessage version_msg;
+        version_msg.version = protocol::PROTOCOL_VERSION;
+        version_msg.services = protocol::NODE_NETWORK;
+        version_msg.timestamp = 1234567890;
+        version_msg.nonce = 54321;
+        version_msg.user_agent = "/Test:1.0.0/";
+        version_msg.start_height = 0;
+        version_msg.addr_recv = protocol::NetworkAddress::from_string("2001:db8::1", 9590);
+
+        auto payload = version_msg.serialize();
+        auto full_msg = create_test_message(magic, protocol::commands::VERSION, payload);
+        mock_conn->simulate_receive(full_msg);
+        io_context.poll();
+
+        CHECK(handler_called);
+        CHECK(learned_ip == "2001:db8::1");
+    }
+
+    SECTION("IPv6 with multiple colons not corrupted") {
+        // This is the regression test for the bug where rfind(':') would
+        // incorrectly truncate IPv6 addresses at internal colons
+        message::VersionMessage version_msg;
+        version_msg.version = protocol::PROTOCOL_VERSION;
+        version_msg.services = protocol::NODE_NETWORK;
+        version_msg.timestamp = 1234567890;
+        version_msg.nonce = 54321;
+        version_msg.user_agent = "/Test:1.0.0/";
+        version_msg.start_height = 0;
+        version_msg.addr_recv = protocol::NetworkAddress::from_string("2001:db8:85a3::8a2e:370:7334", 9590);
+
+        auto payload = version_msg.serialize();
+        auto full_msg = create_test_message(magic, protocol::commands::VERSION, payload);
+        mock_conn->simulate_receive(full_msg);
+        io_context.poll();
+
+        CHECK(handler_called);
+        // Must NOT be truncated to "2001:db8:85a3::8a2e:370" or similar
+        CHECK(learned_ip == "2001:db8:85a3::8a2e:370:7334");
+    }
+
+    SECTION("IPv6 loopback address") {
+        message::VersionMessage version_msg;
+        version_msg.version = protocol::PROTOCOL_VERSION;
+        version_msg.services = protocol::NODE_NETWORK;
+        version_msg.timestamp = 1234567890;
+        version_msg.nonce = 54321;
+        version_msg.user_agent = "/Test:1.0.0/";
+        version_msg.start_height = 0;
+        version_msg.addr_recv = protocol::NetworkAddress::from_string("::1", 9590);
+
+        auto payload = version_msg.serialize();
+        auto full_msg = create_test_message(magic, protocol::commands::VERSION, payload);
+        mock_conn->simulate_receive(full_msg);
+        io_context.poll();
+
+        CHECK(handler_called);
+        CHECK(learned_ip == "::1");
+    }
+}
+
 // =============================================================================
 // PROTOCOL VERSION TESTS
 // =============================================================================
@@ -1083,11 +1139,11 @@ TEST_CASE("Peer - AddrRelayFlags", "[peer][connection-type]") {
         CHECK_FALSE(peer->relays_addr());
     }
 
-    SECTION("Manual peers do NOT relay addresses") {
+    SECTION("Manual peers relay addresses (full connections, just manually specified)") {
         auto mock_conn = std::make_shared<MockTransportConnection>();
         auto peer = Peer::create_outbound(io_context, mock_conn, magic, 0,
                                           "127.0.0.1", 9590, ConnectionType::MANUAL);
-        CHECK_FALSE(peer->relays_addr());
+        CHECK(peer->relays_addr());
     }
 
     SECTION("Inbound peers relay addresses") {
@@ -1164,4 +1220,216 @@ TEST_CASE("Peer - StartOnlyOnce", "[peer][lifecycle]") {
 
     // Should not have sent another VERSION
     CHECK(mock_conn->sent_message_count() == messages_after_first_start);
+}
+
+// =============================================================================
+// TCP BUFFER COALESCING TESTS
+// =============================================================================
+// Regression tests for bugs hidden by the in-memory test transport.
+// Real TCP can deliver multiple protocol messages in a single read callback
+// (coalesced in one TCP segment). The simulated transport always delivers
+// one message per callback, so these bugs were never exercised.
+//
+// The core fix: process_received_data() now checks disconnect_posted_ and
+// connection state between messages, stopping the loop when a handler
+// initiates disconnect.
+
+TEST_CASE("Peer - SelfConnectionCoalesced", "[peer][security][tcp][coalescing]") {
+    // Regression: VERSION+VERACK in one TCP segment for self-connection.
+    // Before the fix, handle_version() called post_disconnect() (deferred),
+    // but the loop continued and handle_verack() set successfully_connected_=true
+    // on a peer that should be disconnecting.
+    asio::io_context io_context;
+    auto mock_conn = std::make_shared<MockTransportConnection>();
+    mock_conn->set_inbound(true);
+    const uint32_t magic = protocol::magic::REGTEST;
+
+    auto peer = Peer::create_inbound(io_context, mock_conn, magic, 0);
+    peer->start();
+    io_context.poll();
+
+    // Build VERSION with peer's own local nonce (self-connection)
+    auto version_bytes = create_version_message(magic, peer->get_local_nonce());
+    auto verack_bytes = create_verack_message(magic);
+
+    // Coalesce: deliver both messages in a single TCP read
+    std::vector<uint8_t> coalesced;
+    coalesced.insert(coalesced.end(), version_bytes.begin(), version_bytes.end());
+    coalesced.insert(coalesced.end(), verack_bytes.begin(), verack_bytes.end());
+    mock_conn->simulate_receive(coalesced);
+    io_context.poll();
+
+    // Self-connection must be disconnected
+    CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
+    // CRITICAL: successfully_connected_ must NOT be set.
+    // Before the fix, the VERACK in the same buffer would set this to true.
+    CHECK_FALSE(peer->successfully_connected());
+}
+
+TEST_CASE("Peer - FeelerCoalesced", "[peer][feeler][tcp][coalescing]") {
+    // Regression: VERSION+VERACK in one TCP segment for feeler connection.
+    // Before the fix, handle_version() called post_disconnect() for the feeler,
+    // but handle_verack() ran next and set successfully_connected_=true.
+    // This caused false nonce collisions when the same node connected inbound.
+    asio::io_context io_context;
+    auto mock_conn = std::make_shared<MockTransportConnection>();
+    mock_conn->set_inbound(false);
+    const uint32_t magic = protocol::magic::REGTEST;
+
+    auto peer = Peer::create_outbound(io_context, mock_conn, magic, 0,
+                                      "192.0.2.1", 9590, ConnectionType::FEELER);
+    peer->start();
+    io_context.poll();
+
+    auto version_bytes = create_version_message(magic, 54321);
+    auto verack_bytes = create_verack_message(magic);
+
+    // Coalesce: deliver both messages in a single TCP read
+    std::vector<uint8_t> coalesced;
+    coalesced.insert(coalesced.end(), version_bytes.begin(), version_bytes.end());
+    coalesced.insert(coalesced.end(), verack_bytes.begin(), verack_bytes.end());
+    mock_conn->simulate_receive(coalesced);
+    io_context.poll();
+
+    // Feeler disconnects after VERSION
+    CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
+    // CRITICAL: successfully_connected_ must NOT be set for feelers.
+    // Feeler success is determined by version() > 0, not successfully_connected.
+    CHECK_FALSE(peer->successfully_connected());
+    CHECK(peer->version() > 0);
+}
+
+TEST_CASE("Peer - MissingServiceCoalesced", "[peer][security][tcp][coalescing]") {
+    // Regression: VERSION (no NODE_NETWORK) + VERACK in one TCP segment.
+    // Before the fix, handle_version() called post_disconnect() for missing service,
+    // but handle_verack() ran and marked the peer as successfully connected.
+    asio::io_context io_context;
+    auto mock_conn = std::make_shared<MockTransportConnection>();
+    mock_conn->set_inbound(false);
+    const uint32_t magic = protocol::magic::REGTEST;
+
+    // Outbound full-relay peer requires NODE_NETWORK
+    auto peer = Peer::create_outbound(io_context, mock_conn, magic, 0);
+    peer->start();
+    io_context.poll();
+
+    // VERSION with services=0 (no NODE_NETWORK)
+    auto version_bytes = create_version_message_with_services(magic, 54321, 0);
+    auto verack_bytes = create_verack_message(magic);
+
+    // Coalesce: deliver both messages in a single TCP read
+    std::vector<uint8_t> coalesced;
+    coalesced.insert(coalesced.end(), version_bytes.begin(), version_bytes.end());
+    coalesced.insert(coalesced.end(), verack_bytes.begin(), verack_bytes.end());
+    mock_conn->simulate_receive(coalesced);
+    io_context.poll();
+
+    // Should disconnect due to missing NODE_NETWORK
+    CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
+    // CRITICAL: successfully_connected_ must NOT be set
+    CHECK_FALSE(peer->successfully_connected());
+}
+
+TEST_CASE("Peer - NormalHandshakeCoalesced", "[peer][handshake][tcp][coalescing]") {
+    // Verify that normal (non-error) VERSION+VERACK coalescing still works correctly.
+    // The loop should process both messages when no disconnect is initiated.
+    asio::io_context io_context;
+    auto mock_conn = std::make_shared<MockTransportConnection>();
+    mock_conn->set_inbound(false);
+    const uint32_t magic = protocol::magic::REGTEST;
+
+    auto peer = Peer::create_outbound(io_context, mock_conn, magic, 0);
+
+    bool verack_handler_called = false;
+    peer->set_verack_complete_handler([&](PeerPtr p) {
+        verack_handler_called = true;
+    });
+
+    peer->start();
+    io_context.poll();
+
+    auto version_bytes = create_version_message(magic, 54321);
+    auto verack_bytes = create_verack_message(magic);
+
+    // Coalesce: deliver both messages in a single TCP read
+    std::vector<uint8_t> coalesced;
+    coalesced.insert(coalesced.end(), version_bytes.begin(), version_bytes.end());
+    coalesced.insert(coalesced.end(), verack_bytes.begin(), verack_bytes.end());
+    mock_conn->simulate_receive(coalesced);
+    io_context.poll();
+
+    // Normal handshake should complete successfully with coalesced messages
+    CHECK(peer->state() == PeerConnectionState::READY);
+    CHECK(peer->successfully_connected());
+    CHECK(peer->version() == protocol::PROTOCOL_VERSION);
+    CHECK(verack_handler_called);
+}
+
+TEST_CASE("Peer - CoalescedVersionVerackPing", "[peer][messages][tcp][coalescing]") {
+    // Three messages in one TCP segment: VERSION + VERACK + PING
+    // All should be processed (no disconnect initiated)
+    asio::io_context io_context;
+    auto mock_conn = std::make_shared<MockTransportConnection>();
+    mock_conn->set_inbound(false);
+    const uint32_t magic = protocol::magic::REGTEST;
+
+    auto peer = Peer::create_outbound(io_context, mock_conn, magic, 0);
+    peer->start();
+    io_context.poll();
+
+    auto version_bytes = create_version_message(magic, 54321);
+    auto verack_bytes = create_verack_message(magic);
+    auto ping_bytes = create_ping_message(magic, 777777);
+
+    // Coalesce all three
+    std::vector<uint8_t> coalesced;
+    coalesced.insert(coalesced.end(), version_bytes.begin(), version_bytes.end());
+    coalesced.insert(coalesced.end(), verack_bytes.begin(), verack_bytes.end());
+    coalesced.insert(coalesced.end(), ping_bytes.begin(), ping_bytes.end());
+    mock_conn->simulate_receive(coalesced);
+    io_context.poll();
+
+    // Handshake complete and PING processed (auto-PONG sent)
+    CHECK(peer->state() == PeerConnectionState::READY);
+    CHECK(peer->successfully_connected());
+    // Sent messages: our VERSION + our VERACK + auto-PONG reply = 3
+    // (VERSION sent on start(), VERACK sent on handle_version(), PONG on PING)
+    CHECK(mock_conn->sent_message_count() >= 3);
+}
+
+TEST_CASE("Peer - DisconnectStopsCoalescedProcessing", "[peer][security][tcp][coalescing]") {
+    // Verify that after self-connection disconnect, subsequent messages in the
+    // buffer are NOT processed (no message_handler_ callbacks for later messages).
+    asio::io_context io_context;
+    auto mock_conn = std::make_shared<MockTransportConnection>();
+    mock_conn->set_inbound(true);
+    const uint32_t magic = protocol::magic::REGTEST;
+
+    auto peer = Peer::create_inbound(io_context, mock_conn, magic, 0);
+
+    int messages_received = 0;
+    peer->set_message_handler([&](PeerPtr p, std::unique_ptr<message::Message> msg) {
+        messages_received++;
+    });
+
+    peer->start();
+    io_context.poll();
+
+    // Self-connection VERSION + VERACK + PING in one buffer
+    auto version_bytes = create_version_message(magic, peer->get_local_nonce());
+    auto verack_bytes = create_verack_message(magic);
+    auto ping_bytes = create_ping_message(magic, 12345);
+
+    std::vector<uint8_t> coalesced;
+    coalesced.insert(coalesced.end(), version_bytes.begin(), version_bytes.end());
+    coalesced.insert(coalesced.end(), verack_bytes.begin(), verack_bytes.end());
+    coalesced.insert(coalesced.end(), ping_bytes.begin(), ping_bytes.end());
+    mock_conn->simulate_receive(coalesced);
+    io_context.poll();
+
+    CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
+    // Only the VERSION message should have been dispatched to message_handler_.
+    // VERACK and PING must be suppressed because the loop stops after VERSION
+    // triggers post_disconnect().
+    CHECK(messages_received == 1);
 }

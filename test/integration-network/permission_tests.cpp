@@ -15,7 +15,7 @@
 #include "infra/node_simulator.hpp"
 #include "test_orchestrator.hpp"
 #include "network_observer.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/connection_manager.hpp"
 
 using namespace unicity;
 using namespace unicity::test;
@@ -32,11 +32,9 @@ TEST_CASE("Permission: Normal peer gets disconnected for invalid PoW", "[permiss
     AutoDumpOnFailure auto_dump(observer);
     
     SimulatedNode victim(1, &network);
-    NodeSimulator attacker(2, &network);
-    
-    
-    
-    
+    // Use non-localhost address so attacker can be discouraged (localhost is exempt)
+    NodeSimulator attacker(2, &network, "10.0.0.2");
+
     observer.OnCustomEvent("TEST_START", -1, "Normal peer disconnect baseline");
     
     // Setup chain

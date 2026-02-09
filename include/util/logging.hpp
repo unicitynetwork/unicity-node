@@ -74,6 +74,7 @@ private:
 #define LOG_CHAIN_WARN(...) unicity::util::LogManager::GetLogger("chain")->warn(__VA_ARGS__)
 #define LOG_CHAIN_ERROR(...) unicity::util::LogManager::GetLogger("chain")->error(__VA_ARGS__)
 
+#define LOG_CRYPTO_DEBUG(...) unicity::util::LogManager::GetLogger("crypto")->debug(__VA_ARGS__)
 #define LOG_CRYPTO_INFO(...) unicity::util::LogManager::GetLogger("crypto")->info(__VA_ARGS__)
 
 // ============================================================================
@@ -88,14 +89,12 @@ private:
 // - 150 bytes/line × 1000/sec = 150 KB/sec = 9 MB/min
 // - Disk fills in minutes, node crashes
 //
-// With rate limiting:
-// - First 10 errors logged immediately (burst capacity)
-// - Then rate-limited to 1 per 10 seconds
-// - 99.98% reduction in disk writes
+// With rate limiting (200/hour per callsite):
+// - First 200 errors logged (burst capacity)
+// - Then rate-limited until hour window refills
 //
 // Rate limits (token bucket):
-// - ERROR: 10 messages, refill 1 per 60 seconds (10/min max)
-// - WARN:  30 messages, refill 1 per 20 seconds (30/min max)
+// - 200 messages per hour per callsite (~30KB at 150 bytes/msg)
 //
 // When to use:
 // - ✓ Peer protocol errors (malformed messages, invalid headers)
@@ -109,46 +108,46 @@ private:
 // Helper macro to generate callsite key from file:line
 #define CALLSITE_KEY_ (std::string(__FILE__) + ":" + std::to_string(__LINE__))
 
-// Rate-limited ERROR macros (10 burst, ~10/min sustained)
+// Rate-limited ERROR macros (200/hour per callsite)
 #define LOG_ERROR_RL(...)                                                                                              \
   do {                                                                                                                 \
-    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 10, 60)) {                                    \
+    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 200, 3600)) {                                 \
       unicity::util::LogManager::GetLogger()->error(__VA_ARGS__);                                                      \
     }                                                                                                                  \
   } while (0)
 
 #define LOG_NET_ERROR_RL(...)                                                                                          \
   do {                                                                                                                 \
-    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 10, 60)) {                                    \
+    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 200, 3600)) {                                 \
       unicity::util::LogManager::GetLogger("network")->error(__VA_ARGS__);                                             \
     }                                                                                                                  \
   } while (0)
 
 #define LOG_CHAIN_ERROR_RL(...)                                                                                        \
   do {                                                                                                                 \
-    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 10, 60)) {                                    \
+    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 200, 3600)) {                                 \
       unicity::util::LogManager::GetLogger("chain")->error(__VA_ARGS__);                                               \
     }                                                                                                                  \
   } while (0)
 
-// Rate-limited WARN macros (30 burst, ~90/min sustained)
+// Rate-limited WARN macros (200/hour per callsite)
 #define LOG_WARN_RL(...)                                                                                               \
   do {                                                                                                                 \
-    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 30, 20)) {                                    \
+    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 200, 3600)) {                                 \
       unicity::util::LogManager::GetLogger()->warn(__VA_ARGS__);                                                       \
     }                                                                                                                  \
   } while (0)
 
 #define LOG_NET_WARN_RL(...)                                                                                           \
   do {                                                                                                                 \
-    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 30, 20)) {                                    \
+    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 200, 3600)) {                                 \
       unicity::util::LogManager::GetLogger("network")->warn(__VA_ARGS__);                                              \
     }                                                                                                                  \
   } while (0)
 
 #define LOG_CHAIN_WARN_RL(...)                                                                                         \
   do {                                                                                                                 \
-    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 30, 20)) {                                    \
+    if (unicity::util::RateLimiter::instance().should_log(CALLSITE_KEY_, 200, 3600)) {                                 \
       unicity::util::LogManager::GetLogger("chain")->warn(__VA_ARGS__);                                                \
     }                                                                                                                  \
   } while (0)

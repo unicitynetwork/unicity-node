@@ -4,10 +4,10 @@ Tests eclipse attack defenses using real TCP connections from multiple source IP
 
 ## Why Docker?
 
-Eclipse attack defenses like per-netgroup limits require connections from different IPs.
+Eclipse attack defenses like eviction-based netgroup limiting require connections from different IPs.
 Regular functional tests run from localhost (single IP), so they can't test:
 
-- `MAX_INBOUND_PER_NETGROUP` (4 connections per /16 subnet)
+- Eviction-based netgroup limiting (~4 connections per /16 via eviction pressure)
 - Sybil attacks from distributed IPs
 - Eviction algorithm behavior under realistic attack
 
@@ -65,10 +65,10 @@ docker-compose down -v
 
 ### 1. Netgroup Limit Test
 
-Verifies `MAX_INBOUND_PER_NETGROUP = 4` is enforced.
+Verifies eviction-based netgroup limiting (~4 connections per /16).
 
 All 5 attacker containers are in the same /16 subnet (172.28.x.x).
-Only 4 connections should succeed.
+~4 connections should succeed due to eviction pressure (no hard limit exists).
 
 ```bash
 python3 run_eclipse_tests.py --test netgroup_limit
@@ -78,9 +78,10 @@ python3 run_eclipse_tests.py --test netgroup_limit
 
 Simulates a Sybil attack where each attacker attempts multiple connections.
 
-Connections are limited by:
-- `MAX_INBOUND_PER_NETGROUP = 4` (per /16 subnet)
-- Note: Bitcoin Core parity - no per-IP limit; relies on netgroup eviction
+Connections are limited by eviction-based netgroup limiting (Bitcoin Core parity):
+- When slots are full, eviction targets the netgroup with most connections
+- Practical limit of ~4 per /16 emerges from eviction pressure
+- No hard per-netgroup or per-IP limit exists
 
 ```bash
 python3 run_eclipse_tests.py --test sybil_flood

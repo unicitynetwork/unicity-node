@@ -229,8 +229,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x09/BanTest/"
     payload += struct.pack("<i", 0)
@@ -356,8 +356,8 @@ def create_version():
     payload += struct.pack("<Q", 1)
     payload += struct.pack("<q", int(time.time()))
     # Use IPv4-mapped IPv6 in addr_from field
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("{ip}") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("{ip}") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("{ip}") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("{ip}") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x09/BanTest/"
     payload += struct.pack("<i", 0)
@@ -451,8 +451,8 @@ def create_version():
     payload = struct.pack("<i", 70016)
     payload += struct.pack("<Q", 1)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x09/Misbehave/"
     payload += struct.pack("<i", 0)
@@ -660,7 +660,7 @@ def test_discouragement_eviction() -> bool:
     """
     Test that discouragement eviction works under pressure.
 
-    This is a stress test - we can't easily fill to MAX_DISCOURAGED (10000)
+    This is a stress test - we can't easily fill to MAX_DISCOURAGED (50000)
     in Docker, but we verify the mechanism doesn't crash under load.
     """
     print("\n" + "=" * 70)
@@ -697,8 +697,8 @@ def create_version(nonce):
     payload = struct.pack("<i", 70016)
     payload += struct.pack("<Q", 1)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", nonce)
     payload += b"\\x0b/StressTest/"
     payload += struct.pack("<i", 0)

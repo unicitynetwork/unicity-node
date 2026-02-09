@@ -2,9 +2,11 @@
 // ConnectionManager adversarial tests - tests edge cases, attack scenarios, and robustness
 
 #include "catch_amalgamated.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/connection_manager.hpp"
+#include "network/ban_manager.hpp"
 #include "network/addr_manager.hpp"
 #include <asio.hpp>
+#include <ctime>
 #include <string>
 #include <spdlog/spdlog.h>
 
@@ -25,16 +27,16 @@ public:
         spdlog::set_level(spdlog::level::off);
     }
 
-    std::unique_ptr<PeerLifecycleManager> CreatePeerLifecycleManager() {
-        // Phase 2: PeerLifecycleManager no longer requires AddressManager at construction
-        // PeerDiscoveryManager injection not needed for these ban-focused unit tests
-        return std::make_unique<PeerLifecycleManager>(io_context);
+    std::unique_ptr<ConnectionManager> CreateConnectionManager() {
+        // Phase 2: ConnectionManager no longer requires AddressManager at construction
+        // AddrRelayManager injection not needed for these ban-focused unit tests
+        return std::make_unique<ConnectionManager>(io_context);
     }
 };
 
 TEST_CASE("ConnectionManager Adversarial - Ban Evasion", "[adversarial][banman][critical]") {
     AdversarialTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
     SECTION("Different ports same IP") {
         // BanManager bans by IP only (ports are not part of ban system)
@@ -42,7 +44,7 @@ TEST_CASE("ConnectionManager Adversarial - Ban Evasion", "[adversarial][banman][
         REQUIRE(pm->IsBanned("192.168.1.100"));
 
         // Port numbers are not part of the IP address format
-        // Invalid IP addresses (like "192.168.1.100:8333") are rejected
+        // Invalid IP addresses (like "192.168.1.100:9590") are rejected
     }
 
     SECTION("IPv4 vs IPv6 localhost") {
@@ -56,7 +58,7 @@ TEST_CASE("ConnectionManager Adversarial - Ban Evasion", "[adversarial][banman][
 
 TEST_CASE("ConnectionManager Adversarial - Ban List Limits", "[adversarial][banman][dos]") {
     AdversarialTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
     SECTION("Ban 100 different IPs (scaled down)") {
         // Test that we can ban a large number of addresses
@@ -82,35 +84,41 @@ TEST_CASE("ConnectionManager Adversarial - Ban List Limits", "[adversarial][banm
     }
 }
 
-TEST_CASE("ConnectionManager Adversarial - Time Manipulation", "[adversarial][banman][timing]") {
+TEST_CASE("ConnectionManager Adversarial - Default Ban Time (matches Bitcoin Core)", "[adversarial][banman][timing]") {
     AdversarialTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
-    SECTION("Permanent ban (offset = 0)") {
+    SECTION("offset = 0 uses default 24h ban") {
+        int64_t now = std::time(nullptr);
         pm->Ban("192.168.1.1", 0);
         REQUIRE(pm->IsBanned("192.168.1.1"));
 
-        // Verify it's marked as permanent
+        // Verify it uses default 24h duration (not permanent)
         auto banned = pm->GetBanned();
-        REQUIRE(banned["192.168.1.1"].nBanUntil == 0);
+        int64_t expected = now + BanManager::DEFAULT_BAN_TIME_SEC;
+        // Allow 5s tolerance
+        REQUIRE(banned["192.168.1.1"].ban_until >= expected - 5);
+        REQUIRE(banned["192.168.1.1"].ban_until <= expected + 5);
     }
 
-    SECTION("Negative offset treated as permanent ban") {
-        // Implementation treats offset <= 0 as permanent ban (same as offset = 0)
+    SECTION("Negative offset also uses default 24h ban") {
+        // Bitcoin Core: offset <= 0 means "use default ban time (24h)"
+        int64_t now = std::time(nullptr);
         pm->Ban("192.168.1.2", -100);
 
-        // Should be permanently banned
         REQUIRE(pm->IsBanned("192.168.1.2"));
 
-        // Verify it's marked as permanent (nBanUntil = 0)
+        // Verify it uses default 24h duration
         auto banned = pm->GetBanned();
-        REQUIRE(banned["192.168.1.2"].nBanUntil == 0);
+        int64_t expected = now + BanManager::DEFAULT_BAN_TIME_SEC;
+        REQUIRE(banned["192.168.1.2"].ban_until >= expected - 5);
+        REQUIRE(banned["192.168.1.2"].ban_until <= expected + 5);
     }
 }
 
 TEST_CASE("ConnectionManager Adversarial - Edge Cases", "[adversarial][banman][edge]") {
     AdversarialTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
     SECTION("Empty address string") {
         // BanManager now validates IP addresses - empty string is invalid
@@ -138,7 +146,7 @@ TEST_CASE("ConnectionManager Adversarial - Edge Cases", "[adversarial][banman][e
 
 TEST_CASE("ConnectionManager Adversarial - Duplicate Operations", "[adversarial][banman][idempotent]") {
     AdversarialTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
     SECTION("Ban same address twice") {
         pm->Ban("192.168.1.1", 3600);
@@ -166,7 +174,7 @@ TEST_CASE("ConnectionManager Adversarial - Duplicate Operations", "[adversarial]
 
 TEST_CASE("ConnectionManager Adversarial - Ban vs Discourage", "[adversarial][banman][interaction]") {
     AdversarialTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
     SECTION("Ban AND discourage same address") {
         pm->Ban("192.168.1.1", 3600);
@@ -210,7 +218,7 @@ TEST_CASE("ConnectionManager Adversarial - Ban vs Discourage", "[adversarial][ba
 
 TEST_CASE("ConnectionManager Adversarial - Sweep Operation", "[adversarial][banman][sweep]") {
     AdversarialTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
     SECTION("Sweep removes only expired (no-crash)") {
         pm->Ban("192.168.1.1", 3600);
@@ -228,7 +236,7 @@ TEST_CASE("ConnectionManager Adversarial - IPv4-mapped IPv6 Ban Bypass", "[adver
     // Tests that attacker cannot evade IPv4 ban by using IPv4-mapped IPv6 format
     // BanManager normalizes ::ffff:x.x.x.x to x.x.x.x before storage/lookup
     AdversarialTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
     SECTION("Ban IPv4, check IPv4-mapped IPv6 - bypass blocked") {
         pm->Ban("192.168.1.100", 3600);
@@ -253,9 +261,4 @@ TEST_CASE("ConnectionManager Adversarial - IPv4-mapped IPv6 Ban Bypass", "[adver
         REQUIRE(pm->IsDiscouraged("::ffff:172.16.0.1"));
     }
 
-    SECTION("Whitelist IPv4, check IPv4-mapped IPv6 - consistent") {
-        pm->AddToWhitelist("10.10.10.10");
-        REQUIRE(pm->IsWhitelisted("10.10.10.10"));
-        REQUIRE(pm->IsWhitelisted("::ffff:10.10.10.10"));
-    }
 }

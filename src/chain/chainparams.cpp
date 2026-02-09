@@ -25,7 +25,7 @@ static constexpr uint256 TESTNET_GENESIS_HASH{"cb608755c4b2bee0b929fe5760dec6cc5
 static constexpr uint256 TESTNET_POW_LIMIT{"007fffff00000000000000000000000000000000000000000000000000000000"};
 
 // Regtest
-static constexpr uint256 REGTEST_GENESIS_HASH{"0233b37bb6942bfb471cfd7fb95caab0e0f7b19cc8767da65fbef59eb49e45bd"};
+static constexpr uint256 REGTEST_GENESIS_HASH{"0555faa88836f4ce189235a28279af4614432234b6f7e2f350e4fc0dadb1ffa7"};
 static constexpr uint256 REGTEST_POW_LIMIT{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
 
 // Static instance
@@ -124,14 +124,8 @@ CMainParams::CMainParams() {
   consensus.nNetworkExpirationInterval = 0;
   consensus.nNetworkExpirationGracePeriod = 0;
 
-  // Orphan header management
-  consensus.nOrphanHeaderExpireTime = 6 * 60 * 60;  // 6 hours (~2.5 block intervals)
-
   // Reorg protection
   consensus.nSuspiciousReorgDepth = 2;  // 2 blocks (~4.8 hours)
-
-  // DoS protection
-  consensus.nAntiDosWorkBufferBlocks = 6;  // 6 blocks (~14.4 hours)
 
   // Hardcoded seed node addresses
   vFixedSeeds.push_back("178.18.251.16:9590");
@@ -167,14 +161,8 @@ CTestNetParams::CTestNetParams() {
   consensus.nNetworkExpirationInterval = 1000;
   consensus.nNetworkExpirationGracePeriod = 24;  // 24 blocks (~2.4 days warning period)
 
-  // Orphan header management
-  consensus.nOrphanHeaderExpireTime = 6 * 60 * 60;  // 6 hours (2.5 block intervals, matching mainnet)
-
   // Reorg protection
   consensus.nSuspiciousReorgDepth = 100;  // 100 blocks (~10 days) - testing flexibility
-
-  // DoS protection
-  consensus.nAntiDosWorkBufferBlocks = 144;  // 144 blocks (~14.4 days) - testing flexibility
 
   // Network configuration
   nDefaultPort = protocol::ports::TESTNET;
@@ -221,20 +209,14 @@ CRegTestParams::CRegTestParams() {
   consensus.nNetworkExpirationInterval = 0;     // Disabled
   consensus.nNetworkExpirationGracePeriod = 0;  // Disabled
 
-  // Orphan header management
-  consensus.nOrphanHeaderExpireTime = 12 * 60;  // 12 minutes
-
   // Reorg protection
   consensus.nSuspiciousReorgDepth = 100;  // 100 blocks
-
-  // DoS protection
-  consensus.nAntiDosWorkBufferBlocks = 144;  // 144 blocks
 
   // Network configuration
   nDefaultPort = protocol::ports::REGTEST;
 
   // Regtest genesis - instant mine
-  genesis = CreateGenesisBlock(1296688602,  // Just use a fixed time
+  genesis = CreateGenesisBlock(1760549555,  // Oct 15, 2025 (same as testnet)
                                2,           // Easy nonce
                                0x207fffff,  // Very easy difficulty
                                1);

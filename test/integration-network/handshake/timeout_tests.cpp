@@ -1,19 +1,21 @@
 #include "catch_amalgamated.hpp"
 #include "infra/simulated_network.hpp"
 #include "infra/simulated_node.hpp"
+#include "infra/test_access.hpp"
 #include "test_orchestrator.hpp"
 #include "network/peer.hpp"
 #include <thread>
 
 using namespace unicity;
 using namespace unicity::test;
+using unicity::test::PeerTestAccess;
 
 namespace {
 struct TimeoutGuard {
     TimeoutGuard(std::chrono::milliseconds hs, std::chrono::milliseconds idle) {
-        network::Peer::SetTimeoutsForTest(hs, idle);
+        PeerTestAccess::SetTimeouts(hs, idle);
     }
-    ~TimeoutGuard() { network::Peer::ResetTimeoutsForTest(); }
+    ~TimeoutGuard() { PeerTestAccess::ResetTimeouts(); }
 };
 
 static void ZeroLatency(SimulatedNetwork& net){

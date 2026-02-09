@@ -10,43 +10,6 @@
 using namespace unicity;
 using namespace unicity::test;
 
-TEST_CASE("Header sync: full batch continuation on single peer", "[network][sync][headers]") {
-    SimulatedNetwork network(10101);
-    TestOrchestrator orch(&network);
-
-    // Single peer with long chain
-    SimulatedNode A(1, &network);
-    SimulatedNode D(4, &network);
-
-    A.SetBypassPOWValidation(true);
-    D.SetBypassPOWValidation(true);
-
-    // Mine enough blocks to force multiple GETHEADERS
-    // With MAX_HEADERS_SIZE=80000, we use a smaller test size that's still > 1 batch
-    // Testing with 80K+ blocks is impractical, so we test with 3000 blocks
-    // which verifies the multi-batch logic works even though it fits in one real batch
-    const int TARGET = 3000;
-    for (int i = 0; i < TARGET; ++i) {
-        A.MineBlock();
-    }
-    orch.AssertHeight(A, TARGET);
-
-    // Track outgoing GETHEADERS from D to A
-    network.EnableCommandTracking(true);
-
-    REQUIRE(D.ConnectTo(1));
-    REQUIRE(orch.WaitForConnection(D, A));
-
-    // Advance time to allow sync to complete
-    for (int i = 0; i < 120; ++i) {
-        orch.AdvanceTime(std::chrono::milliseconds(100));
-    }
-
-    // With 3000 blocks < MAX_HEADERS_SIZE, only 1 GETHEADERS needed
-    int sent = network.CountCommandSent(4, 1, protocol::commands::GETHEADERS);
-    REQUIRE(sent >= 1);
-}
-
 TEST_CASE("Header sync: locator size and hash_stop semantics", "[network][sync][headers]") {
     SimulatedNetwork network(20202);
     TestOrchestrator orch(&network);

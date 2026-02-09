@@ -1,11 +1,13 @@
 #include "catch_amalgamated.hpp"
 #include "infra/simulated_network.hpp"
 #include "infra/simulated_node.hpp"
+#include "infra/test_access.hpp"
 #include "test_orchestrator.hpp"
 #include "network/protocol.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 
 using namespace unicity;
+using unicity::test::AddrRelayManagerTestAccess;
 using namespace unicity::test;
 using namespace unicity::protocol;
 
@@ -30,12 +32,12 @@ TEST_CASE("Feeler connects and auto-disconnects; no outbound slot consumed", "[n
 
     // Seed n2 in n1's new table
     auto addr2 = make_address(n2.GetAddress(), n2.GetPort());
-    n1.GetNetworkManager().discovery_manager().addr_manager_for_test().add(addr2);
+    AddrRelayManagerTestAccess::GetAddrManager(n1.GetNetworkManager().discovery_manager()).add(addr2);
 
     size_t outbound_before = n1.GetNetworkManager().outbound_peer_count();
 
     // Trigger feeler
-    n1.GetNetworkManager().attempt_feeler_connection();
+    n1.AttemptFeelerConnection();
 
     // Process events/time for handshake to complete and feeler to disconnect
     for (int i = 0; i < 20; ++i) orch.AdvanceTime(std::chrono::milliseconds(100));
@@ -59,7 +61,7 @@ TEST_CASE("Successful feeler marks address good (NEW to TRIED promotion)", "[net
     // Seed n2 in n1's NEW table using its routable address
     auto addr2 = make_address("93.184.216.34", n2.GetPort());
     auto& pdm = n1.GetNetworkManager().discovery_manager();
-    REQUIRE(pdm.addr_manager_for_test().add(addr2));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(pdm).add(addr2));
 
     // Verify address is in NEW table (not TRIED)
     size_t new_before = pdm.NewCount();
@@ -68,7 +70,7 @@ TEST_CASE("Successful feeler marks address good (NEW to TRIED promotion)", "[net
     REQUIRE(tried_before == 0);
 
     // Trigger feeler connection
-    n1.GetNetworkManager().attempt_feeler_connection();
+    n1.AttemptFeelerConnection();
 
     // Process events for handshake to complete and feeler to disconnect
     // Feeler receives VERSION -> sets successfully_connected_ -> disconnects

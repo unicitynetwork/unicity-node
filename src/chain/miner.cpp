@@ -85,7 +85,7 @@ void CPUMiner::Stop() {
     }
 
     uint64_t hashes = total_hashes_.load();
-    double hashrate = (elapsed > 0) ? (double)hashes / elapsed : 0.0;
+    double hashrate = (elapsed > 0) ? static_cast<double>(hashes) / elapsed : 0.0;
 
     LOG_CHAIN_TRACE("Miner: Stopped");
     LOG_CHAIN_TRACE("  Total hashes: {}", hashes);
@@ -110,7 +110,7 @@ double CPUMiner::GetHashrate() const {
     return 0.0;
   }
 
-  return (double)total_hashes_.load() / elapsed;
+  return static_cast<double>(total_hashes_.load()) / elapsed;
 }
 
 void CPUMiner::MiningWorker() {

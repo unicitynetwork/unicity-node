@@ -19,6 +19,9 @@
 // - Uses minerAddress (uint160) instead of hashMerkleRoot
 // - Includes hashRandomX for RandomX PoW algorithm
 // - No transaction data (headers-only chain)
+//
+// New blocks are announced via direct HEADERS messages to connected peers.
+// There is no GETDATA/BLOCK message (headers-only chain).
 class CBlockHeader {
 public:
   // Block header fields (initialized to zero/null for safety)

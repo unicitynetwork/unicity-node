@@ -26,6 +26,12 @@ def run_test(test_script, timeout):
         return (result.returncode == 0, duration)
     except subprocess.TimeoutExpired:
         print(f"✗ TIMEOUT after {timeout}s: {test_script.name}")
+        # Kill any orphaned unicityd processes from this test to prevent resource leaks
+        try:
+            subprocess.run(["pkill", "-9", "-f", "unicityd.*unicity_test"],
+                          capture_output=True, timeout=5)
+        except Exception:
+            pass
         duration = time.time() - start
         return (False, duration)
 
@@ -65,7 +71,7 @@ def main():
     test_scripts = []
     for file in sorted(test_dir.glob("*.py")):
         if file.name not in exclude_files and not file.name.startswith("_"):
-            if file.name.startswith(("feature_", "test_", "p2p_", "rpc_", "basic_", "consensus_", "orphan_")):
+            if file.name.startswith(("feature_", "test_", "p2p_", "rpc_", "basic_", "consensus_")):
                 if not args.pattern or args.pattern in file.name:
                     test_scripts.append(file)
 

@@ -1,57 +1,97 @@
 #include "catch_amalgamated.hpp"
-#include "network/peer_lifecycle_manager.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "infra/test_access.hpp"
+#include "infra/mock_transport.hpp"
+#include "network/connection_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 #include "network/network_manager.hpp" // for ConnectionResult enum
 #include "network/protocol.hpp"
 #include <asio.hpp>
 #include <atomic>
 
 using namespace unicity;
+using unicity::test::AddrRelayManagerTestAccess;
 using namespace unicity::network;
+
+namespace {
+
+// Transport that counts connect() calls and succeeds/fails on demand
+class CountingTransport : public Transport {
+public:
+    explicit CountingTransport(bool succeed = true) : succeed_(succeed) {}
+    void SetSucceed(bool s) { succeed_ = s; }
+    int connect_count() const { return count_.load(std::memory_order_relaxed); }
+
+    TransportConnectionPtr connect(const std::string& address, uint16_t port, ConnectCallback callback) override {
+        count_.fetch_add(1, std::memory_order_relaxed);
+        if (!succeed_) {
+            // Simulate immediate failure
+            return nullptr;
+        }
+        auto conn = std::make_shared<MockTransportConnection>(address, port);
+        conn->set_inbound(false);
+        if (callback) callback(true);
+        return conn;
+    }
+
+    bool listen(uint16_t, std::function<void(TransportConnectionPtr)>) override { return true; }
+    void stop_listening() override {}
+    void run() override {}
+    void stop() override {}
+    bool is_running() const override { return true; }
+
+private:
+    bool succeed_;
+    std::atomic<int> count_{0};
+};
+
+} // namespace
 
 TEST_CASE("Outbound per-cycle and in-flight dedup", "[network][limits][dedup]") {
     asio::io_context io;
-    PeerLifecycleManager plm(io, PeerLifecycleManager::Config{});
-    PeerDiscoveryManager pdm(&plm);
+    ConnectionManager plm(io, ConnectionManager::Config{});
+    AddrRelayManager pdm(&plm);
 
     // Seed a single routable address so Select() would otherwise keep returning it
     protocol::NetworkAddress addr = protocol::NetworkAddress::from_string("93.184.216.34", protocol::ports::REGTEST);
-    REQUIRE(pdm.addr_manager_for_test().add(addr));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(pdm).add(addr));
 
-    // Connect function that reports how many times it was invoked
-    std::atomic<int> calls{0};
-
-    auto is_running = [](){ return true; };
-    auto connect_fn_success = [&](const protocol::NetworkAddress& a, ConnectionType /*conn_type*/){
-        calls.fetch_add(1, std::memory_order_relaxed);
-        // Simulate "initiated" (pending): Success means pending flag remains until callback clears it
-        return ConnectionResult::Success;
-    };
+    auto transport = std::make_shared<CountingTransport>(/*succeed=*/true);
+    plm.Init(transport, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/42);
 
     // First cycle: we should attempt once (per-cycle dedup prevents multiple dials to same addr within the cycle)
-    plm.AttemptOutboundConnections(is_running, connect_fn_success);
-    REQUIRE(calls.load(std::memory_order_relaxed) == 1);
+    plm.AttemptOutboundConnections(/*current_height=*/0);
+    io.poll();
+    io.restart();
+    REQUIRE(transport->connect_count() == 1);
 
-    // Second cycle: without in-flight dedup in the selector, we will attempt again
-    plm.AttemptOutboundConnections(is_running, connect_fn_success);
-    REQUIRE(calls.load(std::memory_order_relaxed) == 2);
+    // Second cycle: the first connection is in pending_outbound_ (async callback not yet processed),
+    // so in-flight dedup inside ConnectTo will skip it. But io.poll() already ran the posted callback
+    // which created the peer, so the address is now in the peer list and find_peer_by_address
+    // returns AlreadyConnected.
+    plm.AttemptOutboundConnections(/*current_height=*/0);
+    io.poll();
+    io.restart();
+    // Should not make a second connection to the same address
+    REQUIRE(transport->connect_count() == 1);
 
-    // Reset manager to isolate discouraged phase (pending from success phase shouldn't interfere)
-    PeerLifecycleManager plm2(io, PeerLifecycleManager::Config{});
-    PeerDiscoveryManager pdm2(&plm2);
-    REQUIRE(pdm2.addr_manager_for_test().add(addr));
+    // Test with failing transport: connection attempts don't persist in pending or peer list
+    ConnectionManager plm2(io, ConnectionManager::Config{});
+    AddrRelayManager pdm2(&plm2);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(pdm2).add(addr));
 
-    // Now simulate immediate failure path which erases pending: discouraged result
-    auto connect_fn_discouraged = [&](const protocol::NetworkAddress& a, ConnectionType /*conn_type*/){
-        calls.fetch_add(1, std::memory_order_relaxed);
-        return ConnectionResult::AddressDiscouraged; // immediate failure => pending cleared
-    };
+    auto transport2 = std::make_shared<CountingTransport>(/*succeed=*/false);
+    plm2.Init(transport2, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/43);
 
-    // First discouraged cycle: attempt once (pending will be cleared by immediate failure)
-    plm2.AttemptOutboundConnections(is_running, connect_fn_discouraged);
-    REQUIRE(calls.load(std::memory_order_relaxed) == 3);
+    // First cycle with failing transport: attempt is made but fails immediately
+    plm2.AttemptOutboundConnections(/*current_height=*/0);
+    io.poll();
+    io.restart();
+    REQUIRE(transport2->connect_count() == 1);
 
-    // Second discouraged cycle: pending was cleared, so we can attempt again
-    plm2.AttemptOutboundConnections(is_running, connect_fn_discouraged);
-    REQUIRE(calls.load(std::memory_order_relaxed) == 4);
+    // Second cycle: since the first attempt failed (no peer created, pending cleared),
+    // the address can be attempted again
+    plm2.AttemptOutboundConnections(/*current_height=*/0);
+    io.poll();
+    io.restart();
+    REQUIRE(transport2->connect_count() == 2);
 }

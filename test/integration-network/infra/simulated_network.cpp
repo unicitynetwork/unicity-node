@@ -24,9 +24,9 @@ SimulatedNetwork::SimulatedNetwork(uint64_t seed)
     // with fresh reference points.
     util::SetMockTime(0);
 
-    // Initialize mock time to match simulated time (start at 1 second, not 0)
-    // NOTE: SetMockTime(0) means "disable mocking", so we use 1 instead
-    util::SetMockTime(1);
+    // Initialize mock time to match simulated time (realistic starting point)
+    // Using a post-2020 time avoids edge cases with timestamp validation
+    util::SetMockTime(static_cast<int64_t>(SIMULATION_START_TIME_MS / 1000));
 }
 
 SimulatedNetwork::~SimulatedNetwork() {
@@ -81,6 +81,16 @@ void SimulatedNetwork::SendMessage(int from_node, int to_node, const std::vector
     if (ShouldDropMessage(from_node, to_node)) {
         stats_.total_messages_dropped++;
         return;
+    }
+
+    // Check command blocking (for testing specific protocol behaviors)
+    const auto& conditions = GetLinkConditions(from_node, to_node);
+    if (!conditions.blocked_commands.empty() && cmd != "<invalid>") {
+        if (conditions.blocked_commands.count(cmd) > 0) {
+            LOG_NET_TRACE("simnet: blocked cmd={} from={} to={}", cmd, from_node, to_node);
+            stats_.total_messages_dropped++;
+            return;
+        }
     }
 
     // Calculate delivery time with jitter
@@ -177,12 +187,9 @@ size_t SimulatedNetwork::ProcessMessages(uint64_t current_time_ms) {
     return delivered;
 }
 
-size_t SimulatedNetwork::AdvanceTime(uint64_t new_time_ms) {
-    if (new_time_ms < current_time_ms_) {
-        return 0;  // Can't go backwards in time
-    }
-
-    current_time_ms_ = new_time_ms;
+size_t SimulatedNetwork::AdvanceTime(uint64_t duration_ms) {
+    // Add duration to current time (relative advancement)
+    current_time_ms_ += duration_ms;
 
     // Synchronize util::GetTime() with simulated time
     // Convert milliseconds to seconds for the time mock
@@ -266,7 +273,7 @@ bool SimulatedNetwork::IsPartitioned(int node_a, int node_b) const {
 }
 
 void SimulatedNetwork::Reset() {
-    current_time_ms_ = 0;
+    current_time_ms_ = SIMULATION_START_TIME_MS;
     while (!message_queue_.empty()) {
         message_queue_.pop();
     }

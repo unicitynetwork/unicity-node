@@ -106,6 +106,31 @@ def wait_for_peers(node, peer_count, timeout=10):
     return wait_until(has_peers, timeout=timeout)
 
 
+def wait_for_p2p_listener(node, timeout=10):
+    """
+    Wait for the node's P2P listener to be bound and ready.
+
+    RPC being ready doesn't guarantee P2P listener is bound.
+    This checks that getnetworkinfo returns a non-empty localaddresses array.
+
+    Args:
+        node: TestNode instance
+        timeout: Maximum time to wait in seconds
+
+    Returns:
+        True if P2P listener is ready, False if timeout
+    """
+    def p2p_ready():
+        try:
+            info = node.get_network_info()
+            # localaddresses is populated when P2P listener is bound
+            return len(info.get("localaddresses", [])) > 0
+        except Exception:
+            return False
+
+    return wait_until(p2p_ready, timeout=timeout)
+
+
 def pick_free_port():
     """Return an available localhost TCP port.
 

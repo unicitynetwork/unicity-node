@@ -41,12 +41,14 @@ def main():
         delta = be["banned_until"] - be["ban_created"]
         assert 86000 <= delta <= 87000, f"unexpected default bantime delta: {delta}"
 
-        # 2) Permanent mode
-        res = node.rpc("setban", "127.0.0.3", "add", 0, "permanent")
+        # 2) bantime=0 uses default 24h (matches Bitcoin Core - no permanent bans)
+        res = node.rpc("setban", "127.0.0.3", "add", 0)
         assert res.get("success") is True
         banned = listbanned_map(node)
         assert "127.0.0.3" in banned
-        assert banned["127.0.0.3"]["banned_until"] == 0
+        be = banned["127.0.0.3"]
+        delta = be["banned_until"] - be["ban_created"]
+        assert 86000 <= delta <= 87000, f"bantime=0 should use default 24h, got delta: {delta}"
 
         # 3) Absolute mode (ban until now + 1h)
         now = int(time.time())

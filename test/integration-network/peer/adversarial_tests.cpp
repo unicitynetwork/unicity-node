@@ -409,6 +409,8 @@ TEST_CASE("Adversarial - OutOfOrderHandshake", "[adversarial][protocol]") {
     const uint32_t magic = protocol::magic::REGTEST;
 
     SECTION("VERACK then VERSION then VERACK (outbound)") {
+        // Bitcoin Core behavior: ignore non-version messages before handshake (no disconnect)
+        // Core: net_processing.cpp:3657-3660 - logs and returns without disconnecting
         auto peer = Peer::create_outbound(io_context, mock_conn, magic, 0);
         peer->start();
         io_context.poll();
@@ -420,11 +422,12 @@ TEST_CASE("Adversarial - OutOfOrderHandshake", "[adversarial][protocol]") {
         mock_conn->simulate_receive(verack1);
         io_context.poll();
 
-        // SECURITY: Peer must disconnect AND send no response messages
-        // Premature VERACK (before receiving VERSION) is invalid protocol state
-        CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
+        // SECURITY: Peer must ignore premature VERACK (match Bitcoin Core)
+        // Premature VERACK is silently ignored, peer stays connected waiting for VERSION
+        CHECK(peer->is_connected());
+        CHECK(peer->version() == 0);  // Still waiting for VERSION
 
-        // Assert no egress: peer must not send any messages in response to invalid VERACK
+        // Assert no egress: peer must not send any messages in response to premature VERACK
         CHECK(mock_conn->sent_message_count() == count_after_version);
     }
 
@@ -639,28 +642,10 @@ TEST_CASE("Adversarial - MessageSizeLimits", "[adversarial][malformed][dos]") {
             ipv6[10] = 0xFF; ipv6[11] = 0xFF;  // IPv4-mapped prefix
             ipv6[12] = 127; ipv6[15] = 1;  // 127.0.0.1
             s.write_bytes(ipv6.data(), 16);
-            s.write_uint16(8333);  // port (network byte order)
+            s.write_uint16(9590);  // port (network byte order)
         }
         auto oversized_addr = create_test_message(magic, protocol::commands::ADDR, s.data());
         mock_conn->simulate_receive(oversized_addr);
-        io_context.poll();
-        CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
-    }
-
-    SECTION("INV oversized (>50000 items)") {
-        // SECURITY: INV messages limited to MAX_INV_SIZE (50000) items
-        // Prevents memory exhaustion attacks
-        message::MessageSerializer s;
-        s.write_varint(50001);  // One more than MAX_INV_SIZE
-        // Write 50001 dummy inventory vectors (each 36 bytes: 4 type + 32 hash)
-        for (int i = 0; i < 50001; i++) {
-            s.write_uint32(static_cast<uint32_t>(protocol::InventoryType::MSG_BLOCK));
-            std::array<uint8_t, 32> hash{};
-            hash[0] = static_cast<uint8_t>(i & 0xFF);
-            s.write_bytes(hash.data(), 32);
-        }
-        auto oversized_inv = create_test_message(magic, protocol::commands::INV, s.data());
-        mock_conn->simulate_receive(oversized_inv);
         io_context.poll();
         CHECK(peer->state() == PeerConnectionState::DISCONNECTED);
     }
@@ -881,6 +866,8 @@ TEST_CASE("Adversarial - ProtocolStateMachine", "[adversarial][protocol][state]"
 }
 
 TEST_CASE("Adversarial - UnknownMessageFlooding", "[adversarial][flood][quickwin]") {
+    // Bitcoin Core parity: unknown commands are silently ignored
+    // This provides forward compatibility for protocol upgrades
     asio::io_context io_context;
     auto mock_conn = std::make_shared<MockTransportConnection>();
     const uint32_t magic = protocol::magic::REGTEST;
@@ -905,28 +892,19 @@ TEST_CASE("Adversarial - UnknownMessageFlooding", "[adversarial][flood][quickwin
         "GARBAGE", "RANDOM"
     };
 
-    // SECURITY: Our DoS protection disconnects after MAX_UNKNOWN_COMMANDS_PER_MINUTE unknown commands in 60 seconds
-    // Send MAX_UNKNOWN_COMMANDS_PER_MINUTE + 5 messages to verify peer gets disconnected after exceeding limit
-    const int max_allowed = protocol::MAX_UNKNOWN_COMMANDS_PER_MINUTE;
-    const int messages_to_send = max_allowed + 5;
-    int messages_sent = 0;
+    // Send many unknown commands - all should be silently ignored
+    const int messages_to_send = 100;
     for (int i = 0; i < messages_to_send; i++) {
         std::string fake_cmd = fake_commands[i % fake_commands.size()];
-        // SECURITY: Only VERACK and GETADDR are allowed zero-length payloads
-        // Unknown commands must have non-empty payloads to pass protocol validation
         std::vector<uint8_t> dummy_payload = {0x01, 0x02, 0x03, 0x04};
         auto unknown_msg = create_test_message(magic, fake_cmd, dummy_payload);
         mock_conn->simulate_receive(unknown_msg);
         io_context.poll();
-        messages_sent++;
-        if (!peer->is_connected()) {
-            break;
-        }
     }
-    // Verify peer was disconnected after exceeding MAX_UNKNOWN_COMMANDS_PER_MINUTE
-    CHECK_FALSE(peer->is_connected());
-    CHECK(messages_sent > max_allowed);  // Disconnected after exceeding limit
-    CHECK(messages_sent <= messages_to_send);  // Disconnected before sending all messages
+
+    // Peer should still be connected - unknown commands are ignored
+    CHECK(peer->is_connected());
+    CHECK(peer->state() == PeerConnectionState::READY);
 }
 
 TEST_CASE("Adversarial - StatisticsOverflow", "[adversarial][resource][quickwin]") {
@@ -1323,17 +1301,6 @@ static std::vector<uint8_t> create_addr_message(uint32_t magic) {
     msg.addresses.push_back(addr);
     auto payload = msg.serialize();
     return create_test_message(magic, protocol::commands::ADDR, payload);
-}
-
-static std::vector<uint8_t> create_inv_message(uint32_t magic) {
-    // INV with one block inventory item
-    message::InvMessage msg;
-    protocol::InventoryVector item;
-    item.type = protocol::InventoryType::MSG_BLOCK;
-    std::memset(item.hash.data(), 0xAB, 32);  // Dummy block hash
-    msg.inventory.push_back(item);
-    auto payload = msg.serialize();
-    return create_test_message(magic, protocol::commands::INV, payload);
 }
 
 static std::vector<uint8_t> create_headers_message(uint32_t magic) {
@@ -1768,50 +1735,6 @@ TEST_CASE("Handshake Security - PONG before VERACK", "[adversarial][handshake][s
 }
 
 // =============================================================================
-// TEST 1.5: INV before VERACK
-// =============================================================================
-TEST_CASE("Handshake Security - INV before VERACK", "[adversarial][handshake][security]") {
-    asio::io_context io_context;
-    auto mock_conn = std::make_shared<MockTransportConnection>();
-    const uint32_t magic = protocol::magic::REGTEST;
-
-    auto peer = Peer::create_inbound(io_context, mock_conn, magic, 0);
-    peer->start();
-    io_context.poll();
-
-    auto version = create_version_message(magic, 12345);
-    mock_conn->simulate_receive(version);
-    io_context.poll();
-
-    REQUIRE(peer->state() == PeerConnectionState::VERSION_SENT);
-    mock_conn->clear_sent_messages();
-
-    // Attack: Send INV before VERACK to trigger resource consumption
-    auto inv = create_inv_message(magic);
-    mock_conn->simulate_receive(inv);
-    io_context.poll();
-
-    // CRITICAL: Peer must ignore INV (no GETDATA requests)
-    CHECK(mock_conn->sent_message_count() == 0);
-
-    // Verify no GETDATA sent
-    auto sent_messages = mock_conn->get_sent_messages();
-    bool getdata_sent = false;
-    for (const auto& msg : sent_messages) {
-        if (msg.size() >= 24) {
-            std::string command(msg.begin() + 4, msg.begin() + 16);
-            if (command.find("getdata") != std::string::npos) {
-                getdata_sent = true;
-                break;
-            }
-        }
-    }
-    CHECK(!getdata_sent);
-    CHECK(peer->is_connected());
-    CHECK(peer->state() == PeerConnectionState::VERSION_SENT);
-}
-
-// =============================================================================
 // TEST 1.7: HEADERS before VERACK
 // =============================================================================
 TEST_CASE("Handshake Security - HEADERS before VERACK", "[adversarial][handshake][security]") {
@@ -2159,21 +2082,21 @@ TEST_CASE("Handshake Security - Messages queued during handshake", "[adversarial
 // PHASE 3: RESOURCE EXHAUSTION TESTS
 // ============================================================================
 // Tests for DoS protection via resource limits:
-// - Recv buffer exhaustion (DEFAULT_RECV_FLOOD_SIZE = 5MB)
-// - Send queue exhaustion (DEFAULT_SEND_QUEUE_SIZE = 5MB)
+// - Recv buffer exhaustion (DEFAULT_RECV_FLOOD_SIZE = 10 MB)
+// - Send queue exhaustion (DEFAULT_SEND_QUEUE_SIZE = 10 MB)
 // - GETADDR rate limiting
 //
-// Bitcoin Core enforces strict limits to prevent memory exhaustion attacks.
+// Limits must be >= MAX_PROTOCOL_MESSAGE_LENGTH (8 MB) to allow valid messages.
 // See protocol.hpp for limit definitions and peer.cpp for enforcement.
 
 TEST_CASE("Adversarial - RecvBufferExhaustion", "[adversarial][resource][flood]") {
-    // SECURITY: Bitcoin Core enforces DEFAULT_RECV_FLOOD_SIZE (5MB) limit
-    // to prevent memory exhaustion via large messages (src/net.h)
+    // SECURITY: Enforces DEFAULT_RECV_FLOOD_SIZE (10 MB) limit
+    // to prevent memory exhaustion via large messages
     //
-    // Attack scenario: Attacker sends message header claiming 10MB payload,
+    // Attack scenario: Attacker sends message header claiming large payload,
     // then sends partial data. If we buffer unbounded, attacker can OOM us.
     //
-    // Defense: peer.cpp:338 checks: if (usable_bytes + data.size() > 5MB) disconnect
+    // Defense: peer.cpp checks if buffer exceeds limit and disconnects
     //
     // This test verifies we disconnect before buffer exceeds 5MB.
 
@@ -2271,7 +2194,7 @@ TEST_CASE("Adversarial - RecvBufferExhaustion", "[adversarial][resource][flood]"
 
 // NOTE: GETADDR "rate limiting" test
 // Bitcoin Core (and Unicity) don't rate-limit GETADDR requests per se.
-// Instead, they use once-per-connection gating: peer_discovery_manager.cpp:312-319
+// Instead, they use once-per-connection gating: addr_relay_manager.cpp:312-319
 // Only the FIRST GETADDR on each connection gets a response.
 // This is a simpler and more effective DoS protection than rate limiting.
 //
@@ -2279,7 +2202,7 @@ TEST_CASE("Adversarial - RecvBufferExhaustion", "[adversarial][resource][flood]"
 
 TEST_CASE("Adversarial - GetAddrOncePerConnection", "[adversarial][resource][getaddr]") {
     // SECURITY: Bitcoin Core responds to GETADDR only once per connection
-    // (peer_discovery_manager.cpp:312-319)
+    // (addr_relay_manager.cpp:312-319)
     //
     // Attack scenario: Attacker sends many GETADDR messages to exhaust CPU/bandwidth
     //
@@ -2287,7 +2210,7 @@ TEST_CASE("Adversarial - GetAddrOncePerConnection", "[adversarial][resource][get
     //
     // This test verifies the gating is enforced (not a full integration test,
     // just verifies the message is accepted without error - full test would
-    // require NetworkManager/PeerDiscoveryManager integration)
+    // require NetworkManager/AddrRelayManager integration)
 
     asio::io_context io_context;
     auto mock_conn = std::make_shared<MockTransportConnection>();
@@ -2334,8 +2257,8 @@ TEST_CASE("Adversarial - GetAddrOncePerConnection", "[adversarial][resource][get
     CHECK(peer->is_connected());
 
     // NOTE: This test verifies Peer-level handling (message acceptance).
-    // Full verification of once-per-connection gating happens at PeerDiscoveryManager level
-    // (peer_discovery_manager.cpp:312-319) and is covered by discovery tests.
+    // Full verification of once-per-connection gating happens at AddrRelayManager level
+    // (addr_relay_manager.cpp:312-319) and is covered by discovery tests.
     // The adversarial aspect we're testing here is: spamming GETADDR doesn't crash/disconnect.
 }
 
@@ -2640,96 +2563,6 @@ TEST_CASE("Adversarial - InvalidChecksum", "[adversarial][security][checksum]") 
 // MESSAGE LIBRARY EDGE CASE TESTS
 // =============================================================================
 
-TEST_CASE("Adversarial - INV with unknown InventoryType", "[adversarial][inv][security]") {
-    // SECURITY: Unknown inventory types should be silently ignored, not crash
-    // The deserializer accepts any uint32_t, handler filters by type
-    asio::io_context io_context;
-    auto mock_conn = std::make_shared<MockTransportConnection>();
-    const uint32_t magic = protocol::magic::REGTEST;
-
-    auto peer = Peer::create_inbound(io_context, mock_conn, magic, 0);
-    peer->start();
-    io_context.poll();
-
-    // Complete handshake
-    auto version = create_version_message(magic, 54321);
-    mock_conn->simulate_receive(version);
-    io_context.poll();
-
-    auto verack = create_verack_message(magic);
-    mock_conn->simulate_receive(verack);
-    io_context.poll();
-    REQUIRE(peer->state() == PeerConnectionState::READY);
-
-    SECTION("INV with type=0xDEADBEEF (unknown)") {
-        message::MessageSerializer s;
-        s.write_varint(1);  // 1 inventory item
-        s.write_uint32(0xDEADBEEF);  // Unknown type
-        for (int i = 0; i < 32; ++i) s.write_uint8(0xAA);  // Fake hash
-
-        auto payload = s.data();
-        auto inv_msg = create_test_message(magic, protocol::commands::INV, payload);
-        mock_conn->simulate_receive(inv_msg);
-        io_context.poll();
-
-        // Should remain connected (unknown types are ignored, not errors)
-        CHECK(peer->is_connected());
-    }
-
-    SECTION("INV with type=1 (MSG_TX - not supported in headers-only)") {
-        message::MessageSerializer s;
-        s.write_varint(1);
-        s.write_uint32(1);  // MSG_TX (Bitcoin type, not used here)
-        for (int i = 0; i < 32; ++i) s.write_uint8(0xBB);
-
-        auto payload = s.data();
-        auto inv_msg = create_test_message(magic, protocol::commands::INV, payload);
-        mock_conn->simulate_receive(inv_msg);
-        io_context.poll();
-
-        // Should remain connected (unsupported types are silently ignored)
-        CHECK(peer->is_connected());
-    }
-
-    SECTION("INV with type=0xFFFFFFFF (max uint32)") {
-        message::MessageSerializer s;
-        s.write_varint(1);
-        s.write_uint32(0xFFFFFFFF);  // Max value
-        for (int i = 0; i < 32; ++i) s.write_uint8(0xCC);
-
-        auto payload = s.data();
-        auto inv_msg = create_test_message(magic, protocol::commands::INV, payload);
-        mock_conn->simulate_receive(inv_msg);
-        io_context.poll();
-
-        CHECK(peer->is_connected());
-    }
-
-    SECTION("INV mixing valid MSG_BLOCK with unknown types") {
-        message::MessageSerializer s;
-        s.write_varint(3);  // 3 items
-
-        // Item 1: Unknown type
-        s.write_uint32(999);
-        for (int i = 0; i < 32; ++i) s.write_uint8(0x11);
-
-        // Item 2: Valid MSG_BLOCK (type=2)
-        s.write_uint32(2);
-        for (int i = 0; i < 32; ++i) s.write_uint8(0x22);
-
-        // Item 3: Another unknown type
-        s.write_uint32(0x12345678);
-        for (int i = 0; i < 32; ++i) s.write_uint8(0x33);
-
-        auto payload = s.data();
-        auto inv_msg = create_test_message(magic, protocol::commands::INV, payload);
-        mock_conn->simulate_receive(inv_msg);
-        io_context.poll();
-
-        // Should process valid items and ignore unknown ones
-        CHECK(peer->is_connected());
-    }
-}
 
 TEST_CASE("Adversarial - PONG with short payload", "[adversarial][pong][security]") {
     // SECURITY: PONG must be exactly 8 bytes (nonce)
@@ -2835,7 +2668,7 @@ TEST_CASE("Adversarial - ADDR edge cases", "[adversarial][addr][security]") {
         for (int i = 0; i < 10; ++i) s.write_uint8(0);
         s.write_uint8(0xFF); s.write_uint8(0xFF);
         s.write_uint8(0); s.write_uint8(0); s.write_uint8(0); s.write_uint8(0);
-        s.write_uint16(8333);  // port
+        s.write_uint16(9590);  // port
 
         auto payload = s.data();
         auto addr_msg = create_test_message(magic, protocol::commands::ADDR, payload);
@@ -2855,7 +2688,7 @@ TEST_CASE("Adversarial - ADDR edge cases", "[adversarial][addr][security]") {
         for (int i = 0; i < 10; ++i) s.write_uint8(0);
         s.write_uint8(0xFF); s.write_uint8(0xFF);
         s.write_uint8(127); s.write_uint8(0); s.write_uint8(0); s.write_uint8(1);
-        s.write_uint16(8333);
+        s.write_uint16(9590);
 
         auto payload = s.data();
         auto addr_msg = create_test_message(magic, protocol::commands::ADDR, payload);

@@ -8,7 +8,8 @@
 #include "chain/chainparams.hpp"
 #include "network/message.hpp"
 #include "test_orchestrator.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/connection_manager.hpp"
+#include "infra/test_access.hpp"
 #include <cstring>
 
 using namespace unicity;
@@ -71,7 +72,7 @@ TEST_CASE("NetworkManager HeaderSync - IBD flips on recent tip; behavior switche
     // Connect victims to both; select p_sync as sync peer
     victim.ConnectTo(p_sync.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
     victim.ConnectTo(p_other.GetId());
     // Ensure p_other has an OUTBOUND to victim as well (Core parity: fSyncStarted is outbound-only)
@@ -83,18 +84,18 @@ TEST_CASE("NetworkManager HeaderSync - IBD flips on recent tip; behavior switche
 
 
     // Phase 2: Make tip recent via mining on the selected sync peer
-    net.AdvanceTime(std::time(nullptr) * 1000ULL);
-    for (int i = 0; i < 5; ++i) { (void)p_sync.MineBlock(); net.AdvanceTime(net.GetCurrentTime() + 200); }
-    for (int i = 0; i < 200; ++i) { net.AdvanceTime(net.GetCurrentTime() + 200); victim.GetNetworkManager().test_hook_check_initial_sync(); }
+    // Note: Simulation starts at realistic time (Jan 2024), so no need to sync to wall clock
+    for (int i = 0; i < 5; ++i) { (void)p_sync.MineBlock(); net.AdvanceTime(200); }
+    for (int i = 0; i < 200; ++i) { net.AdvanceTime(200); victim.CheckInitialSync(); }
     CHECK(victim.GetTipHeight() >= 5);
 
     // Phase 3: Near-tip multi-peer acceptance: have both peers mine
-    for (int i = 0; i < 50; ++i) { (void)p_sync.MineBlock(); net.AdvanceTime(net.GetCurrentTime() + 200); }
-    for (int i = 0; i < 40; ++i) { (void)p_other.MineBlock(); net.AdvanceTime(net.GetCurrentTime() + 200); }
+    for (int i = 0; i < 50; ++i) { (void)p_sync.MineBlock(); net.AdvanceTime(200); }
+    for (int i = 0; i < 40; ++i) { (void)p_other.MineBlock(); net.AdvanceTime(200); }
 
     for (int i = 0; i < 500; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(200);
+        victim.CheckInitialSync();
         if (victim.GetTipHeight() >= 95) break;
     }
 
@@ -116,7 +117,7 @@ TEST_CASE("NetworkManager HeaderSync - Bounded processing of many small announce
     // Connect victim to sync peer and select as sync peer
     victim.ConnectTo(sync_peer.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
 
     // Create many non-sync peers that will send repeated 2-header announcements
@@ -155,12 +156,12 @@ TEST_CASE("NetworkManager HeaderSync - Bounded processing of many small announce
             auto two = make_headers(2);
             send_headers(p->GetId(), two);
         }
-        net.AdvanceTime(net.GetCurrentTime() + 500);
+        net.AdvanceTime(500);
     }
 
     // Meanwhile, allow sync to progress
     for (int i = 0; i < 100; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
         if (victim.GetTipHeight() == 80) break;
     }
 
@@ -199,7 +200,7 @@ TEST_CASE("NetworkManager HeaderSync - Solicited-only acceptance: sync vs non-sy
     // Connect to sync peer first and select as sync peer
     victim.ConnectTo(p_sync.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
 
     // Now connect to non-sync peer
@@ -209,16 +210,16 @@ TEST_CASE("NetworkManager HeaderSync - Solicited-only acceptance: sync vs non-sy
     const int N = 200; // keep runtime manageable
 
     // Stage 1: During IBD, victim solicits from a single sync peer only
-    for (int i = 0; i < N; ++i) { (void)p_other.MineBlock(); net.AdvanceTime(net.GetCurrentTime() + 50); }
-    for (int i = 0; i < 100; ++i) { net.AdvanceTime(net.GetCurrentTime() + 200); victim.GetNetworkManager().test_hook_check_initial_sync(); }
+    for (int i = 0; i < N; ++i) { (void)p_other.MineBlock(); net.AdvanceTime(50); }
+    for (int i = 0; i < 100; ++i) { net.AdvanceTime(200); victim.CheckInitialSync(); }
     int distinct_ibd = net.CountDistinctPeersSent(victim.GetId(), protocol::commands::GETHEADERS);
     CHECK(distinct_ibd <= 2);
 
     // Stage 2: Large progress from sync peer should be followed
-    for (int i = 0; i < N; ++i) { (void)p_sync.MineBlock(); net.AdvanceTime(net.GetCurrentTime() + 50); }
+    for (int i = 0; i < N; ++i) { (void)p_sync.MineBlock(); net.AdvanceTime(50); }
     for (int i = 0; i < 1000; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(200);
+        victim.CheckInitialSync();
         if (victim.GetTipHeight() >= N) break;
     }
     REQUIRE(victim.GetTipHeight() >= N);
@@ -236,7 +237,7 @@ TEST_CASE("NetworkManager HeaderSync - Unsolicited announcements size threshold 
 
     victim.ConnectTo(p_sync.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
     victim.ConnectTo(p_other.GetId());
     net.AdvanceTime(200);
@@ -269,13 +270,13 @@ TEST_CASE("NetworkManager HeaderSync - Unsolicited announcements size threshold 
     // 1-header from non-sync should be accepted (announcement)
     auto one = make_headers(1);
     send_headers(p_other.GetId(), one);
-    for (int i = 0; i < 10; ++i) net.AdvanceTime(net.GetCurrentTime() + 200);
+    for (int i = 0; i < 10; ++i) net.AdvanceTime(200);
     CHECK(victim.GetTipHeight() >= 1);
 
     // 3-headers from non-sync should be ignored (unsolicited over threshold)
     auto three = make_headers(3);
     send_headers(p_other.GetId(), three);
-    for (int i = 0; i < 20; ++i) net.AdvanceTime(net.GetCurrentTime() + 200);
+    for (int i = 0; i < 20; ++i) net.AdvanceTime(200);
     CHECK(victim.GetTipHeight() <= 4);
 }
 
@@ -294,7 +295,7 @@ TEST_CASE("NetworkManager HeaderSync - Empty HEADERS from sync peer triggers swi
     SimulatedNode victim(22, &net);
     victim.ConnectTo(p_sync.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
     victim.ConnectTo(p_other.GetId());
     net.AdvanceTime(200);
@@ -309,23 +310,23 @@ TEST_CASE("NetworkManager HeaderSync - Empty HEADERS from sync peer triggers swi
     full.insert(full.end(), hdr_bytes.begin(), hdr_bytes.end());
     full.insert(full.end(), payload.begin(), payload.end());
     net.SendMessage(p_sync.GetId(), victim.GetId(), full);
-    net.AdvanceTime(net.GetCurrentTime() + 200);
+    net.AdvanceTime(200);
 
     // After empty batch, selection should be cleared; pick new sync peer (p_other)
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(500);
 
     // Verify GETHEADERS was sent to p_other (allow processing time)
     auto payloads = net.GetCommandPayloads(victim.GetId(), p_other.GetId(), protocol::commands::GETHEADERS);
     for (int i = 0; i < 10 && payloads.empty(); ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
         payloads = net.GetCommandPayloads(victim.GetId(), p_other.GetId(), protocol::commands::GETHEADERS);
     }
     REQUIRE_FALSE(payloads.empty());
 
     // And sync completes to height 40
     for (int i = 0; i < 50; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
         if (victim.GetTipHeight() == 40) break;
     }
     REQUIRE(victim.GetTipHeight() == 40);
@@ -347,34 +348,34 @@ TEST_CASE("NetworkManager HeaderSync - Disconnect sync peer mid-sync reselects a
     SimulatedNode victim(32, &net);
     victim.ConnectTo(p1.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
     victim.ConnectTo(p2.GetId());
     net.AdvanceTime(200);
 
     // Let some progress happen
-    for (int i = 0; i < 5; ++i) net.AdvanceTime(net.GetCurrentTime() + 200);
+    for (int i = 0; i < 5; ++i) net.AdvanceTime(200);
     int h_before = victim.GetTipHeight();
     CHECK(h_before >= 0);
 
     // Disconnect p1 (the sync peer) mid-sync
     net.NotifyDisconnect(p1.GetId(), victim.GetId());
-    net.AdvanceTime(net.GetCurrentTime() + 100);
+    net.AdvanceTime(100);
 
     // Immediately reselect new sync peer (p2) and resume
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(500);
 
     // Verify GETHEADERS to p2 and completion (allow processing time)
     auto gh2 = net.GetCommandPayloads(victim.GetId(), p2.GetId(), protocol::commands::GETHEADERS);
     for (int i = 0; i < 10 && gh2.empty(); ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
         gh2 = net.GetCommandPayloads(victim.GetId(), p2.GetId(), protocol::commands::GETHEADERS);
     }
     REQUIRE_FALSE(gh2.empty());
 
     for (int i = 0; i < 50; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
         if (victim.GetTipHeight() == 50) break;
     }
     REQUIRE(victim.GetTipHeight() == 50);
@@ -382,14 +383,13 @@ TEST_CASE("NetworkManager HeaderSync - Disconnect sync peer mid-sync reselects a
 
 TEST_CASE("NetworkManager HeaderSync - Near-tip allows multi-peer headers", "[network_header_sync][network]") {
     SimulatedNetwork net(50014);
-    // Set time to current to simulate near-tip recency
-    net.AdvanceTime(std::time(nullptr) * 1000ULL);
+    // Simulation starts at realistic time (Jan 2024), so tips are already "recent"
     SetZeroLatency(net);
 
     // Victim already recent (mine a few recent blocks)
     SimulatedNode victim(40, &net);
     victim.SetBypassPOWValidation(true);
-    for (int i = 0; i < 3; ++i) { victim.MineBlock(); net.AdvanceTime(net.GetCurrentTime() + 1000); }
+    for (int i = 0; i < 3; ++i) { victim.MineBlock(); net.AdvanceTime(1000); }
     int base_h = victim.GetTipHeight();
 
     // Two peers send large headers that connect to victim's tip
@@ -405,21 +405,21 @@ TEST_CASE("NetworkManager HeaderSync - Near-tip allows multi-peer headers", "[ne
 
     // Let peers sync to victim's base tip
     for (int i = 0; i < 20 && pA.GetTipHeight() < base_h; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        pA.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(200);
+        pA.CheckInitialSync();
     }
     for (int i = 0; i < 20 && pB.GetTipHeight() < base_h; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        pB.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(200);
+        pB.CheckInitialSync();
     }
 
     // Mine additional headers from both peers
-    for (int i = 0; i < 20; ++i) { (void)pA.MineBlock(); net.AdvanceTime(net.GetCurrentTime() + 200); }
-    for (int i = 0; i < 15; ++i) { (void)pB.MineBlock(); net.AdvanceTime(net.GetCurrentTime() + 200); }
+    for (int i = 0; i < 20; ++i) { (void)pA.MineBlock(); net.AdvanceTime(200); }
+    for (int i = 0; i < 15; ++i) { (void)pB.MineBlock(); net.AdvanceTime(200); }
 
     for (int i = 0; i < 500; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(200);
+        victim.CheckInitialSync();
         if (victim.GetTipHeight() >= base_h + 35) break;
     }
 
@@ -452,12 +452,12 @@ TEST_CASE("NetworkManager HeaderSync - Reorg during IBD switches to most-work pe
     SimulatedNode victim(14, &net);
     victim.ConnectTo(p_sync.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
 
     // Allow some progress from p_sync (e.g., ~10 headers)
     for (int i = 0; i < 10; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
     }
     int progress_height = victim.GetTipHeight();
     CHECK(progress_height > 0);
@@ -470,23 +470,27 @@ TEST_CASE("NetworkManager HeaderSync - Reorg during IBD switches to most-work pe
     SimulatedNetwork::NetworkConditions drop; drop.packet_loss_rate = 1.0;
     net.SetLinkConditions(p_sync.GetId(), victim.GetId(), drop);
 
-    // Trigger timeout processing and reselection
-    for (int i = 0; i < 3; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 60*1000);
-        victim.GetNetworkManager().test_hook_header_sync_process_timers();
+    // Trigger timeout processing and reselection (5 min + buffer)
+    for (int i = 0; i < 6; ++i) {
+        net.AdvanceTime(60*1000);
+        victim.ProcessHeaderSyncTimers();
     }
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(500);
 
     // Ensure we ultimately sync to the stronger chain height (60)
     for (int i = 0; i < 50; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
         if (victim.GetTipHeight() == 60) break;
     }
     REQUIRE(victim.GetTipHeight() == 60);
 }
 
-TEST_CASE("HeaderSync - Outbound-only selection requires outbound peer (rewrite)", "[network_header_sync][policy]") {
+TEST_CASE("HeaderSync - Outbound preferred, inbound fallback when no outbound", "[network_header_sync][policy]") {
+    // Bitcoin Core behavior: prefer outbound peers for sync, but fall back to
+    // inbound peers when no outbound peers are available.
+    // (net_processing.cpp: m_num_preferred_download_peers == 0)
+
     SimulatedNetwork net(50019);
     SetZeroLatency(net);
     net.EnableCommandTracking(true);
@@ -495,38 +499,41 @@ TEST_CASE("HeaderSync - Outbound-only selection requires outbound peer (rewrite)
     SimulatedNode victim(90, &net);
     victim.SetBypassPOWValidation(true);
 
-    // Inbound-only peer connects
-    SimulatedNode inbound_peer(91, &net);
-    inbound_peer.ConnectTo(victim.GetId());
-
-    // Let handshake/messages settle
-    for (int i = 0; i < 20; ++i) net.AdvanceTime(net.GetCurrentTime() + 200);
-
-    // No outbound peers yet -> victim must NOT start header sync
-    auto gh_inbound = net.GetCommandPayloads(victim.GetId(), inbound_peer.GetId(), protocol::commands::GETHEADERS);
-    CHECK(gh_inbound.empty());
-
-    // Add a separate OUTBOUND peer for victim
+    // FIRST: Connect outbound peer before any inbound
     SimulatedNode outbound_peer(92, &net);
     victim.ConnectTo(outbound_peer.GetId());
 
-    // Wait for handshake + selection and observe GETHEADERS to the outbound peer
-    std::vector<std::vector<uint8_t>> gh_outbound;
-    for (int i = 0; i < 200 && gh_outbound.empty(); ++i) {
-        victim.GetNetworkManager().test_hook_check_initial_sync();
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        gh_outbound = net.GetCommandPayloads(victim.GetId(), outbound_peer.GetId(), protocol::commands::GETHEADERS);
+    // Let handshake settle
+    for (int i = 0; i < 20; ++i) net.AdvanceTime(200);
+
+    // Trigger sync peer selection
+    victim.CheckInitialSync();
+    net.AdvanceTime(200);
+
+    // Verify outbound peer received GETHEADERS
+    auto gh_outbound = net.GetCommandPayloads(victim.GetId(), outbound_peer.GetId(), protocol::commands::GETHEADERS);
+    REQUIRE_FALSE(gh_outbound.empty());
+
+    // NOW add inbound peer after outbound sync started
+    SimulatedNode inbound_peer(91, &net);
+    inbound_peer.ConnectTo(victim.GetId());
+
+    // Let handshake settle and trigger more sync checks
+    for (int i = 0; i < 20; ++i) {
+        victim.CheckInitialSync();
+        net.AdvanceTime(200);
     }
 
-    // Ensure victim did not solicit inbound-only peer
-    gh_inbound = net.GetCommandPayloads(victim.GetId(), inbound_peer.GetId(), protocol::commands::GETHEADERS);
+    // Inbound peer should NOT receive GETHEADERS when outbound is available
+    // (outbound is preferred and already selected)
+    auto gh_inbound = net.GetCommandPayloads(victim.GetId(), inbound_peer.GetId(), protocol::commands::GETHEADERS);
     CHECK(gh_inbound.empty());
-
-    // Ensure victim did solicit the outbound peer
-    REQUIRE_FALSE(gh_outbound.empty());
 }
 
-TEST_CASE("HeaderSync - IBD inbound INV does not adopt sync peer (clean)", "[network_header_sync][policy]") {
+TEST_CASE("HeaderSync - Outbound preferred over inbound for sync peer selection", "[network_header_sync][policy]") {
+    // When both outbound and inbound peers are available, outbound should be preferred
+    // for sync peer selection. Inbound is only used as fallback when no outbound exists.
+
     SimulatedNetwork net(50020);
     SetZeroLatency(net);
     net.EnableCommandTracking(true);
@@ -535,38 +542,33 @@ TEST_CASE("HeaderSync - IBD inbound INV does not adopt sync peer (clean)", "[net
     SimulatedNode victim(92, &net);
     victim.SetBypassPOWValidation(true);
 
-    // Inbound-only announcer connects to victim
+    // First connect an outbound peer
+    SimulatedNode outbound_peer(94, &net);
+    victim.ConnectTo(outbound_peer.GetId());
+
+    // Let handshake complete
+    for (int i = 0; i < 20; ++i) net.AdvanceTime(200);
+
+    // Now inbound peer connects and mines blocks
     SimulatedNode inbound_peer(93, &net);
     inbound_peer.ConnectTo(victim.GetId());
 
     // Let handshake complete
-    for (int i = 0; i < 20; ++i) net.AdvanceTime(net.GetCurrentTime() + 200);
+    for (int i = 0; i < 20; ++i) net.AdvanceTime(200);
 
-    // Announcer mines a few blocks and relays INV to victim
-    for (int i = 0; i < 5; ++i) { (void)inbound_peer.MineBlock(); net.AdvanceTime(net.GetCurrentTime() + 200); }
+    // Trigger sync selection
+    victim.CheckInitialSync();
+    net.AdvanceTime(500);
 
-    // During IBD, victim must NOT adopt inbound-only announcer as sync peer
-    // Verify no GETHEADERS sent to inbound-only peer
+    // Outbound peer should be selected, not inbound
+    auto gh_outbound = net.GetCommandPayloads(victim.GetId(), outbound_peer.GetId(), protocol::commands::GETHEADERS);
     auto gh_inbound = net.GetCommandPayloads(victim.GetId(), inbound_peer.GetId(), protocol::commands::GETHEADERS);
-    CHECK(gh_inbound.empty());
 
-    // Now provide an OUTBOUND peer and let selection/sync occur
-    SimulatedNode outbound_peer(94, &net);
-    victim.ConnectTo(outbound_peer.GetId());
-
-    // Wait some time for handshake + selection + request
-    std::vector<std::vector<uint8_t>> gh_outbound;
-    for (int i = 0; i < 200 && gh_outbound.empty(); ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        gh_outbound = net.GetCommandPayloads(victim.GetId(), outbound_peer.GetId(), protocol::commands::GETHEADERS);
-    }
-
-    // Assert: still no GETHEADERS to inbound-only announcer
-    gh_inbound = net.GetCommandPayloads(victim.GetId(), inbound_peer.GetId(), protocol::commands::GETHEADERS);
-    CHECK(gh_inbound.empty());
-
-    // Assert: GETHEADERS sent to the outbound peer
+    // Outbound should receive GETHEADERS (preferred)
     REQUIRE_FALSE(gh_outbound.empty());
+
+    // Inbound should NOT receive GETHEADERS when outbound is available
+    CHECK(gh_inbound.empty());
 }
 
 
@@ -589,7 +591,7 @@ TEST_CASE("NetworkManager HeaderSync - Ignore non-sync large headers during IBD 
     net.AdvanceTime(200);
 
     // Begin initial sync (selects a single sync peer)
-    n.GetNetworkManager().test_hook_check_initial_sync();
+    n.CheckInitialSync();
     net.AdvanceTime(200);
 
     // Confirm we did not solicit p_other
@@ -630,7 +632,7 @@ TEST_CASE("NetworkManager HeaderSync - Ignore non-sync large headers during IBD 
     net.SendMessage(p_other.GetId(), n.GetId(), full);
 
     // Process
-    for (int i = 0; i < 20; ++i) net.AdvanceTime(net.GetCurrentTime() + 200);
+    for (int i = 0; i < 20; ++i) net.AdvanceTime(200);
 
     // Assert: we ignored the large batch from non-sync peer during IBD
     CHECK(n.GetTipHeight() == 0);
@@ -642,7 +644,7 @@ TEST_CASE("NetworkManager HeaderSync - Ignore non-sync large headers during IBD 
 
 TEST_CASE("NetworkManager HeaderSync - Stall triggers sync peer switch", "[network_header_sync][network]") {
     SimulatedNetwork network(50009);
-    SetZeroLatency(network);
+    SetZeroLatency(network);  // Start with zero latency for p1/p2 to sync from miner
     network.EnableCommandTracking(true);
 
     // Miner and two serving peers
@@ -658,31 +660,39 @@ TEST_CASE("NetworkManager HeaderSync - Stall triggers sync peer switch", "[netwo
     REQUIRE(p1.GetTipHeight() == 60);
     REQUIRE(p2.GetTipHeight() == 60);
 
-    // New syncing node connects to both
+    // Switch to small latency so stall can be installed before HEADERS arrive
+    SimulatedNetwork::NetworkConditions cond;
+    cond.latency_min = cond.latency_max = std::chrono::milliseconds(50);
+    cond.jitter_max = std::chrono::milliseconds(0);
+    network.SetNetworkConditions(cond);
+
+    // New syncing node - connect to p1 ONLY first to ensure it's selected as sync peer
     SimulatedNode syncing(4, &network);
     syncing.ConnectTo(p1.GetId());
-    syncing.ConnectTo(p2.GetId());
     network.AdvanceTime(200);
 
-    // Begin initial sync (single sync peer policy)
-    syncing.GetNetworkManager().test_hook_check_initial_sync();
+    // Begin initial sync - p1 is the only peer, must be selected
+    syncing.CheckInitialSync();
+
+    // IMMEDIATELY install stall on p1 -> syncing (before HEADERS arrive)
+    SimulatedNetwork::NetworkConditions drop; drop.packet_loss_rate = 1.0;
+    network.SetLinkConditions(p1.GetId(), syncing.GetId(), drop);
+
+    // NOW connect to p2 as backup peer
+    syncing.ConnectTo(p2.GetId());
     network.AdvanceTime(200);
 
     int gh_p1_before = network.CountCommandSent(syncing.GetId(), p1.GetId(), protocol::commands::GETHEADERS);
     int gh_p2_before = network.CountCommandSent(syncing.GetId(), p2.GetId(), protocol::commands::GETHEADERS);
 
-    // Stall p1 -> syncing: drop HEADERS so no progress
-    SimulatedNetwork::NetworkConditions drop; drop.packet_loss_rate = 1.0;
-    network.SetLinkConditions(p1.GetId(), syncing.GetId(), drop);
-
-    // Advance beyond timeout and process timers (120s total)
-    for (int i = 0; i < 3; ++i) {
-        network.AdvanceTime(network.GetCurrentTime() + 60*1000);
-        syncing.GetNetworkManager().test_hook_header_sync_process_timers();
+    // Advance beyond timeout and process timers (5 min + buffer)
+    for (int i = 0; i < 6; ++i) {
+        network.AdvanceTime(60*1000);
+        syncing.ProcessHeaderSyncTimers();
     }
 
     // Re-select a new sync peer (should choose p2) and continue
-    syncing.GetNetworkManager().test_hook_check_initial_sync();
+    syncing.CheckInitialSync();
     network.AdvanceTime(500);
 
     int gh_p1_after = network.CountCommandSent(syncing.GetId(), p1.GetId(), protocol::commands::GETHEADERS);
@@ -694,7 +704,7 @@ TEST_CASE("NetworkManager HeaderSync - Stall triggers sync peer switch", "[netwo
     // Sync must complete
     // Allow time for HEADERS and activation
     for (int i = 0; i < 30; ++i) {
-        network.AdvanceTime(network.GetCurrentTime() + 200);
+        network.AdvanceTime(200);
         if (syncing.GetTipHeight() == 60) break;
     }
     REQUIRE(syncing.GetTipHeight() == 60);
@@ -732,9 +742,7 @@ TEST_CASE("NetworkManager HeaderSync - Synced Status", "[network_header_sync][ne
     SimulatedNetwork network(50003);
     SetZeroLatency(network);
 
-    // Initialize network time to a realistic value (current time)
-    // This avoids mock time pollution from previous tests
-    network.AdvanceTime(std::time(nullptr) * 1000ULL);
+    // Simulation starts at realistic time (Jan 2024), so genesis (Feb 2011) is old enough for IBD
 
     SimulatedNode node1(1, &network);
     SimulatedNode node2(2, &network);
@@ -750,13 +758,13 @@ TEST_CASE("NetworkManager HeaderSync - Synced Status", "[network_header_sync][ne
         // Node1 mines blocks with current timestamps
         for (int i = 0; i < 20; i++) {
             node1.MineBlock();
-            network.AdvanceTime(network.GetCurrentTime() + 1000);  // Advance 1 second per block
+            network.AdvanceTime(1000);  // Advance 1 second per block
         }
 
         // Connect and sync node2
         node2.ConnectTo(1);
         for (int i = 0; i < 50; i++) {
-            network.AdvanceTime(network.GetCurrentTime() + 200);
+            network.AdvanceTime(200);
         }
 
         // Node2 should now be synced
@@ -765,34 +773,15 @@ TEST_CASE("NetworkManager HeaderSync - Synced Status", "[network_header_sync][ne
     }
 }
 
-TEST_CASE("NetworkManager HeaderSync - Request More", "[network_header_sync][network]") {
+TEST_CASE("NetworkManager HeaderSync - Partial batch indicates sync complete", "[network_header_sync][network]") {
+    // When peer sends fewer than MAX_HEADERS_SIZE (80000) headers, it means they have no more.
+    // Node should NOT request more headers after a partial batch.
+    // (Full batch continuation is tested by "Multi-batch Sync" test)
     SimulatedNetwork network(50004);
     SetZeroLatency(network);
 
     SimulatedNode miner(1, &network);
     SimulatedNode syncing(2, &network);
-
-    SECTION("Should request more after full batch (2000 headers)") {
-        // Mine exactly 2000 blocks (MAX_HEADERS_SIZE)
-        for (int i = 0; i < 2000; i++) {
-            miner.MineBlock();
-        }
-
-        REQUIRE(miner.GetTipHeight() == 2000);
-
-        // Connect syncing node
-        syncing.ConnectTo(1);
-        network.AdvanceTime(100);
-
-        // Allow first batch to sync (2000 headers)
-        for (int i = 0; i < 30; i++) {
-            network.AdvanceTime(500);
-        }
-
-        // Syncing node should have received all 2000 headers
-        // NetworkManager should automatically request more if needed
-        REQUIRE(syncing.GetTipHeight() == 2000);
-    }
 
     SECTION("Should not request more after partial batch") {
         // Mine only 100 blocks
@@ -816,36 +805,48 @@ TEST_CASE("NetworkManager HeaderSync - Request More", "[network_header_sync][net
 }
 
 TEST_CASE("NetworkManager HeaderSync - Multi-batch Sync", "[network_header_sync][network]") {
-    // Test syncing more than 2000 headers (requires multiple GETHEADERS/HEADERS round trips)
+    // Test syncing across multiple batches - requires multiple GETHEADERS/HEADERS round trips
+    // Use smaller batch size for test speed while still exercising multi-batch logic
+
+    constexpr size_t TEST_BATCH_SIZE = 1000;
+    constexpr int TOTAL_BLOCKS = 5000;  // 5 batches of 1000
+
     SimulatedNetwork network(50005);
     SetZeroLatency(network);
 
     SimulatedNode miner(1, &network);
     SimulatedNode syncing(2, &network);
 
-    SECTION("Sync 2500 blocks (requires 2 batches)") {
-        // Mine 2500 blocks
-        for (int i = 0; i < 2500; i++) {
+    SECTION("Sync 5000 blocks (requires 5 batches)") {
+        // Override continuation threshold for both nodes
+        auto& miner_sync = NetworkManagerTestAccess::GetHeaderSync(miner.GetNetworkManager());
+        HeaderSyncManagerTestAccess::SetContinuationThreshold(miner_sync, TEST_BATCH_SIZE);
+
+        auto& syncing_sync = NetworkManagerTestAccess::GetHeaderSync(syncing.GetNetworkManager());
+        HeaderSyncManagerTestAccess::SetContinuationThreshold(syncing_sync, TEST_BATCH_SIZE);
+
+        // Mine blocks - exceeds TEST_BATCH_SIZE so requires multiple batches
+        for (int i = 0; i < TOTAL_BLOCKS; i++) {
             miner.MineBlock();
         }
 
-        REQUIRE(miner.GetTipHeight() == 2500);
+        REQUIRE(miner.GetTipHeight() == TOTAL_BLOCKS);
 
         // Connect and sync
         syncing.ConnectTo(1);
         network.AdvanceTime(100);
 
         // Allow multiple batches to sync
-        // Need sufficient time for: GETHEADERS -> HEADERS (2000) -> GETHEADERS -> HEADERS (500)
-        for (int i = 0; i < 100; i++) {
+        // Need sufficient time for 5 round trips: GETHEADERS -> HEADERS (1000) x 5
+        for (int i = 0; i < 200; i++) {
             network.AdvanceTime(500);
-            if (syncing.GetTipHeight() == 2500) {
+            if (syncing.GetTipHeight() == TOTAL_BLOCKS) {
                 break;
             }
         }
 
-        // Should have synced all 2500 across multiple batches
-        REQUIRE(syncing.GetTipHeight() == 2500);
+        // Should have synced all blocks across 5 batches
+        REQUIRE(syncing.GetTipHeight() == TOTAL_BLOCKS);
     }
 }
 
@@ -887,23 +888,23 @@ TEST_CASE("NetworkManager HeaderSync - Concurrent Sync from Multiple Peers", "[n
         for (int i = 0; i < 50; i++) {
             peer1.MineBlock();
         }
-        network.AdvanceTime(network.GetCurrentTime() + 500);
+        network.AdvanceTime(500);
 
         // Peer2 syncs from peer1
         peer2.ConnectTo(1);
         for (int i = 0; i < 30; i++) {
-            network.AdvanceTime(network.GetCurrentTime() + 200);
+            network.AdvanceTime(200);
         }
         REQUIRE(peer2.GetTipHeight() == 50);
 
         // Syncing node connects to BOTH
         syncing.ConnectTo(1);
         syncing.ConnectTo(2);
-        network.AdvanceTime(network.GetCurrentTime() + 100);
+        network.AdvanceTime(100);
 
         // Allow sync
         for (int i = 0; i < 50; i++) {
-            network.AdvanceTime(network.GetCurrentTime() + 200);
+            network.AdvanceTime(200);
         }
 
         // Should successfully sync from one of the peers

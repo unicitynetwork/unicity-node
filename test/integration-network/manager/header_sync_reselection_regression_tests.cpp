@@ -29,9 +29,9 @@ TEST_CASE("HeaderSync - Reselection after stall and empty HEADERS can reuse peer
     SimulatedNode p2(12, &net);
     p1.ConnectTo(miner.GetId());
     p2.ConnectTo(miner.GetId());
-    uint64_t t = 1000; net.AdvanceTime(t);
-    for (int i = 0; i < 20 && p1.GetTipHeight() < 30; ++i) { t += 200; net.AdvanceTime(t); p1.GetNetworkManager().test_hook_check_initial_sync(); }
-    for (int i = 0; i < 20 && p2.GetTipHeight() < 30; ++i) { t += 200; net.AdvanceTime(t); p2.GetNetworkManager().test_hook_check_initial_sync(); }
+    net.AdvanceTime(1000);
+    for (int i = 0; i < 20 && p1.GetTipHeight() < 30; ++i) { net.AdvanceTime(200); p1.CheckInitialSync(); }
+    for (int i = 0; i < 20 && p2.GetTipHeight() < 30; ++i) { net.AdvanceTime(200); p2.CheckInitialSync(); }
     REQUIRE(p1.GetTipHeight() == 30);
     REQUIRE(p2.GetTipHeight() == 30);
 
@@ -39,11 +39,11 @@ TEST_CASE("HeaderSync - Reselection after stall and empty HEADERS can reuse peer
     SimulatedNode victim(13, &net);
     // Connect victim to p1 first to force initial sync selection to p1
     victim.ConnectTo(p1.GetId());
-    t += 200; net.AdvanceTime(t);
+    net.AdvanceTime(200);
 
     // NOW connect to p2 (will be available for reselection)
     victim.ConnectTo(p2.GetId());
-    t += 200; net.AdvanceTime(t);
+    net.AdvanceTime(200);
 
     int sync_peer_id = p1.GetId();
     int other_peer_id = p2.GetId();
@@ -55,8 +55,8 @@ TEST_CASE("HeaderSync - Reselection after stall and empty HEADERS can reuse peer
         net.SetLinkConditions(sync_peer_id, victim.GetId(), drop);
 
         // Trigger initial sync selection to p1 (now stalled)
-        victim.GetNetworkManager().test_hook_check_initial_sync();
-        t += 100; net.AdvanceTime(t);
+        victim.CheckInitialSync();
+        net.AdvanceTime(100);
 
         // Verify GETHEADERS went to p1 at least once
         int gh_p1_initial = net.CountCommandSent(victim.GetId(), p1.GetId(), commands::GETHEADERS);
@@ -65,17 +65,17 @@ TEST_CASE("HeaderSync - Reselection after stall and empty HEADERS can reuse peer
         // Record baseline GETHEADERS to other peer
         int gh_other_baseline = net.CountCommandSent(victim.GetId(), other_peer_id, commands::GETHEADERS);
 
-        // Advance beyond stall timeout and process timers (ProcessTimers itself calls CheckInitialSync on stall)
-        for (int i = 0; i < 4; ++i) {
-            t += 60 * 1000;
-            net.AdvanceTime(t);
-            victim.GetNetworkManager().test_hook_header_sync_process_timers();
+        // Advance beyond stall timeout (5 min) and process timers
+        for (int i = 0; i < 6; ++i) {
+            net.AdvanceTime(60 * 1000);
+            victim.ProcessHeaderSyncTimers();
         }
 
-        // Poll for GETHEADERS to other peer increasing beyond baseline
+        // Trigger re-selection after stall and poll for GETHEADERS to other peer
         bool switched = false;
         for (int i = 0; i < 20; ++i) {
-            t += 200; net.AdvanceTime(t);
+            net.AdvanceTime(200);
+            victim.CheckInitialSync();
             int gh_now = net.CountCommandSent(victim.GetId(), other_peer_id, commands::GETHEADERS);
             if (gh_now > gh_other_baseline) { switched = true; break; }
         }
@@ -107,14 +107,14 @@ TEST_CASE("HeaderSync - Reselection after stall and empty HEADERS can reuse peer
 
         // Inject empty HEADERS from current sync peer
         net.SendMessage(sync_peer_id, victim.GetId(), full);
-        for (int i = 0; i < 5; ++i) { t += 200; net.AdvanceTime(t); }
+        for (int i = 0; i < 5; ++i) { net.AdvanceTime(200); }
 
         // Verify NO reselection occurs (Bitcoin Core sticks with sync peer)
         // Try multiple times to give reselection a chance (it shouldn't happen)
         bool incorrectly_reselected = false;
         for (int i = 0; i < 20; ++i) {
-            t += 200; net.AdvanceTime(t);
-            victim.GetNetworkManager().test_hook_check_initial_sync();
+            net.AdvanceTime(200);
+            victim.CheckInitialSync();
             int gh_p1_now = net.CountCommandSent(victim.GetId(), p1.GetId(), commands::GETHEADERS);
             int gh_p2_now = net.CountCommandSent(victim.GetId(), p2.GetId(), commands::GETHEADERS);
             if (gh_p1_now > gh_p1_base || gh_p2_now > gh_p2_base) { incorrectly_reselected = true; break; }

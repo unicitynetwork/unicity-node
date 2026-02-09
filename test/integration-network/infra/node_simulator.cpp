@@ -31,17 +31,20 @@ CBlockHeader NodeSimulator::CreateDummyHeader(const uint256& prev_hash, uint32_t
         header.minerAddress.data()[i] = dis_byte(gen);
     }
 
-    // Set dummy RandomX hash (needed for commitment check)
-    header.hashRandomX.SetHex("0000000000000000000000000000000000000000000000000000000000000000");
+    // Set dummy RandomX hash that is NOT null (passes IsNull() check)
+    // This allows headers to pass PoW commitment check when bypass is disabled,
+    // enabling tests to exercise continuity checks rather than failing at PoW.
+    // Note: SendInvalidPoWHeaders explicitly sets hashRandomX.SetNull() for PoW testing.
+    header.hashRandomX.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
 
     return header;
 }
 
-void NodeSimulator::SendOrphanHeaders(int peer_node_id, size_t count) {
-    // To trigger orphan-limit DoS protection, we need:
-    // 1. First header must connect to victim's known chain
-    // 2. Subsequent headers have random parents (orphans)
-    // This passes the "first header connects" check but creates many orphans
+void NodeSimulator::SendUnconnectingHeaders(int peer_node_id, size_t count) {
+    // Send headers with random (unknown) parents. These will be discarded by the
+    // recipient and trigger GETHEADERS requests to fill the gap.
+    // Previously these filled an "orphan pool" but that infrastructure was removed.
+    // The first header connects to victim's tip to pass initial checks.
 
     std::vector<CBlockHeader> headers;
     std::random_device rd;
@@ -51,7 +54,7 @@ void NodeSimulator::SendOrphanHeaders(int peer_node_id, size_t count) {
     CBlockHeader first_header = CreateDummyHeader(GetTipHash(), params_->GenesisBlock().nBits);
     headers.push_back(first_header);
 
-    // Remaining headers are orphans (random parents)
+    // Remaining headers have random parents (unconnecting)
     for (size_t i = 1; i < count; i++) {
         // Random prev_hash - won't exist in victim's chain
         uint256 random_prev_hash;
@@ -80,7 +83,7 @@ void NodeSimulator::SendOrphanHeaders(int peer_node_id, size_t count) {
     full_message.insert(full_message.end(), header_bytes.begin(), header_bytes.end());
     full_message.insert(full_message.end(), payload.begin(), payload.end());
 
-    // Inject directly into SimulatedNetwork, bypassing normal P2P validation
+    // Inject directly into SimulatedNetwork
     sim_network_->SendMessage(GetId(), peer_node_id, full_message);
 }
 
@@ -198,7 +201,7 @@ uint256 NodeSimulator::MineBlockPrivate(const std::string& miner_address) {
 
         uint256 block_hash = header.GetHash();
 
-        // DO NOT call relay_block() - keep it private!
+        // Block relay handled via ChainTipEvent - no need for manual relay
         return block_hash;
     }
 
@@ -278,7 +281,7 @@ std::pair<uint256, uint256> NodeSimulator::SendOutOfOrderHeaders(int peer_node_i
     parent_header.hashRandomX.SetNull();  // Bypass PoW validation
     uint256 parent_hash = parent_header.GetHash();
 
-    // Create child header (builds on parent - will be orphan if sent first)
+    // Create child header (builds on parent - will be unconnecting if sent first)
     CBlockHeader child_header = CreateDummyHeader(parent_hash, params_->GenesisBlock().nBits);
     child_header.nTime = parent_header.nTime + 1;  // Ensure different hash
     child_header.hashRandomX.SetNull();  // Bypass PoW validation
@@ -303,13 +306,13 @@ std::pair<uint256, uint256> NodeSimulator::SendOutOfOrderHeaders(int peer_node_i
         sim_network_->SendMessage(GetId(), peer_node_id, full_message);
     };
 
-    // Send CHILD FIRST (will become orphan - parent unknown)
+    // Send CHILD FIRST (unconnecting - parent unknown, will trigger GETHEADERS)
     send_header(child_header);
 
-    // Process the orphan
+    // Process the message
     sim_network_->ProcessMessages(sim_network_->GetCurrentTime());
 
-    // Send PARENT SECOND (should trigger orphan resolution)
+    // Send PARENT SECOND
     send_header(parent_header);
 
     return {parent_hash, child_hash};
@@ -366,6 +369,25 @@ void NodeSimulator::SendValidSideChainHeaders(int peer_node_id, const uint256& f
     full_message.insert(full_message.end(), payload.begin(), payload.end());
 
     // Inject message directly into network
+    sim_network_->SendMessage(GetId(), peer_node_id, full_message);
+}
+
+void NodeSimulator::SendValidHeaders(int peer_node_id, const std::vector<CBlockHeader>& headers) {
+    // Send valid headers from our chain through P2P layer
+    // This goes through HeaderSyncManager::HandleHeadersMessage() on the receiver
+    message::HeadersMessage msg;
+    msg.headers = headers;
+    auto payload = msg.serialize();
+
+    protocol::MessageHeader msg_header(protocol::magic::REGTEST, protocol::commands::HEADERS, static_cast<uint32_t>(payload.size()));
+    uint256 hash = Hash(payload);
+    std::memcpy(msg_header.checksum.data(), hash.begin(), 4);
+    auto header_bytes = message::serialize_header(msg_header);
+
+    std::vector<uint8_t> full_message;
+    full_message.insert(full_message.end(), header_bytes.begin(), header_bytes.end());
+    full_message.insert(full_message.end(), payload.begin(), payload.end());
+
     sim_network_->SendMessage(GetId(), peer_node_id, full_message);
 }
 

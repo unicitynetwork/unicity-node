@@ -675,7 +675,7 @@ TEST_CASE("CBlockHeader alpha-release compatibility", "[block][alpha]") {
         genesis.nVersion = 1;
         genesis.hashPrevBlock.SetNull();
         genesis.minerAddress.SetNull();
-        genesis.nTime = 1296688602;
+        genesis.nTime = 1760549555;
         genesis.nBits = 0x207fffff;
         genesis.nNonce = 2;
         genesis.hashRandomX.SetNull();
@@ -693,6 +693,6 @@ TEST_CASE("CBlockHeader alpha-release compatibility", "[block][alpha]") {
         REQUIRE(our_hash == alpha_hash);
 
         // Verify against expected regtest genesis hash
-        REQUIRE(our_hash.GetHex() == "0233b37bb6942bfb471cfd7fb95caab0e0f7b19cc8767da65fbef59eb49e45bd");
+        REQUIRE(our_hash.GetHex() == "0555faa88836f4ce189235a28279af4614432234b6f7e2f350e4fc0dadb1ffa7");
     }
 }

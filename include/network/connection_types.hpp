@@ -24,7 +24,7 @@ enum class ConnectionType {
 
   /**
    * These are the default connections that we use to connect with the
-   * network. We relay blocks, transactions, headers, and addresses.
+   * network. We relay blocks (headers) and addresses.
    * We automatically attempt to open MAX_OUTBOUND_FULL_RELAY_CONNECTIONS
    * using addresses from our AddrMan.
    */
@@ -32,13 +32,13 @@ enum class ConnectionType {
 
   /**
    * Block-relay-only connections are outbound connections that do NOT
-   * participate in address relay. They only relay blocks and headers.
+   * participate in address relay. They only relay blocks.
    *
    *
    * 2 block-relay-only connections in addition to 8 full-relay connections.
    *
    * These peers:
-   * - Receive and relay blocks/headers
+   * - Receive and relay blocks
    * - Do NOT send ADDR messages
    * - Do NOT process incoming ADDR messages
    * - Do NOT respond to GETADDR
@@ -63,12 +63,12 @@ enum class ConnectionType {
    * - move node addresses from New to Tried table, so that we have more
    *   connectable addresses in our AddrMan.
    *
-   * We make these connections approximately every FEELER_INTERVAL (2 minutes).
+   * We make these connections approximately every FEELER_INTERVAL.
    */
   FEELER,
 };
 
-//Convert ConnectionType enum to a string value
+// Convert ConnectionType enum to a string value
 std::string ConnectionTypeAsString(ConnectionType conn_type);
 
 // Check if this connection type participates in address relay.

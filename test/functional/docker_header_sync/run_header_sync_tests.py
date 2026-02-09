@@ -65,11 +65,11 @@ def create_version_payload() -> bytes:
     # addr_recv
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += b"\x00" * 10 + b"\xff\xff" + socket.inet_aton("127.0.0.1")
-    payload += struct.pack(">H", 8333)
+    payload += struct.pack(">H", 9590)
     # addr_from
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += b"\x00" * 10 + b"\xff\xff" + socket.inet_aton("127.0.0.1")
-    payload += struct.pack(">H", 8333)
+    payload += struct.pack(">H", 9590)
     # nonce
     payload += struct.pack("<Q", random.getrandbits(64))
     # user_agent
@@ -260,8 +260,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x0c/HeaderSync/"
     payload += struct.pack("<i", 0)

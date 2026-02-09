@@ -7,10 +7,12 @@
 #include "catch_amalgamated.hpp"
 #include "../infra/simulated_network.hpp"
 #include "../infra/simulated_node.hpp"
+#include "infra/test_access.hpp"
+#include "infra/mock_transport.hpp"
 #include "../test_orchestrator.hpp"
 #include "network/addr_manager.hpp"
-#include "network/peer_discovery_manager.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/addr_relay_manager.hpp"
+#include "network/connection_manager.hpp"
 #include "network/protocol.hpp"
 #include "util/netaddress.hpp"
 
@@ -19,6 +21,37 @@
 
 using namespace unicity::test;
 using namespace unicity;
+using unicity::test::AddrRelayManagerTestAccess;
+
+namespace {
+
+// Transport that records the address of each connect() call and always succeeds
+class AddressTrackingTransport : public network::Transport {
+public:
+    struct Attempt { std::string address; uint16_t port; };
+
+    const std::vector<Attempt>& attempts() const { return attempts_; }
+
+    network::TransportConnectionPtr connect(const std::string& address, uint16_t port,
+                                            network::ConnectCallback callback) override {
+        attempts_.push_back({address, port});
+        auto conn = std::make_shared<network::MockTransportConnection>(address, port);
+        conn->set_inbound(false);
+        if (callback) callback(true);
+        return conn;
+    }
+
+    bool listen(uint16_t, std::function<void(network::TransportConnectionPtr)>) override { return true; }
+    void stop_listening() override {}
+    void run() override {}
+    void stop() override {}
+    bool is_running() const override { return true; }
+
+private:
+    std::vector<Attempt> attempts_;
+};
+
+} // namespace
 
 // Helper to create a NetworkAddress from an IP string
 static protocol::NetworkAddress MakeNetworkAddress(const std::string& ip_str, uint16_t port = 18444) {
@@ -52,15 +85,12 @@ TEST_CASE("Outbound diversity - same netgroup addresses rejected", "[network][ou
     // Test that AttemptOutboundConnections skips addresses from netgroups
     // that already have outbound connections
 
-    SimulatedNetwork network;
-    SimulatedNode node(0, &network);
-    TestOrchestrator orch(&network);
-
-    // Access the AddrManager through the discovery manager
-    auto& discovery = node.GetNetworkManager().discovery_manager_for_test();
-    auto& addr_mgr = discovery.addr_manager_for_test();
-
     SECTION("AddrManager seeded with same /16 - only one selected per cycle") {
+        asio::io_context io;
+        network::ConnectionManager plm(io, network::ConnectionManager::Config{});
+        network::AddrRelayManager pdm(&plm);
+        auto& addr_mgr = AddrRelayManagerTestAccess::GetAddrManager(pdm);
+
         // Seed AddrManager with 10 addresses all from same /16 (8.50.x.x)
         // Using public routable IPs since AddrManager rejects RFC1918
         int added_count = 0;
@@ -79,41 +109,39 @@ TEST_CASE("Outbound diversity - same netgroup addresses rejected", "[network][ou
         REQUIRE(util::GetNetgroup("8.50.0.1") == "8.50");
         REQUIRE(util::GetNetgroup("8.50.0.10") == "8.50");
 
-        // Track connection attempts
-        std::vector<std::string> attempted_ips;
-        std::set<std::string> attempted_netgroups;
+        auto transport = std::make_shared<AddressTrackingTransport>();
+        plm.Init(transport, [](network::Peer*){}, [](){ return true; },
+                 protocol::magic::REGTEST, /*local_nonce=*/42);
 
-        // Call AttemptOutboundConnections with a mock callback
-        auto& peer_mgr = node.GetNetworkManager().peer_manager();
-        peer_mgr.AttemptOutboundConnections(
-            []() { return true; },  // is_running
-            [&](const protocol::NetworkAddress& addr, network::ConnectionType /*conn_type*/) -> network::ConnectionResult {
-                auto ip_opt = addr.to_string();
-                if (ip_opt) {
-                    attempted_ips.push_back(*ip_opt);
-                    auto ng = util::GetNetgroup(*ip_opt);
-                    attempted_netgroups.insert(ng);
-                }
-                // Return success so it counts as "connected"
-                return network::ConnectionResult::Success;
-            }
-        );
+        plm.AttemptOutboundConnections(/*current_height=*/0);
+        io.poll();
+        io.restart();
+
+        // Check connection attempts
+        std::set<std::string> attempted_netgroups;
+        for (const auto& a : transport->attempts()) {
+            attempted_netgroups.insert(util::GetNetgroup(a.address));
+        }
 
         // With outbound diversity enforcement:
         // - First address from 8.50.x.x should be attempted
         // - Subsequent addresses from same /16 should be SKIPPED
-        INFO("Attempted " << attempted_ips.size() << " connections");
+        INFO("Attempted " << transport->attempts().size() << " connections");
         INFO("Unique netgroups: " << attempted_netgroups.size());
 
         // Should only attempt ONE connection (all same netgroup)
-        REQUIRE(attempted_ips.size() == 1);
+        REQUIRE(transport->attempts().size() == 1);
         REQUIRE(attempted_netgroups.size() == 1);
         REQUIRE(attempted_netgroups.count("8.50") == 1);
     }
 
     SECTION("AddrManager seeded with diverse /16s - multiple selected") {
+        asio::io_context io;
+        network::ConnectionManager plm(io, network::ConnectionManager::Config{});
+        network::AddrRelayManager pdm(&plm);
+        auto& addr_mgr = AddrRelayManagerTestAccess::GetAddrManager(pdm);
+
         // Seed AddrManager with addresses from different /16 subnets
-        // Using public routable IPs
         REQUIRE(addr_mgr.add(MakeNetworkAddress("8.1.0.1", 18444)));
         REQUIRE(addr_mgr.add(MakeNetworkAddress("8.2.0.1", 18444)));
         REQUIRE(addr_mgr.add(MakeNetworkAddress("8.3.0.1", 18444)));
@@ -122,19 +150,18 @@ TEST_CASE("Outbound diversity - same netgroup addresses rejected", "[network][ou
         // Verify they're in different netgroups
         REQUIRE(util::GetNetgroup("8.1.0.1") != util::GetNetgroup("8.2.0.1"));
 
-        std::set<std::string> attempted_netgroups;
+        auto transport = std::make_shared<AddressTrackingTransport>();
+        plm.Init(transport, [](network::Peer*){}, [](){ return true; },
+                 protocol::magic::REGTEST, /*local_nonce=*/43);
 
-        auto& peer_mgr = node.GetNetworkManager().peer_manager();
-        peer_mgr.AttemptOutboundConnections(
-            []() { return true; },
-            [&](const protocol::NetworkAddress& addr, network::ConnectionType /*conn_type*/) -> network::ConnectionResult {
-                auto ip_opt = addr.to_string();
-                if (ip_opt) {
-                    attempted_netgroups.insert(util::GetNetgroup(*ip_opt));
-                }
-                return network::ConnectionResult::Success;
-            }
-        );
+        plm.AttemptOutboundConnections(/*current_height=*/0);
+        io.poll();
+        io.restart();
+
+        std::set<std::string> attempted_netgroups;
+        for (const auto& a : transport->attempts()) {
+            attempted_netgroups.insert(util::GetNetgroup(a.address));
+        }
 
         // Should attempt connections to multiple netgroups (up to max_outbound)
         INFO("Attempted connections to " << attempted_netgroups.size() << " unique netgroups");
@@ -146,26 +173,28 @@ TEST_CASE("Outbound diversity - existing outbound blocks same netgroup", "[netwo
     // This test verifies that when we already have an outbound connection to a netgroup,
     // we don't attempt additional connections to that same netgroup.
     //
-    // Since the simulated network uses internal addresses for actual connections,
-    // we test this by directly checking the peer_manager's behavior.
+    // Uses standalone PLM with AddressTrackingTransport: first connect to 8.50.x.x,
+    // then attempt outbound to verify that netgroup is skipped.
 
-    SimulatedNetwork network;
-    SimulatedNode nodeA(0, &network);
-    // Node B with a public routable address
-    SimulatedNode nodeB(1, &network, "8.50.0.100");
-    TestOrchestrator orch(&network);
+    asio::io_context io;
+    network::ConnectionManager plm(io, network::ConnectionManager::Config{});
+    network::AddrRelayManager pdm(&plm);
+    auto& addr_mgr = AddrRelayManagerTestAccess::GetAddrManager(pdm);
 
-    // Connect nodeA -> nodeB (outbound from A's perspective)
-    REQUIRE(nodeA.ConnectTo(1, "8.50.0.100"));
-    REQUIRE(orch.WaitForConnection(nodeA, nodeB));
+    auto transport = std::make_shared<AddressTrackingTransport>();
+    plm.Init(transport, [](network::Peer*){}, [](){ return true; },
+             protocol::magic::REGTEST, /*local_nonce=*/44);
 
-    // Verify nodeA has an outbound connection
-    REQUIRE(nodeA.GetOutboundPeerCount() == 1);
+    // First, establish an outbound connection to 8.50.x.x
+    auto existing_addr = MakeNetworkAddress("8.50.0.100", 18444);
+    auto rc = plm.ConnectTo(existing_addr, network::NetPermissionFlags::None, /*chain_height=*/0);
+    REQUIRE(rc == network::ConnectionResult::Success);
+    io.poll();
+    io.restart();
 
-    // Seed nodeA's AddrManager with more addresses from same /16 (8.50.x.x)
-    auto& discovery = nodeA.GetNetworkManager().discovery_manager_for_test();
-    auto& addr_mgr = discovery.addr_manager_for_test();
+    REQUIRE(plm.peer_count() == 1);
 
+    // Seed AddrManager with more addresses from same /16 (8.50.x.x)
     int added = 0;
     for (int i = 1; i <= 5; i++) {
         std::string ip = "8.50.0." + std::to_string(i);
@@ -175,26 +204,18 @@ TEST_CASE("Outbound diversity - existing outbound blocks same netgroup", "[netwo
     }
     INFO("Added " << added << " addresses from 8.50.x.x netgroup");
 
-    // Track new connection attempts
-    std::vector<std::string> new_attempts;
+    // Record how many attempts before AttemptOutbound
+    size_t attempts_before = transport->attempts().size();
 
-    auto& peer_mgr = nodeA.GetNetworkManager().peer_manager();
-    peer_mgr.AttemptOutboundConnections(
-        []() { return true; },
-        [&](const protocol::NetworkAddress& addr, network::ConnectionType /*conn_type*/) -> network::ConnectionResult {
-            auto ip_opt = addr.to_string();
-            if (ip_opt) {
-                new_attempts.push_back(*ip_opt);
-            }
-            return network::ConnectionResult::Success;
-        }
-    );
+    plm.AttemptOutboundConnections(/*current_height=*/0);
+    io.poll();
+    io.restart();
 
-    // With existing outbound to 8.50.x.x, no NEW connections to that netgroup should be attempted
-    INFO("New attempts: " << new_attempts.size());
-    for (const auto& ip : new_attempts) {
-        auto ng = util::GetNetgroup(ip);
-        INFO("  Attempted " << ip << " (netgroup: " << ng << ")");
+    // Check new connection attempts (skip the first one which was our manual ConnectTo)
+    INFO("New attempts: " << (transport->attempts().size() - attempts_before));
+    for (size_t i = attempts_before; i < transport->attempts().size(); i++) {
+        auto ng = util::GetNetgroup(transport->attempts()[i].address);
+        INFO("  Attempted " << transport->attempts()[i].address << " (netgroup: " << ng << ")");
         // Should NOT be in the 8.50 netgroup since we already have an outbound there
         REQUIRE(ng != "8.50");
     }
@@ -204,12 +225,10 @@ TEST_CASE("Outbound diversity - mixed netgroups prefer diverse selection", "[net
     // Test that when we have a mix of addresses from same and different netgroups,
     // we prefer diverse selection
 
-    SimulatedNetwork network;
-    SimulatedNode node(0, &network);
-    TestOrchestrator orch(&network);
-
-    auto& discovery = node.GetNetworkManager().discovery_manager_for_test();
-    auto& addr_mgr = discovery.addr_manager_for_test();
+    asio::io_context io;
+    network::ConnectionManager plm(io, network::ConnectionManager::Config{});
+    network::AddrRelayManager pdm(&plm);
+    auto& addr_mgr = AddrRelayManagerTestAccess::GetAddrManager(pdm);
 
     // Add 5 addresses from 8.1.x.x
     for (int i = 1; i <= 5; i++) {
@@ -226,27 +245,29 @@ TEST_CASE("Outbound diversity - mixed netgroups prefer diverse selection", "[net
         addr_mgr.add(MakeNetworkAddress("8.3.0." + std::to_string(i), 18444));
     }
 
+    auto transport = std::make_shared<AddressTrackingTransport>();
+    plm.Init(transport, [](network::Peer*){}, [](){ return true; },
+             protocol::magic::REGTEST, /*local_nonce=*/45);
+
+    plm.AttemptOutboundConnections(/*current_height=*/0);
+    io.poll();
+    io.restart();
+
     std::set<std::string> attempted_netgroups;
-    int total_attempts = 0;
+    for (const auto& a : transport->attempts()) {
+        attempted_netgroups.insert(util::GetNetgroup(a.address));
+    }
 
-    auto& peer_mgr = node.GetNetworkManager().peer_manager();
-    peer_mgr.AttemptOutboundConnections(
-        []() { return true; },
-        [&](const protocol::NetworkAddress& addr, network::ConnectionType /*conn_type*/) -> network::ConnectionResult {
-            auto ip_opt = addr.to_string();
-            if (ip_opt) {
-                attempted_netgroups.insert(util::GetNetgroup(*ip_opt));
-                total_attempts++;
-            }
-            return network::ConnectionResult::Success;
-        }
-    );
-
-    INFO("Total connection attempts: " << total_attempts);
+    INFO("Total connection attempts: " << transport->attempts().size());
     INFO("Unique netgroups attempted: " << attempted_netgroups.size());
 
     // With 15 addresses across 3 netgroups and max_outbound=8:
     // Diversity enforcement means we should attempt at most 1 per netgroup = 3 attempts
     REQUIRE(attempted_netgroups.size() == 3);
-    REQUIRE(total_attempts == 3);  // One from each netgroup, then stop (all same-netgroup skipped)
+    REQUIRE(transport->attempts().size() == 3);  // One from each netgroup, then stop
 }
+
+// Note: count_failures logic (Bitcoin Core parity net.cpp:2887) is tested via:
+// 1. Unit tests in core_parity_tests.cpp verify fCountFailure=false doesn't increment attempts
+// 2. The implementation in AttemptOutboundConnections passes count_failures based on
+//    outbound netgroup diversity: count_failures = netgroups.size() >= min(max_outbound-1, 2)

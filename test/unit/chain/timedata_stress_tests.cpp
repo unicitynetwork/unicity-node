@@ -28,7 +28,7 @@ using namespace unicity::protocol;
 
 // Helper to create unique network addresses
 static NetworkAddress MakeAddr(uint32_t id) {
-    return NetworkAddress::from_ipv4(NODE_NETWORK, id, 8333);
+    return NetworkAddress::from_ipv4(NODE_NETWORK, id, 9590);
 }
 
 //=============================================================================

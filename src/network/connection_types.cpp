@@ -27,9 +27,9 @@ bool RelaysAddr(ConnectionType conn_type) {
   switch (conn_type) {
   case ConnectionType::OUTBOUND_FULL_RELAY:
   case ConnectionType::INBOUND:
+  case ConnectionType::MANUAL:
     return true;
   case ConnectionType::BLOCK_RELAY:
-  case ConnectionType::MANUAL:
   case ConnectionType::FEELER:
     return false;
   default:

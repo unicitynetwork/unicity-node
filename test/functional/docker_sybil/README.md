@@ -51,8 +51,8 @@ python3 run_sybil_tests.py --test selective_relay
 
 All attackers are in the same /16 netgroup (172.50.x.x) to test:
 - `MAX_PER_NETGROUP_NEW` limits in address manager
-- `MAX_INBOUND_PER_NETGROUP` connection limits
-- Netgroup-based eviction behavior
+- Eviction-based netgroup limiting (~4 connections per /16)
+- Netgroup-based eviction behavior (Bitcoin Core parity)
 
 ## Test Details
 

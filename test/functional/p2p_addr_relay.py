@@ -476,10 +476,14 @@ def test_addr_relay_to_peers(peer1, peer2, peer3):
 
     Note: All peers must already be connected and handshaked.
     The relay randomly selects 1-2 peers, so we check all potential recipients.
+
+    Bitcoin Core uses AVG_ADDRESS_BROADCAST_INTERVAL = 30s mean trickle delay.
+    We match this, so we need to wait ~35-40s for relay to happen.
     """
     print("\n=== Test 4: ADDR Relay to Other Peers ===")
 
     print("  Using three pre-connected peers (relay randomly picks 1-2)")
+    print("  Note: Bitcoin Core uses ~30s mean trickle delay for ADDR relay")
 
     # Peer1 sends ADDR with new address
     # Use a routable public IP (not TEST-NET which is filtered by IsRFC5737)
@@ -491,12 +495,13 @@ def test_addr_relay_to_peers(peer1, peer2, peer3):
 
     # Check if peer2 or peer3 receives the relayed ADDR
     # Relay randomly selects 1-2 peers from eligible candidates
-    print("  Waiting for relay to peer2 or peer3...")
-    time.sleep(1)
+    # With 30s mean exponential trickle delay, wait 90s for ~95% probability
+    print("  Waiting for relay to peer2 or peer3 (up to 90s for 95% coverage)...")
 
     relayed = False
     recipient = None
-    for _ in range(10):
+    # Wait up to 90 seconds, checking every 0.5s
+    for _ in range(180):
         peer2.recv_data(timeout=0.25)
         peer3.recv_data(timeout=0.25)
         if peer2.has_message("addr"):

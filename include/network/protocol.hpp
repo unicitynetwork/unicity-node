@@ -56,7 +56,6 @@ constexpr const char* ADDR = "addr";
 constexpr const char* GETADDR = "getaddr";
 
 // Block announcements and requests
-constexpr const char* INV = "inv";
 constexpr const char* GETHEADERS = "getheaders";
 constexpr const char* HEADERS = "headers";
 
@@ -64,13 +63,6 @@ constexpr const char* HEADERS = "headers";
 constexpr const char* PING = "ping";
 constexpr const char* PONG = "pong";
 }  // namespace commands
-
-// Inventory types for INV/GETDATA messages
-// Headers-only chain: only MSG_BLOCK is needed (for block announcements)
-enum class InventoryType : uint32_t {
-  ERROR = 0,
-  MSG_BLOCK = 2,  // Used for block hash announcements (triggers GETHEADERS)
-};
 
 // Message header constants
 constexpr size_t MESSAGE_HEADER_SIZE = 24;
@@ -87,21 +79,13 @@ constexpr size_t MAX_VECTOR_ALLOCATE = 5 * 1000 * 1000;  // 5 MB - Incremental a
 
 // Network message limits
 constexpr size_t MAX_PROTOCOL_MESSAGE_LENGTH = 8010000;  // 8.01 MB - Single message limit
-constexpr size_t DEFAULT_SEND_QUEUE_SIZE = 10 * 1000 * 1000;     // 10 MB - Send queue limit per peer (enforced)
+constexpr size_t DEFAULT_SEND_QUEUE_SIZE = 10 * 1000 * 1000;     // 10 MB - Send queue limit per peer 
 constexpr size_t DEFAULT_RECV_FLOOD_SIZE = 10 * 1000 * 1000;     // 10 MB - Flood protection (enforced)
 
 // Protocol-specific limits
 constexpr unsigned int MAX_LOCATOR_SZ = 101;  // GETHEADERS/GETBLOCKS locator limit
-constexpr uint32_t MAX_INV_SIZE = 50000;      // Inventory items
-constexpr uint32_t MAX_HEADERS_SIZE = 80000;  // Headers per response 
+constexpr uint32_t MAX_HEADERS_SIZE = 80000;  // Headers per response
 constexpr uint32_t MAX_ADDR_SIZE = 1000;      // Addresses per ADDR message
-
-// DoS protection limits
-constexpr unsigned int MAX_UNKNOWN_COMMANDS_PER_MINUTE = 20;  // Disconnect after this many unknown commands in 60s
-
-// Orphan header management limits (DoS protection)
-constexpr size_t MAX_ORPHAN_HEADERS = 1000;         // Total orphans across all peers
-constexpr size_t MAX_ORPHAN_HEADERS_PER_PEER = 50;  // Max orphans per peer
 
 // Connection limits
 // Full-relay outbound: normal connections with address/transaction relay
@@ -116,11 +100,12 @@ constexpr unsigned int DEFAULT_MAX_INBOUND_CONNECTIONS = 125;
 // Timeouts and intervals (in seconds)
 constexpr int VERSION_HANDSHAKE_TIMEOUT_SEC = 60;  // 1 minute for handshake
 constexpr int PING_INTERVAL_SEC = 120;             // 2 minutes between pings
-constexpr int PING_TIMEOUT_SEC = 20 * 60;          // 20 minutes - peer must respond to ping
-constexpr int INACTIVITY_TIMEOUT_SEC = 20 * 60;    // 20 minutes
+constexpr int PING_TIMEOUT_SEC = 20 * 60;           // 20 minutes - peer must respond to ping
+constexpr int INACTIVITY_TIMEOUT_SEC = 20 * 60;     // 20 minutes
+constexpr int INACTIVITY_CHECK_INTERVAL_SEC = 60;   // Check every 60 seconds
 
 // RPC/Mining statistics constants
-constexpr int DEFAULT_HASHRATE_CALCULATION_BLOCKS = 4;  // ~10 hours on mainnet (4 × 2.4h blocks)
+constexpr int DEFAULT_HASHRATE_CALCULATION_BLOCKS = 4;  // Recent blocks for hashrate calculation
 
 // Network address constants
 constexpr size_t MAX_SUBVERSION_LENGTH = 256;
@@ -148,7 +133,7 @@ struct MessageHeader {
   void set_command(const std::string& cmd);
 };
 
-// Network address structure (30 bytes without timestamp, 34 with)
+// Network address structure (26 bytes on wire: 8 services + 16 IP + 2 port)
 struct NetworkAddress {
   uint64_t services;
   std::array<uint8_t, 16> ip;  // IPv6 format (IPv4 mapped)
@@ -195,22 +180,13 @@ struct NetworkAddress {
   [[nodiscard]] bool operator==(const NetworkAddress& other) const noexcept;
 };
 
-// Timestamped network address (34 bytes)
+// Timestamped network address (30 bytes: 4 timestamp + 26 NetworkAddress)
 struct TimestampedAddress {
   uint32_t timestamp;
   NetworkAddress address;
 
   TimestampedAddress() noexcept;
   TimestampedAddress(uint32_t ts, const NetworkAddress& addr) noexcept;
-};
-
-// Inventory vector - identifies a transaction or block
-struct InventoryVector {
-  InventoryType type;
-  uint256 hash;  // SHA256 hash
-
-  InventoryVector() noexcept;
-  InventoryVector(InventoryType t, const uint256& h) noexcept;
 };
 
 }  // namespace protocol

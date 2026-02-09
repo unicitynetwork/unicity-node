@@ -1,4 +1,4 @@
-// Block Announcement - Rewritten tests (Core-aligned)
+// Block Announcement - Basic tests (direct HEADERS)
 
 #include "catch_amalgamated.hpp"
 #include "infra/simulated_network.hpp"
@@ -19,22 +19,17 @@ static void SetZeroLatency(SimulatedNetwork& network) {
 
 static void AdvanceSeconds(SimulatedNetwork& net, int seconds) {
     for (int i = 0; i < seconds * 5; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
     }
-}
-
-static int CountINV(SimulatedNetwork& net, int from_node_id, int to_node_id) {
-    return net.CountCommandSent(from_node_id, to_node_id, protocol::commands::INV);
 }
 
 static struct TestSetup {
     TestSetup() { chain::GlobalChainParams::Select(chain::ChainType::REGTEST); }
 } setup_once;
 
-TEST_CASE("Announcement - INV on new block (immediate)", "[block_announcement][basic]") {
+TEST_CASE("Announcement - HEADERS on new block (immediate)", "[block_announcement][basic]") {
     SimulatedNetwork net(1001);
     SetZeroLatency(net);
-    net.EnableCommandTracking(true);
 
     SimulatedNode a(1, &net);
     SimulatedNode b(2, &net);
@@ -42,38 +37,22 @@ TEST_CASE("Announcement - INV on new block (immediate)", "[block_announcement][b
     b.ConnectTo(1);
     AdvanceSeconds(net, 2);
 
+    // Mine first block to exit IBD (IBD state captured before tip update)
+    (void)a.MineBlock();
+    AdvanceSeconds(net, 1);
+
+    // Mine second block - post-IBD, announced via HEADERS
+    int b_tip_before = b.GetTipHeight();
     (void)a.MineBlock();
     AdvanceSeconds(net, 2);
 
-    CHECK(b.GetTipHeight() >= 1);
+    // b should have synced
+    CHECK(b.GetTipHeight() >= b_tip_before + 1);
 }
-
-TEST_CASE("Announcement - Tip to new READY peer", "[block_announcement][ready]") {
-    SimulatedNetwork net(1002);
-    SetZeroLatency(net);
-    net.EnableCommandTracking(true);
-
-    SimulatedNode a(1, &net);
-    SimulatedNode b(2, &net);
-
-    // Build some history
-    for (int i = 0; i < 3; ++i) { (void)a.MineBlock(); AdvanceSeconds(net, 1); }
-
-    int before = CountINV(net, a.GetId(), b.GetId());
-    b.ConnectTo(1);
-    AdvanceSeconds(net, 2);
-
-    // Drive deterministic announcement with a new block after READY
-    (void)a.MineBlock();
-    AdvanceSeconds(net, 2);
-    CHECK(b.GetTipHeight() >= 4); // previously 3, should advance
-}
-
 
 TEST_CASE("Announcement - Multi-peer propagation", "[block_announcement][multi]") {
     SimulatedNetwork net(1004);
     SetZeroLatency(net);
-    net.EnableCommandTracking(true);
 
     SimulatedNode a(1, &net);
     SimulatedNode b(2, &net);
@@ -83,10 +62,15 @@ TEST_CASE("Announcement - Multi-peer propagation", "[block_announcement][multi]"
     b.ConnectTo(1); c.ConnectTo(1); d.ConnectTo(1);
     AdvanceSeconds(net, 2);
 
+    // Mine first block to exit IBD
+    (void)a.MineBlock();
+    AdvanceSeconds(net, 1);
+
     int b_tip_before = b.GetTipHeight();
     int c_tip_before = c.GetTipHeight();
     int d_tip_before = d.GetTipHeight();
 
+    // Mine second block - post-IBD, all peers receive HEADERS
     (void)a.MineBlock();
     AdvanceSeconds(net, 2);
 
@@ -95,22 +79,71 @@ TEST_CASE("Announcement - Multi-peer propagation", "[block_announcement][multi]"
     CHECK(d.GetTipHeight() >= d_tip_before + 1);
 }
 
-TEST_CASE("Announcement - Flush no-op for counts", "[block_announcement][flush]") {
-    SimulatedNetwork net(1005);
+TEST_CASE("Announcement - Competing forks propagate via HEADERS", "[block_announcement][fork]") {
+    // A and B both connected to C (hub). A and B mine competing blocks at the
+    // same height BEFORE the network processes messages. Both HEADERS reach C.
+    // This catches any optimization that skips peers already at the same height
+    // (which would break fork convergence).
+
+    SimulatedNetwork net(1010);
     SetZeroLatency(net);
     net.EnableCommandTracking(true);
 
     SimulatedNode a(1, &net);
     SimulatedNode b(2, &net);
+    SimulatedNode c(3, &net);
 
+    // Phase 1: Everyone syncs through A (B→A, C→A)
     b.ConnectTo(1);
+    c.ConnectTo(1);
     AdvanceSeconds(net, 2);
 
+    // A mines 2 blocks — announced to B and C directly
     (void)a.MineBlock();
-    AdvanceSeconds(net, 1);
+    AdvanceSeconds(net, 2);
+    (void)a.MineBlock();
+    AdvanceSeconds(net, 2);
 
-    int tip_before = b.GetTipHeight();
-    a.GetNetworkManager().flush_block_announcements();
-    int tip_after = b.GetTipHeight();
-    CHECK(tip_after == tip_before);
+    // All at height 2
+    REQUIRE(a.GetTipHeight() == 2);
+    REQUIRE(b.GetTipHeight() == 2);
+    REQUIRE(c.GetTipHeight() == 2);
+
+    // Phase 2: Rearrange to star topology: A -- C -- B
+    // Disconnect B from A, connect B to C
+    b.Disconnect(1);
+    AdvanceSeconds(net, 1);
+    b.ConnectTo(3);
+    AdvanceSeconds(net, 2);
+
+    // Take HEADERS baseline before fork mining
+    int baseline_a = net.CountCommandSent(a.GetId(), c.GetId(), protocol::commands::HEADERS);
+    int baseline_b = net.CountCommandSent(b.GetId(), c.GetId(), protocol::commands::HEADERS);
+
+    // Phase 3: Mine competing blocks BEFORE network delivers anything.
+    // MineBlock calls ProcessEvents() on the local node only — messages
+    // are queued in the SimulatedNetwork but not delivered until AdvanceTime.
+    uint256 fork_a = a.MineBlock();
+    REQUIRE(!fork_a.IsNull());
+    REQUIRE(a.GetTipHeight() == 3);
+
+    uint256 fork_b = b.MineBlock();
+    REQUIRE(!fork_b.IsNull());
+    REQUIRE(b.GetTipHeight() == 3);
+    REQUIRE(fork_a != fork_b);  // Different blocks at same height
+
+    // C is still at height 2 (no network delivery yet)
+    REQUIRE(c.GetTipHeight() == 2);
+
+    // Phase 4: Let the network deliver both HEADERS to C
+    AdvanceSeconds(net, 2);
+
+    // C received HEADERS from BOTH forks
+    int headers_from_a = net.CountCommandSent(a.GetId(), c.GetId(), protocol::commands::HEADERS);
+    int headers_from_b = net.CountCommandSent(b.GetId(), c.GetId(), protocol::commands::HEADERS);
+    CHECK(headers_from_a > baseline_a);
+    CHECK(headers_from_b > baseline_b);
+
+    // C resolved to height 3 (first-seen fork wins, both valid)
+    CHECK(c.GetTipHeight() == 3);
 }

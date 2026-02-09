@@ -1,11 +1,14 @@
 #include "catch_amalgamated.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/connection_manager.hpp"
 #include "network/transport.hpp"
 #include "network/protocol.hpp"
 #include "network/peer.hpp"
+#include "infra/test_access.hpp"
 #include <asio.hpp>
 
 using namespace unicity::network;
+using unicity::test::PeerTestAccess;
+using unicity::test::ConnectionManagerTestAccess;
 using unicity::protocol::NetworkAddress;
 
 namespace {
@@ -33,7 +36,6 @@ public:
     std::string remote_address() const override { return addr_; }
     uint16_t remote_port() const override { return port_; }
     bool is_inbound() const override { return false; }
-    uint64_t connection_id() const override { return 1; }
     void set_receive_callback(ReceiveCallback cb) override { recv_ = std::move(cb); }
     void set_disconnect_callback(DisconnectCallback cb) override { disc_ = std::move(cb); }
 private:
@@ -74,31 +76,21 @@ private:
 
 TEST_CASE("Outbound connect failures do not consume peer IDs", "[network][peer_id]") {
     asio::io_context io;
-    PeerLifecycleManager::Config cfg;
-    PeerLifecycleManager pm(io, cfg);
+    ConnectionManager::Config cfg;
+    ConnectionManager pm(io, cfg);
 
     // Speed up timers to avoid waiting on real handshake/idle defaults during io.run()
-    using unicity::network::Peer;
-    Peer::SetTimeoutsForTest(std::chrono::milliseconds(50), std::chrono::milliseconds(200));
-    struct ResetTimeoutsGuard { ~ResetTimeoutsGuard() { Peer::ResetTimeoutsForTest(); } } _guard;
+    PeerTestAccess::SetTimeouts(std::chrono::milliseconds(50), std::chrono::milliseconds(200));
+    struct ResetTimeoutsGuard { ~ResetTimeoutsGuard() { PeerTestAccess::ResetTimeouts(); } } _guard;
 
     auto transport = std::make_shared<MiniTransport>(io);
+    pm.Init(transport, [](Peer*){}, [](){ return true; }, 0x12345678, /*local_nonce=*/42);
     auto addr = mk_addr(9999);
 
     // 100 failing attempts
     for (int i = 0; i < 100; ++i) {
         transport->set_next_success(false);
-        auto rc = pm.ConnectTo(
-            addr,
-            NetPermissionFlags::None,
-            transport,
-            nullptr, // on_good
-            nullptr, // on_attempt
-            [](Peer*){}, // setup handler
-            0x12345678,
-            0,
-            42
-        );
+        auto rc = pm.ConnectTo(addr, NetPermissionFlags::None, /*chain_height=*/0);
         // pump callbacks
         io.poll();
         // No peer should be added
@@ -106,18 +98,10 @@ TEST_CASE("Outbound connect failures do not consume peer IDs", "[network][peer_i
     }
 
     // Now one success -> should allocate first ID (1) and add exactly one peer
+    // Clear any stale pending entries from the failed attempts
+    ConnectionManagerTestAccess::ClearPendingOutbound(pm);
     transport->set_next_success(true);
-    auto rc = pm.ConnectTo(
-        addr,
-        NetPermissionFlags::None,
-        transport,
-        nullptr,
-        nullptr,
-        [](Peer*){},
-        0x12345678,
-        0,
-        4242
-    );
+    auto rc = pm.ConnectTo(addr, NetPermissionFlags::None, /*chain_height=*/0);
     io.restart();
     io.run(); // process deferred posts
 
@@ -134,17 +118,7 @@ TEST_CASE("Outbound connect failures do not consume peer IDs", "[network][peer_i
     io.restart();
     auto addr2 = mk_addr(10000, 2);
     transport->set_next_success(true);
-    rc = pm.ConnectTo(
-        addr2,
-        NetPermissionFlags::None,
-        transport,
-        nullptr,
-        nullptr,
-        [](Peer*){},
-        0x12345678,
-        0,
-        7777
-    );
+    rc = pm.ConnectTo(addr2, NetPermissionFlags::None, /*chain_height=*/0);
     io.run();
 
     REQUIRE(pm.peer_count() == 2);

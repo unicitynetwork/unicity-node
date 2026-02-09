@@ -118,7 +118,7 @@ Binary location: `build/bin/node_simulator`
 | `circular-chain` | Circular header chain (A->B->A) |
 | `version-zero-hdr` | Header with nVersion = 0 |
 | `neg-version-hdr` | Header with nVersion = -1 |
-| `orphan-flood` | Flood with orphan headers (100x) |
+| `unconnecting-flood` | Flood with unconnecting headers (100x) |
 | `getheaders-spam` | Rapid GETHEADERS requests (50x) |
 
 ### Message Type Attacks

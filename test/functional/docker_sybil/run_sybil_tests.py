@@ -68,10 +68,10 @@ def create_version_message(nonce: int = None) -> bytes:
     payload += struct.pack("<q", int(time.time()))
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += b"\x00" * 10 + b"\xff\xff" + socket.inet_aton("127.0.0.1")
-    payload += struct.pack(">H", 8333)
+    payload += struct.pack(">H", 9590)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += b"\x00" * 10 + b"\xff\xff" + socket.inet_aton("127.0.0.1")
-    payload += struct.pack(">H", 8333)
+    payload += struct.pack(">H", 9590)
     payload += struct.pack("<Q", nonce)
     user_agent = b"/SybilTest:1.0/"
     payload += bytes([len(user_agent)]) + user_agent
@@ -263,9 +263,9 @@ def test_addr_poison() -> bool:
     poison_addrs = [(f"172.50.{random.randint(1, 254)}.{random.randint(1, 254)}", P2P_PORT)
                     for _ in range(110)]
 
-    # Note: MAX_INBOUND_PER_NETGROUP=4, so we can only establish 4 connections
-    # from the same /16 netgroup (which is what localhost is)
-    print(f"  Step 1: Connecting peers to target (max 4 per netgroup)...")
+    # Note: Eviction-based netgroup limiting means we can only maintain ~4 connections
+    # from the same /16 netgroup before eviction pressure kicks in
+    print(f"  Step 1: Connecting peers to target (~4 per netgroup via eviction)...")
     connections = []
     for i in range(4):
         sock = p2p_connect("127.0.0.1", P2P_PORT)

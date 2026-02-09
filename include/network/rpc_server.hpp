@@ -38,6 +38,15 @@ class RPCServer {
 public:
   using CommandHandler = std::function<std::string(const std::vector<std::string>&)>;
 
+  // Structured result from command execution
+  // Separates the response body from error status so the HTTP JSON-RPC
+  // wrapper can format errors correctly without fragile string detection.
+  struct CommandResult {
+    std::string json;          // Full JSON response (sent as-is to CLI clients)
+    std::string error_message; // Error message (non-empty only for errors)
+    bool is_error = false;
+  };
+
   RPCServer(const std::string& socket_path, validation::ChainstateManager& chainstate_manager,
             network::NetworkManager& network_manager, mining::CPUMiner* miner, const chain::ChainParams& params,
             std::function<void()> shutdown_callback = nullptr);
@@ -51,7 +60,7 @@ private:
 
   void ServerThread();
   void HandleClient(int client_fd);
-  std::string ExecuteCommand(const std::string& method, const std::vector<std::string>& params);
+  CommandResult ExecuteCommand(const std::string& method, const std::vector<std::string>& params);
   void RegisterHandlers();
 
   // Helper to send response with error handling
@@ -78,17 +87,18 @@ private:
   // Command handlers - Network
   std::string HandleGetConnectionCount(const std::vector<std::string>& params);
   std::string HandleGetPeerInfo(const std::vector<std::string>& params);
+  std::string HandleGetNetTotals(const std::vector<std::string>& params);
+  std::string HandleGetNetworkInfo(const std::vector<std::string>& params);
   std::string HandleAddNode(const std::vector<std::string>& params);
+  std::string HandleSetNetworkActive(const std::vector<std::string>& params);
   std::string HandleSetBan(const std::vector<std::string>& params);
   std::string HandleListBanned(const std::vector<std::string>& params);
   std::string HandleGetAddrManInfo(const std::vector<std::string>& params);
+  std::string HandleGetRawAddrMan(const std::vector<std::string>& params);
   std::string HandleAddPeerAddress(const std::vector<std::string>& params);
   std::string HandleDisconnectNode(const std::vector<std::string>& params);
   std::string HandleGetNextWorkRequired(const std::vector<std::string>& params);
   std::string HandleReportMisbehavior(const std::vector<std::string>& params);
-  std::string HandleAddOrphanHeader(const std::vector<std::string>& params);
-  std::string HandleGetOrphanStats(const std::vector<std::string>& params);
-  std::string HandleEvictOrphans(const std::vector<std::string>& params);
 
   // Command handlers - Control
   std::string HandleStop(const std::vector<std::string>& params);
@@ -104,7 +114,6 @@ private:
   std::string HandleSubmitHeader(const std::vector<std::string>& params);
   std::string HandleAddConnection(const std::vector<std::string>& params);
 
-private:
   std::string socket_path_;
   validation::ChainstateManager& chainstate_manager_;
   network::NetworkManager& network_manager_;

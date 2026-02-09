@@ -6,6 +6,7 @@
 #include "network_bridged_transport.hpp"
 #include "network/network_manager.hpp"
 #include "chain/chainparams.hpp"
+#include "chain/notifications.hpp"
 #include <asio.hpp>
 #include <memory>
 #include <string>
@@ -78,10 +79,6 @@ public:
     const chain::CBlockIndex* GetTip() const;
     bool GetIsIBD() const;
 
-    // Orphan management
-    size_t GetOrphanCount() const;
-    void EvictExpiredOrphans();
-
     // Manual header injection (for testing)
     void ReceiveHeaders(int from_peer_id, const std::vector<CBlockHeader>& headers);
 
@@ -99,18 +96,20 @@ public:
     TestChainstateManager& GetChainstate() { return *chainstate_; }
     network::NetworkManager& GetNetworkManager() { return *network_manager_; }
 
+    // Test hooks - wrapped via NetworkManagerTestAccess
+    void CheckInitialSync();
+    void ProcessHeaderSyncTimers();
+    void TriggerSelfAdvertisement();
+    void AttemptFeelerConnection();
+    network::AddrRelayManager& GetDiscoveryManager();
+    network::HeaderSyncManager& GetHeaderSync();
     // Test configuration
     void SetBypassPOWValidation(bool bypass) {
         chainstate_->SetBypassPOWValidation(bypass);
     }
 
     // Set permissions for inbound connections (for testing NoBan, etc.)
-    void SetInboundPermissions(network::NetPermissionFlags flags) {
-        network_manager_->set_default_inbound_permissions(flags);
-    }
-
-    // Test configuration: Override block relay INV chunk size (friend access to BlockRelayManager)
-    void SetBlockRelayChunkSize(size_t chunk_size);
+    void SetInboundPermissions(network::NetPermissionFlags flags);
 
     // Statistics
     struct NodeStats {
@@ -170,6 +169,9 @@ private:
 
     // Statistics
     NodeStats stats_;
+
+    // Event subscriptions (mirrors Application behavior)
+    ChainNotifications::Subscription tip_sub_;
 
     // Setup
     void InitializeNode(const chain::ChainParams* params);

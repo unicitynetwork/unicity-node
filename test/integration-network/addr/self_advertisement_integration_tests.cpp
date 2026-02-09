@@ -26,18 +26,6 @@ using namespace unicity::protocol;
 // HELPERS
 // =============================================================================
 
-static std::vector<uint8_t> MakeWire(const std::string& cmd, const std::vector<uint8_t>& payload) {
-    protocol::MessageHeader hdr(magic::REGTEST, cmd, static_cast<uint32_t>(payload.size()));
-    uint256 hash = Hash(payload);
-    std::memcpy(hdr.checksum.data(), hash.begin(), 4);
-    auto hdr_bytes = message::serialize_header(hdr);
-    std::vector<uint8_t> full;
-    full.reserve(hdr_bytes.size() + payload.size());
-    full.insert(full.end(), hdr_bytes.begin(), hdr_bytes.end());
-    full.insert(full.end(), payload.begin(), payload.end());
-    return full;
-}
-
 // Parse IPv4 address from NetworkAddress
 static std::string GetIPv4(const protocol::NetworkAddress& addr) {
     // IPv4-mapped IPv6: ::ffff:a.b.c.d
@@ -61,10 +49,10 @@ TEST_CASE("Self-advertisement: inbound peer triggers local address learning", "[
 
     // Node A: the node we're testing (will learn its address from inbound)
     // Use routable public IP addresses
-    SimulatedNode nodeA(1, &net, "198.51.100.10");
+    SimulatedNode nodeA(1, &net, "93.184.216.10");
 
     // Node B: will connect inbound to A
-    SimulatedNode nodeB(2, &net, "198.51.100.20");
+    SimulatedNode nodeB(2, &net, "93.184.216.20");
 
     // Mine blocks on both so neither is in IBD
     for (int i = 0; i < 5; i++) {
@@ -74,6 +62,10 @@ TEST_CASE("Self-advertisement: inbound peer triggers local address learning", "[
 
     orch.AdvanceTime(std::chrono::milliseconds(100));
 
+    // Before connection, A should not have learned its local address
+    auto addr_before = nodeA.GetNetworkManager().get_local_address();
+    CHECK_FALSE(addr_before.has_value());
+
     // B connects to A (inbound from A's perspective)
     REQUIRE(nodeB.ConnectTo(nodeA.GetId(), nodeA.GetAddress(), nodeA.GetPort()));
     REQUIRE(orch.WaitForConnection(nodeA, nodeB));
@@ -82,18 +74,19 @@ TEST_CASE("Self-advertisement: inbound peer triggers local address learning", "[
     CHECK(nodeA.GetPeerCount() >= 1);
     CHECK(nodeB.GetPeerCount() >= 1);
 
-    // When B connected to A:
-    // - B sends VERSION with addr_recv = A's address (198.51.100.10)
-    // - A's Peer::handle_version() calls local_addr_learned_handler with "198.51.100.10"
-    // - NetworkManager::set_local_addr_from_peer_feedback() stores this (if routable)
+    // After connection, A should have learned its local address from B's VERSION message
+    // B sends VERSION with addr_recv = A's address (93.184.216.10)
+    auto addr_after = nodeA.GetNetworkManager().get_local_address();
+    REQUIRE(addr_after.has_value());
+    CHECK(GetIPv4(*addr_after) == "93.184.216.10");
 }
 
 TEST_CASE("Self-advertisement: outbound peer also triggers local address learning", "[network][self-advertisement][integration]") {
     SimulatedNetwork net(48002);
     TestOrchestrator orch(&net);
 
-    SimulatedNode nodeA(1, &net, "198.51.100.10");
-    SimulatedNode nodeB(2, &net, "198.51.100.20");
+    SimulatedNode nodeA(1, &net, "93.184.216.10");
+    SimulatedNode nodeB(2, &net, "93.184.216.20");
 
     // Mine blocks so neither is in IBD
     for (int i = 0; i < 5; i++) {
@@ -103,16 +96,21 @@ TEST_CASE("Self-advertisement: outbound peer also triggers local address learnin
 
     orch.AdvanceTime(std::chrono::milliseconds(100));
 
+    // Before connection
+    CHECK_FALSE(nodeA.GetNetworkManager().get_local_address().has_value());
+
     // A connects to B (outbound from A's perspective)
     REQUIRE(nodeA.ConnectTo(nodeB.GetId(), nodeB.GetAddress(), nodeB.GetPort()));
     REQUIRE(orch.WaitForConnection(nodeA, nodeB));
 
-    // When A connected to B:
-    // - A sends VERSION first (outbound initiates)
-    // - B sends VERSION back with addr_recv = A's address
-    // - A's Peer::handle_version() calls local_addr_learned_handler for ALL peers
-    // (Bitcoin Core parity: SetAddrLocal() called for all peers, net_processing.cpp:3492)
-    // This enables self-advertisement for nodes that only make outbound connections.
+    // Extra time for VERSION response to be fully processed
+    orch.AdvanceTime(std::chrono::milliseconds(200));
+
+    // After connection, A should have learned its address from B's VERSION response
+    // (Bitcoin Core parity: SetAddrLocal() called for all peers, net_processing.cpp:3540)
+    auto addr_after = nodeA.GetNetworkManager().get_local_address();
+    REQUIRE(addr_after.has_value());
+    CHECK(GetIPv4(*addr_after) == "93.184.216.10");
 }
 
 // =============================================================================
@@ -124,9 +122,9 @@ TEST_CASE("Self-advertisement: ADDR only sent to full-relay peers", "[network][s
     TestOrchestrator orch(&net);
     net.EnableCommandTracking(true);
 
-    SimulatedNode nodeA(1, &net, "198.51.100.10");
-    SimulatedNode nodeB(2, &net, "198.51.100.20");  // Will be full-relay
-    SimulatedNode nodeC(3, &net, "198.51.100.30");  // Will be block-relay-only
+    SimulatedNode nodeA(1, &net, "93.184.216.10");
+    SimulatedNode nodeB(2, &net, "93.184.216.20");  // Will be full-relay
+    SimulatedNode nodeC(3, &net, "93.184.216.30");  // Will be block-relay-only
 
     // Mine blocks so not in IBD
     for (int i = 0; i < 5; i++) {
@@ -134,6 +132,17 @@ TEST_CASE("Self-advertisement: ADDR only sent to full-relay peers", "[network][s
     }
 
     orch.AdvanceTime(std::chrono::milliseconds(100));
+
+    // First, have an inbound peer connect so A learns its address
+    SimulatedNode nodeD(4, &net, "93.184.216.40");
+    REQUIRE(nodeD.ConnectTo(nodeA.GetId(), nodeA.GetAddress(), nodeA.GetPort()));
+    REQUIRE(orch.WaitForConnection(nodeA, nodeD));
+
+    // Extra time for full handshake (VERSION/VERACK exchange)
+    orch.AdvanceTime(std::chrono::milliseconds(200));
+
+    // Verify A learned its address
+    REQUIRE(nodeA.GetNetworkManager().get_local_address().has_value());
 
     // A connects to B as full-relay (default)
     REQUIRE(nodeA.ConnectTo(nodeB.GetId(), nodeB.GetAddress(), nodeB.GetPort()));
@@ -144,26 +153,38 @@ TEST_CASE("Self-advertisement: ADDR only sent to full-relay peers", "[network][s
     REQUIRE(orch.WaitForConnection(nodeA, nodeB));
     REQUIRE(orch.WaitForConnection(nodeA, nodeC));
 
-    // Advance time to potentially trigger self-advertisement
-    // (In practice, the 24h timer won't fire, but the code path is tested)
-    for (int i = 0; i < 10; i++) {
-        orch.AdvanceTime(std::chrono::milliseconds(100));
-    }
+    // Extra time for full handshake (VERSION/VERACK exchange)
+    orch.AdvanceTime(std::chrono::milliseconds(200));
 
-    // Self-advertisement sends ADDR to full-relay peers only
-    // Block-relay-only peers (nodeC) should never receive ADDR
-    // This is enforced by the relays_addr() check in maybe_send_local_addr()
+    // Clear any ADDR messages from VERSION exchange
+    int addr_to_b_before = net.CountCommandSent(nodeA.GetId(), nodeB.GetId(), commands::ADDR);
+    int addr_to_c_before = net.CountCommandSent(nodeA.GetId(), nodeC.GetId(), commands::ADDR);
+
+    // Trigger self-advertisement (bypasses 24h timer)
+    nodeA.TriggerSelfAdvertisement();
+    orch.AdvanceTime(std::chrono::milliseconds(100));
+
+    // Count ADDR messages sent after triggering
+    int addr_to_b_after = net.CountCommandSent(nodeA.GetId(), nodeB.GetId(), commands::ADDR);
+    int addr_to_c_after = net.CountCommandSent(nodeA.GetId(), nodeC.GetId(), commands::ADDR);
+
+    // Full-relay peer (B) should have received ADDR
+    CHECK(addr_to_b_after > addr_to_b_before);
+
+    // Block-relay-only peer (C) should NOT have received ADDR
+    CHECK(addr_to_c_after == addr_to_c_before);
 }
 
 TEST_CASE("Self-advertisement: not sent during IBD", "[network][self-advertisement][integration]") {
     SimulatedNetwork net(48004);
     TestOrchestrator orch(&net);
+    net.EnableCommandTracking(true);
 
     // Node A: fresh node with no blocks (in IBD)
-    SimulatedNode nodeA(1, &net, "198.51.100.10");
+    SimulatedNode nodeA(1, &net, "93.184.216.10");
 
     // Node B: has many blocks
-    SimulatedNode nodeB(2, &net, "198.51.100.20");
+    SimulatedNode nodeB(2, &net, "93.184.216.20");
 
     // B mines blocks, A stays at genesis
     for (int i = 0; i < 10; i++) {
@@ -179,8 +200,9 @@ TEST_CASE("Self-advertisement: not sent during IBD", "[network][self-advertiseme
     // A is in IBD because it's behind B
     CHECK(nodeA.GetIsIBD() == true);
 
-    // Self-advertisement should be skipped during IBD
-    // (gated by chainstate_manager_.IsInitialBlockDownload() check)
+    // Note: Self-advertisement is NOT gated on IBD in the current implementation
+    // (see comment in maybe_send_local_addr). This test verifies IBD detection works.
+    // The rationale is that self-advertisement benefits network bootstrapping even during IBD.
 }
 
 // =============================================================================
@@ -193,9 +215,9 @@ TEST_CASE("Self-advertisement: ADDR contains our listen address", "[network][sel
     net.EnableCommandTracking(true);
 
     // Use specific routable IPs
-    const std::string nodeA_ip = "198.51.100.10";
-    const std::string nodeB_ip = "198.51.100.20";
-    const std::string nodeC_ip = "198.51.100.30";
+    const std::string nodeA_ip = "93.184.216.10";
+    const std::string nodeB_ip = "93.184.216.20";
+    const std::string nodeC_ip = "93.184.216.30";
 
     SimulatedNode nodeA(1, &net, nodeA_ip);
     SimulatedNode nodeB(2, &net, nodeB_ip);
@@ -213,23 +235,53 @@ TEST_CASE("Self-advertisement: ADDR contains our listen address", "[network][sel
     REQUIRE(nodeC.ConnectTo(nodeA.GetId(), nodeA.GetAddress(), nodeA.GetPort()));
     REQUIRE(orch.WaitForConnection(nodeA, nodeC));
 
+    // Extra time for full handshake (VERSION/VERACK exchange)
+    orch.AdvanceTime(std::chrono::milliseconds(200));
+
+    // Verify A learned its address
+    auto learned_addr = nodeA.GetNetworkManager().get_local_address();
+    REQUIRE(learned_addr.has_value());
+    CHECK(GetIPv4(*learned_addr) == nodeA_ip);
+
     // A connects outbound to B
     REQUIRE(nodeA.ConnectTo(nodeB.GetId(), nodeB.GetAddress(), nodeB.GetPort()));
     REQUIRE(orch.WaitForConnection(nodeA, nodeB));
 
-    // Now A knows its address (learned from inbound C) and has an outbound peer (B)
-    // Self-advertisement would send ADDR containing A's address to B
+    // Extra time for full handshake (VERSION/VERACK exchange)
+    orch.AdvanceTime(std::chrono::milliseconds(200));
 
-    // Process some cycles
-    for (int i = 0; i < 20; i++) {
-        orch.AdvanceTime(std::chrono::milliseconds(100));
+    // Clear counts before triggering
+    int addr_before = net.CountCommandSent(nodeA.GetId(), nodeB.GetId(), commands::ADDR);
+
+    // Trigger self-advertisement
+    nodeA.TriggerSelfAdvertisement();
+    orch.AdvanceTime(std::chrono::milliseconds(100));
+
+    // Verify ADDR was sent
+    int addr_after = net.CountCommandSent(nodeA.GetId(), nodeB.GetId(), commands::ADDR);
+    CHECK(addr_after > addr_before);
+
+    // Get the ADDR payload and verify it contains our address
+    auto payloads = net.GetCommandPayloads(nodeA.GetId(), nodeB.GetId(), commands::ADDR);
+    REQUIRE(!payloads.empty());
+
+    // Parse the last ADDR message
+    const auto& payload = payloads.back();
+    if (payload.size() >= 31) {  // At least 1 address (varint + 30 bytes)
+        // Skip varint count, parse first address
+        // TimestampedAddress: 4 bytes timestamp + 8 bytes services + 16 bytes ip + 2 bytes port = 30 bytes
+        size_t offset = 1;  // Skip count varint (assuming 1 byte for small counts)
+        if (payload.size() >= offset + 30) {
+            // Extract IP from bytes 12-28 (timestamp=4, services=8, then IP)
+            uint8_t ip_byte0 = payload[offset + 4 + 8 + 12];  // First byte of IPv4 in mapped address
+            uint8_t ip_byte1 = payload[offset + 4 + 8 + 13];
+            uint8_t ip_byte2 = payload[offset + 4 + 8 + 14];
+            uint8_t ip_byte3 = payload[offset + 4 + 8 + 15];
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%u.%u.%u.%u", ip_byte0, ip_byte1, ip_byte2, ip_byte3);
+            CHECK(std::string(buf) == nodeA_ip);
+        }
     }
-
-    // If self-advertisement was sent, check the ADDR message content
-    auto addr_payloads = net.GetCommandPayloads(nodeA.GetId(), nodeB.GetId(), commands::ADDR);
-
-    // Note: Self-advertisement has a 24h timer, so it may not fire in this test
-    // This test verifies the setup is correct; timer-based testing requires time mocking
 }
 
 // =============================================================================
@@ -240,12 +292,12 @@ TEST_CASE("Self-advertisement: multiple inbound peers agree on address", "[netwo
     SimulatedNetwork net(48006);
     TestOrchestrator orch(&net);
 
-    const std::string nodeA_ip = "198.51.100.10";
+    const std::string nodeA_ip = "93.184.216.10";
 
     SimulatedNode nodeA(1, &net, nodeA_ip);
-    SimulatedNode nodeB(2, &net, "198.51.100.20");
-    SimulatedNode nodeC(3, &net, "198.51.100.30");
-    SimulatedNode nodeD(4, &net, "198.51.100.40");
+    SimulatedNode nodeB(2, &net, "93.184.216.20");
+    SimulatedNode nodeC(3, &net, "93.184.216.30");
+    SimulatedNode nodeD(4, &net, "93.184.216.40");
 
     // Mine blocks
     for (int i = 0; i < 5; i++) {
@@ -254,25 +306,33 @@ TEST_CASE("Self-advertisement: multiple inbound peers agree on address", "[netwo
 
     orch.AdvanceTime(std::chrono::milliseconds(100));
 
+    // Before any connections
+    CHECK_FALSE(nodeA.GetNetworkManager().get_local_address().has_value());
+
     // Multiple peers connect inbound to A
     REQUIRE(nodeB.ConnectTo(nodeA.GetId(), nodeA.GetAddress(), nodeA.GetPort()));
+    REQUIRE(orch.WaitForConnection(nodeA, nodeB));
+
+    // After first inbound, A should have learned its address
+    auto addr_after_first = nodeA.GetNetworkManager().get_local_address();
+    REQUIRE(addr_after_first.has_value());
+    CHECK(GetIPv4(*addr_after_first) == nodeA_ip);
+
+    // More inbound peers connect
     REQUIRE(nodeC.ConnectTo(nodeA.GetId(), nodeA.GetAddress(), nodeA.GetPort()));
     REQUIRE(nodeD.ConnectTo(nodeA.GetId(), nodeA.GetAddress(), nodeA.GetPort()));
-
-    REQUIRE(orch.WaitForConnection(nodeA, nodeB));
     REQUIRE(orch.WaitForConnection(nodeA, nodeC));
     REQUIRE(orch.WaitForConnection(nodeA, nodeD));
 
     CHECK(nodeA.GetPeerCount() >= 3);
 
-    // All inbound peers send VERSION with addr_recv = nodeA_ip
-    // A should learn its address from the first one
-    // Subsequent feedback should be ignored (once address is set)
+    // Address should still be the same (not corrupted by multiple feedbacks)
+    auto addr_after_all = nodeA.GetNetworkManager().get_local_address();
+    REQUIRE(addr_after_all.has_value());
+    CHECK(GetIPv4(*addr_after_all) == nodeA_ip);
 }
 
-TEST_CASE("Self-advertisement: listen disabled prevents advertisement", "[network][self-advertisement][integration]") {
-    // This would require modifying NetworkManager config at runtime
-    // which is not easily testable with SimulatedNode
-    // The logic is tested via code review:
-    // maybe_send_local_addr() checks config_.listen_enabled
-}
+// Note: "listen disabled prevents advertisement" test removed
+// Testing listen disabled state requires modifying NetworkManager config at runtime
+// which is not easily testable with SimulatedNode. The logic is verified via code review:
+// maybe_send_local_addr() checks config_.listen_enabled at the start.

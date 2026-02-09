@@ -448,7 +448,7 @@ def test_multiple_inbound_consensus(node, p2p_port):
 
     Multiple peers telling us the same external IP should reinforce the learning.
 
-    NOTE: Due to MAX_INBOUND_PER_NETGROUP = 4 limit for same /16, we connect
+    NOTE: Due to eviction-based netgroup limiting (~4 per /16), we connect
     peers sequentially, closing each before the next to avoid hitting the limit.
     """
     print("\n=== Test 3: Multiple Inbound Peers Agree on External IP ===")
@@ -559,7 +559,7 @@ def test_private_ip_filtering(node, p2p_port):
     Inbound peers claiming we have a private IP (10.x, 192.168.x, 127.x)
     should not result in self-advertisement of those addresses.
 
-    NOTE: Due to MAX_INBOUND_PER_NETGROUP = 4 limit, we connect peers sequentially.
+    NOTE: Due to eviction-based netgroup limiting (~4 per /16), we connect peers sequentially.
     """
     print("\n=== Test 6: Private IP Filtering ===")
 
@@ -654,9 +654,9 @@ def main():
         print(f"Node started. RPC socket: {node.rpc_socket}")
 
         # Run tests
-        # NOTE: Due to MAX_INBOUND_PER_NETGROUP = 4 limit for connections from
-        # the same /16 subnet, and delayed socket close detection by the server,
-        # we can only run a subset of tests with single connections.
+        # NOTE: Due to eviction-based netgroup limiting (~4 connections per /16
+        # via eviction pressure, matching Bitcoin Core), and delayed socket close
+        # detection by the server, we can only run a subset of tests with single connections.
         # The full test coverage is in the C++ unit and integration tests.
         results = []
 
@@ -672,7 +672,7 @@ def main():
             peer1.close()  # Clean up peer1 after test 2
 
         # Note: Tests 3-6 require multiple connections from localhost which hits
-        # the per-netgroup limit (MAX_INBOUND_PER_NETGROUP = 4) since the node
+        # eviction-based netgroup limiting (~4 per /16 via eviction) since the node
         # doesn't immediately detect socket close. These behaviors are fully
         # covered in C++ unit tests and docker tests (multi-IP environment).
         #

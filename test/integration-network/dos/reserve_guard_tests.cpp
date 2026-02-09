@@ -18,8 +18,8 @@ static struct TestSetup {
 
 TEST_CASE("DoS: Huge vector CompactSize triggers disconnect (reserve guard)", "[dos][network][reserve]") {
     // VULNERABILITY (historical): vector.reserve() using unchecked CompactSize could allocate massive memory
-    // ATTACK: Send 0xFF + 0xFFFFFFFFFFFFFFFF as the vector size (e.g., INV count)
-    // EXPECTED: Parser caps size (MAX_INV_SIZE) and disconnects without OOM
+    // ATTACK: Send 0xFF + 0xFFFFFFFFFFFFFFFF as the vector size
+    // EXPECTED: Parser caps size and disconnects without OOM
 
     SimulatedNetwork network(1414);
     TestOrchestrator orchestrator(&network);

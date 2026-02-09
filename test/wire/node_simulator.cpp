@@ -450,7 +450,7 @@ public:
         // 32-byte hash (zeros)
         for (int i = 0; i < 32; i++) payload.push_back(0x00);
 
-        send_raw_message(protocol::commands::INV, payload);
+        send_raw_message("inv", payload);
 
         std::cout << "Expected: Node should reject/disconnect (pre-VERACK message)" << std::endl;
     }
@@ -677,10 +677,10 @@ public:
         std::vector<uint8_t> payload = {0x00, 0x01, 0x02, 0x03};
         send_raw_message("foobarxyz", payload);  // Unknown 9-char command
 
-        std::cout << "Expected: Node should ignore or rate-limit unknown commands" << std::endl;
+        std::cout << "Expected: Node should silently ignore unknown commands (Bitcoin Core parity)" << std::endl;
     }
 
-    // Attack: Flood unknown commands (should trigger rate limit)
+    // Test: Flood unknown commands (should be silently ignored)
     void test_unknown_command_flood(int count = 25) {
         std::cout << "\n=== TEST: Unknown Command Flood (" << count << "x) ===" << std::endl;
         std::cout << "Sending " << count << " unknown commands rapidly..." << std::endl;
@@ -690,7 +690,7 @@ public:
             send_raw_message("unknown", payload);
         }
 
-        std::cout << "Expected: Node should disconnect after MAX_UNKNOWN_COMMANDS_PER_MINUTE (20)" << std::endl;
+        std::cout << "Expected: Node should silently ignore all unknown commands (Bitcoin Core parity)" << std::endl;
     }
 
     // ========== Phase 2: Header Validation Attacks ==========
@@ -908,10 +908,12 @@ public:
         std::cout << "Expected: Node should handle gracefully" << std::endl;
     }
 
-    // Attack: Flood with orphan headers (random prevblock hashes)
+    // Attack: Flood with unconnecting headers (random prevblock hashes)
+    // Tests that the node handles headers with unknown parents gracefully.
+    // These headers trigger GETHEADERS requests but are not stored (no orphan pool).
     void test_orphan_flood(int count = 100) {
-        std::cout << "\n=== TEST: Orphan Header Flood (" << count << " headers) ===" << std::endl;
-        std::cout << "Sending headers with random prevblock hashes (orphans)..." << std::endl;
+        std::cout << "\n=== TEST: Unconnecting Header Flood (" << count << " headers) ===" << std::endl;
+        std::cout << "Sending headers with random prevblock hashes (unconnecting)..." << std::endl;
 
         std::mt19937_64 rng(static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
 
@@ -943,7 +945,7 @@ public:
             }
         }
 
-        std::cout << "Expected: Node should limit orphan storage (MAX_ORPHAN_HEADERS_PER_PEER=50)" << std::endl;
+        std::cout << "Expected: Node sends GETHEADERS for each, remains responsive" << std::endl;
     }
 
     // Attack: Send GETHEADERS rapidly (spam)
@@ -1029,7 +1031,7 @@ public:
                 payload.insert(payload.end(), reinterpret_cast<uint8_t*>(&r), reinterpret_cast<uint8_t*>(&r) + 8);
             }
 
-            send_raw_message(protocol::commands::INV, payload);
+            send_raw_message("inv", payload);
         }
 
         std::cout << "Expected: Node should handle INV spam gracefully" << std::endl;
@@ -1259,7 +1261,7 @@ public:
         // Random 32-byte hash
         for (int i = 0; i < 32; i++) payload.push_back(static_cast<uint8_t>(i));
 
-        send_raw_message(protocol::commands::INV, payload);
+        send_raw_message("inv", payload);
 
         std::cout << "Expected: Node should ignore invalid inventory type" << std::endl;
     }
@@ -1452,7 +1454,7 @@ public:
             uint32_t type = 2;  // MSG_BLOCK
             payload.insert(payload.end(), reinterpret_cast<uint8_t*>(&type), reinterpret_cast<uint8_t*>(&type) + 4);
             payload.insert(payload.end(), fixed_hash, fixed_hash + 32);
-            send_raw_message(protocol::commands::INV, payload);
+            send_raw_message("inv", payload);
         }
 
         std::cout << "Expected: Node should deduplicate/ignore repeats" << std::endl;
@@ -1567,7 +1569,7 @@ void print_usage(const char* prog) {
               << "                         circular-chain   : Circular header chain (A->B->A)\n"
               << "                         version-zero-hdr : Header with nVersion = 0\n"
               << "                         neg-version-hdr  : Header with nVersion = -1\n"
-              << "                         orphan-flood     : Flood with orphan headers (100x)\n"
+              << "                         orphan-flood     : Flood with unconnecting headers (100x)\n"
               << "                         getheaders-spam  : Rapid GETHEADERS requests (50x)\n"
               << "\n  Message Type Attacks:\n"
               << "                         addr-flood       : Large ADDR message (1000 addrs)\n"
@@ -1630,7 +1632,7 @@ int main(int argc, char* argv[]) {
 
     // Get genesis hash for testing (in real test, we'd query via RPC)
     uint256 genesis_hash;
-    genesis_hash.SetHex("0233b37bb6942bfb471cfd7fb95caab0e0f7b19cc8767da65fbef59eb49e45bd");
+    genesis_hash.SetHex("0555faa88836f4ce189235a28279af4614432234b6f7e2f350e4fc0dadb1ffa7");
 
     // Helper lambda to perform handshake
     auto do_handshake = [](NodeSimulator& simulator) {

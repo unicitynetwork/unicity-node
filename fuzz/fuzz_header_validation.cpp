@@ -298,48 +298,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         }
     }
 
-    // CRITICAL TEST 6: GetAntiDoSWorkThreshold edge cases
-    if ((mode & 0x07) == 5) {
-        try {
-            // Test with null tip
-            arith_uint256 threshold1 = validation::GetAntiDoSWorkThreshold(nullptr, *params);
-            arith_uint256 threshold2 = validation::GetAntiDoSWorkThreshold(nullptr, *params);
-
-            // Must be deterministic
-            if (threshold1 != threshold2) {
-                __builtin_trap();
-            }
-
-            // Test with synthetic tip
-            if (size >= 150) {
-                chain::CBlockIndex tipIndex;
-                tipIndex.nHeight = input.read<uint32_t>() % 1000000;
-                tipIndex.nTime = input.read<uint32_t>();
-                tipIndex.nBits = input.read<uint32_t>();
-
-                // Fuzz chainwork (just use a uint64_t value)
-                uint64_t workValue = input.read<uint64_t>();
-                tipIndex.nChainWork = arith_uint256(workValue);
-
-                arith_uint256 thresholdA = validation::GetAntiDoSWorkThreshold(&tipIndex, *params);
-                arith_uint256 thresholdB = validation::GetAntiDoSWorkThreshold(&tipIndex, *params);
-
-                if (thresholdA != thresholdB) {
-                    __builtin_trap();
-                }
-
-                // Threshold should never be greater than tip work
-                if (thresholdA > tipIndex.nChainWork) {
-                    // This is actually allowed (can exceed tip work by buffer)
-                    // So this is not a bug
-                }
-            }
-        } catch (const std::exception&) {
-            __builtin_trap();
-        }
-    }
-
-    // CRITICAL TEST 7: Edge case timestamps (past, future, overflow)
+    // CRITICAL TEST 6: Edge case timestamps (past, future, overflow)
     if ((mode & 0x07) == 6) {
         std::vector<uint32_t> edge_timestamps = {
             0,                    // Epoch start

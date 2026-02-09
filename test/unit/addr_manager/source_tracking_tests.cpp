@@ -110,33 +110,45 @@ TEST_CASE("Source tracking - per-source limits", "[addr_manager][source_tracking
 }
 
 TEST_CASE("Source tracking - eviction decrements count", "[addr_manager][source_tracking]") {
+  // This test verifies that when addresses are moved out of NEW (via good()),
+  // the per-source count is decremented, allowing more addresses from that source.
+  // Note: We test via good() instead of failed() because is_terrible() has a
+  // 60-second grace period that makes rapid testing impossible without sleeps.
+
   AddressManager mgr;
   auto source = MakeIPv4(85, 2, 3, 4);
 
-  // Fill to near capacity with addresses from source
+  // Fill to capacity with addresses from source (64 = MAX_ADDRESSES_PER_SOURCE)
   for (int i = 0; i < 64; i++) {
     auto addr = MakeAddressInNetgroup(i);
     mgr.add(addr, source);
   }
   REQUIRE(mgr.new_count() == 64);
 
-  // Mark all as terrible (failed 10 times)
-  for (int i = 0; i < 64; i++) {
+  // Verify we can't add more from this source
+  auto overflow = MakeAddressInNetgroup(100);
+  REQUIRE_FALSE(mgr.add(overflow, source));
+  REQUIRE(mgr.new_count() == 64);
+
+  // Move half the addresses from NEW to TRIED via good()
+  // This should decrement source_counts_ for each
+  for (int i = 0; i < 32; i++) {
     auto addr = MakeAddressInNetgroup(i);
-    // Multiple failures make it terrible
-    for (int j = 0; j < 10; j++) {
-      mgr.failed(addr);
-    }
+    mgr.good(addr);
   }
+  REQUIRE(mgr.tried_count() == 32);
+  REQUIRE(mgr.new_count() == 32);
 
-  // After failures, addresses should be removed as terrible
-  // (failed() removes terrible addresses from NEW table)
-  REQUIRE(mgr.new_count() == 0);
+  // Now we should be able to add more addresses from source (up to 32 more)
+  for (int i = 100; i < 132; i++) {
+    auto addr = MakeAddressInNetgroup(i);
+    REQUIRE(mgr.add(addr, source));
+  }
+  REQUIRE(mgr.new_count() == 64);  // 32 original + 32 new
 
-  // Now we should be able to add addresses from source again
-  auto new_addr = MakeAddressInNetgroup(100);
-  REQUIRE(mgr.add(new_addr, source));
-  REQUIRE(mgr.new_count() == 1);
+  // 65th should still fail (back at limit)
+  auto overflow2 = MakeAddressInNetgroup(200);
+  REQUIRE_FALSE(mgr.add(overflow2, source));
 }
 
 TEST_CASE("Source tracking - good() decrements source count", "[addr_manager][source_tracking]") {
@@ -259,5 +271,48 @@ TEST_CASE("Source tracking - AddrInfo::has_source()", "[addr_manager][source_tra
     AddrInfo info;
     info.source = MakeIPv4(85, 2, 3, 4);
     REQUIRE(info.has_source());
+  }
+}
+
+// Note: TRIED->NEW demotion test removed - Bitcoin Core doesn't demote TRIED addresses.
+// TRIED addresses stay in TRIED until evicted by collision during Good().
+// Source tracking for TRIED addresses is handled by decrementing on Good() (NEW->TRIED).
+
+TEST_CASE("Attempt counting - matches Bitcoin Core behavior", "[addr_manager][attempts]") {
+  AddressManager mgr;
+  auto addr = MakeAddressInNetgroup(0);
+  mgr.add(addr);
+
+  SECTION("attempt() with fCountFailure=true increments") {
+    // Simulate connection attempt
+    mgr.attempt(addr, true);  // Should increment (last_count_attempt < m_last_good_)
+
+    // Address should still exist (attempts=1 < ADDRMAN_RETRIES=3)
+    REQUIRE(mgr.new_count() == 1);
+  }
+
+  SECTION("Rapid attempts don't double-count (same second)") {
+    // Multiple attempt() calls in same second only count once
+    // This matches Bitcoin Core's last_count_attempt < m_last_good_ check
+    // Note: Bitcoin Core has no failed() function
+    mgr.attempt(addr, true);
+    mgr.attempt(addr, true);  // Blocked: last_count_attempt >= m_last_good_
+    mgr.attempt(addr, true);  // Blocked
+
+    // Address should still exist - only 1 attempt counted
+    REQUIRE(mgr.new_count() == 1);
+  }
+
+  SECTION("attempt() with fCountFailure=false does NOT increment") {
+    // attempt() with fCountFailure=false should not increment attempts
+    // Note: Bitcoin Core has no failed() function
+
+    // First attempt with fCountFailure=false - should NOT increment
+    mgr.attempt(addr, false);
+    mgr.attempt(addr, false);
+    mgr.attempt(addr, false);
+
+    // Address should still exist (attempts=0)
+    REQUIRE(mgr.new_count() == 1);
   }
 }

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 The Unicity Foundation
+// Distributed under the MIT software license
+
 #include "util/netaddress.hpp"
 
 #include "util/logging.hpp"
@@ -493,7 +496,7 @@ bool IsLocal(const std::string& address) {
   return false;
 }
 
-bool IsInternal(const std::string& address) {
+bool IsPrivate(const std::string& address) {
   if (IsRFC1918(address))
     return true;
   if (IsRFC4193(address))
@@ -547,6 +550,100 @@ bool IsRoutable(const std::string& address) {
   }
 
   return false;
+}
+
+bool IsBadPort(uint16_t port) noexcept {
+  // List from Bitcoin Core's IsBadPort() in netbase.cpp
+  switch (port) {
+    case 1:     // tcpmux
+    case 7:     // echo
+    case 9:     // discard
+    case 11:    // systat
+    case 13:    // daytime
+    case 15:    // netstat
+    case 17:    // qotd
+    case 19:    // chargen
+    case 20:    // ftp data
+    case 21:    // ftp access
+    case 22:    // ssh
+    case 23:    // telnet
+    case 25:    // smtp
+    case 37:    // time
+    case 42:    // name
+    case 43:    // nicname
+    case 53:    // domain
+    case 69:    // tftp
+    case 77:    // priv-rjs
+    case 79:    // finger
+    case 87:    // ttylink
+    case 95:    // supdup
+    case 101:   // hostname
+    case 102:   // iso-tsap
+    case 103:   // gppitnp
+    case 104:   // acr-nema
+    case 109:   // pop2
+    case 110:   // pop3
+    case 111:   // sunrpc
+    case 113:   // auth
+    case 115:   // sftp
+    case 117:   // uucp-path
+    case 119:   // nntp
+    case 123:   // ntp
+    case 135:   // loc-srv / epmap
+    case 137:   // netbios
+    case 139:   // netbios
+    case 143:   // imap2
+    case 161:   // snmp
+    case 179:   // bgp
+    case 389:   // ldap
+    case 427:   // afp (apple filing)
+    case 465:   // smtp+ssl
+    case 512:   // print / exec
+    case 513:   // login
+    case 514:   // shell
+    case 515:   // printer
+    case 526:   // tempo
+    case 530:   // courier
+    case 531:   // chat
+    case 532:   // netnews
+    case 540:   // uucp
+    case 548:   // afp (apple filing)
+    case 554:   // rtsp
+    case 556:   // remotefs
+    case 563:   // nntp+ssl
+    case 587:   // smtp (outgoing)
+    case 601:   // syslog-conn
+    case 636:   // ldap+ssl
+    case 989:   // ftps-data
+    case 990:   // ftps
+    case 993:   // ldap+ssl
+    case 995:   // pop3+ssl
+    case 1719:  // h323gatestat
+    case 1720:  // h323hostcall
+    case 1723:  // pptp
+    case 2049:  // nfs
+    case 3306:  // mysql
+    case 3389:  // rdp (windows remote desktop)
+    case 3659:  // apple-sasl
+    case 4045:  // lockd
+    case 5060:  // sip
+    case 5061:  // sips
+    case 5432:  // postgresql
+    case 5900:  // vnc
+    case 6000:  // x11
+    case 6566:  // sane-port
+    case 6665:  // irc (alternate)
+    case 6666:  // irc (alternate)
+    case 6667:  // irc (default)
+    case 6668:  // irc (alternate)
+    case 6669:  // irc (alternate)
+    case 6697:  // irc+tls
+    case 10080: // amanda
+    case 27017: // mongodb
+      return true;
+    default:
+      return false;
+  }
 }
 
 }  // namespace util

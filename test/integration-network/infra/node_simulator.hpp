@@ -12,7 +12,6 @@ namespace test {
  *
  * This node can:
  * - Send headers with invalid PoW
- * - Send orphan headers (unknown parents)
  * - Send non-continuous headers
  * - Send oversized messages
  * - Stall responses to GETHEADERS
@@ -28,8 +27,20 @@ public:
     {
     }
 
-    // Send orphan headers (headers with unknown parents)
-    void SendOrphanHeaders(int peer_node_id, size_t count);
+    // Constructor with custom address - for testing with non-localhost addresses
+    NodeSimulator(int node_id,
+                  SimulatedNetwork* network,
+                  const std::string& custom_address,
+                  const chain::ChainParams* params = nullptr)
+        : SimulatedNode(node_id, network, custom_address, params)
+    {
+    }
+
+    // Send unconnecting headers (headers with unknown parents that trigger GETHEADERS)
+    // These headers are discarded by the recipient (no orphan pool).
+    void SendUnconnectingHeaders(int peer_node_id, size_t count);
+    // Alias for backward compatibility with tests
+    void SendOrphanHeaders(int peer_node_id, size_t count) { SendUnconnectingHeaders(peer_node_id, count); }
 
     // Send headers with invalid PoW
     void SendInvalidPoWHeaders(int peer_node_id, const uint256& prev_hash, size_t count);
@@ -53,14 +64,18 @@ public:
     // Sends headers from the attacker's chain (which has low total work)
     void SendLowWorkHeaders(int peer_node_id, const std::vector<uint256>& block_hashes);
 
-    // Send headers out of order (child before parent) to test orphan resolution
-    // Returns pair of {parent_hash, child_hash} so caller can verify resolution
+    // Send headers out of order (child before parent) to test out-of-order handling
+    // Returns pair of {parent_hash, child_hash}
     std::pair<uint256, uint256> SendOutOfOrderHeaders(int peer_node_id, const uint256& prev_hash);
 
     // Send valid side-chain headers forking from a given block
     // Creates a chain of `count` headers building on fork_point
     // Used for testing side-chain pruning protection
     void SendValidSideChainHeaders(int peer_node_id, const uint256& fork_point, size_t count);
+
+    // Send valid headers from our chain to a peer via P2P HEADERS message
+    // Used for testing that valid headers arriving don't reset stall deadline
+    void SendValidHeaders(int peer_node_id, const std::vector<CBlockHeader>& headers);
 
 private:
     bool stalling_enabled_ = false;

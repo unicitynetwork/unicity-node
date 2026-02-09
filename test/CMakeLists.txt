@@ -6,6 +6,7 @@ add_library(test2_network_infra
     integration-network/infra/simulated_node.cpp
     integration-network/infra/node_simulator.cpp
     integration-network/infra/network_bridged_transport.cpp
+    integration-network/infra/test_access.cpp
 )
 
 target_include_directories(test2_network_infra PUBLIC
@@ -81,17 +82,11 @@ add_executable(unicity_tests
     integration-network/malformed_message_tests.cpp
     integration-network/headers_sync_tests.cpp
     integration-network/multi_peer_sync_tests.cpp
-    integration-network/dos/invalid_pow_tests.cpp
-    integration-network/dos/orphan_spam_tests.cpp
     integration-network/dos/oversized_headers_tests.cpp
-    integration-network/dos/low_work_headers_tests.cpp
     integration-network/dos/stalling_peer_tests.cpp
     integration-network/dos/header_withholding_tests.cpp
-    integration-network/dos/orphan_attack_tests.cpp
-    integration-network/dos/out_of_order_headers_tests.cpp
     integration-network/dos/overflow_compactsize_tests.cpp
     integration-network/dos/reserve_guard_tests.cpp
-    integration-network/dos/oversized_inv_tests.cpp
     integration-network/dos/oversized_addr_tests.cpp
     integration-network/dos/getheaders_oversize_tests.cpp
     integration-network/dos/per_peer_buffer_tests.cpp
@@ -100,30 +95,25 @@ add_executable(unicity_tests
     integration-network/dos/addr_valid_flood_tests.cpp
     integration-network/dos/addr_echo_suppression_tests.cpp
     integration-network/dos/addr_rate_limiting_tests.cpp
-    integration-network/dos/addr_eviction_performance_tests.cpp
     integration-network/dos/ping_pong_tests.cpp
     integration-network/dos/connect_churn_tests.cpp
-    integration-network/dos/reannounce_ttl_tests.cpp
     integration-network/dos/dos_simulator_tests.cpp
     integration-network/dos/dos_portfolio_tests.cpp
-    integration-network/dos/unknown_command_rate_limit_tests.cpp
     integration-network/dos/pre_verack_message_tests.cpp
-    integration-network/dos/unconnecting_headers_tests.cpp
     integration-network/dos/misbehavior_overflow_tests.cpp
     integration-network/dos/subversion_length_tests.cpp
     integration-network/dos/timeout_dos_tests.cpp
     integration-network/block_announcement/basic_tests.cpp
-    integration-network/block_announcement/edge_case_tests.cpp
-    integration-network/block_announcement/peer_states_tests.cpp
     integration-network/block_announcement/block_relay_comprehensive_tests.cpp
     integration-network/block_announcement/block_relay_policy_tests.cpp
     integration-network/block_announcement/core_aligned_smoke_tests.cpp
     integration-network/block_announcement/integration_tests.cpp
+    integration-network/block_announcement/ibd_relay_suppression_tests.cpp
+    integration-network/block_announcement/extra_block_relay_rotation_tests.cpp
     integration-network/handshake/edge_case_tests.cpp
     integration-network/handshake/timeout_tests.cpp
     integration-network/handshake/handshake_session_attacks.cpp
     integration-network/limits/connection_limit_tests.cpp
-    integration-network/limits/netgroup_boundary_tests.cpp
     integration-network/limits/slot_exhaustion_proof.cpp
     integration-network/limits/manual_slot_exclusion_tests.cpp
     integration-network/limits/outbound_dedup_tests.cpp
@@ -137,7 +127,6 @@ add_executable(unicity_tests
     integration-network/peer/feeler_adversarial_tests.cpp
     integration-network/peer/sync_callback_connect_tests.cpp
     integration-network/peer/inbound_reject_cleanup_tests.cpp
-    integration-network/peer/namespace_consistency_tests.cpp
     integration-network/peer/single_use_start_tests.cpp
     integration-network/peer/connection_metrics_tests.cpp
     integration-network/edge_case_tests.cpp
@@ -156,29 +145,36 @@ add_executable(unicity_tests
     integration-network/manager/ibd_gating_tests.cpp
     integration-network/manager/sync_started_reset_tests.cpp
     integration-network/manager/sync_peer_switching_tests.cpp
-    integration-chain/orphan_dos_tests.cpp
-    integration-chain/orphan_edge_case_tests.cpp
-    integration-chain/orphan_integration_tests.cpp
-    integration-chain/orphan_thread_safety_tests.cpp
-    integration-chain/orphan_time_eviction_tests.cpp
+    integration-network/manager/sync_peer_edge_case_tests.cpp
+    integration-network/manager/getheaders_throttling_tests.cpp
+    integration-network/manager/getheaders_throttle_bypass_tests.cpp
+    integration-network/manager/timeout_interaction_tests.cpp
+    integration-network/manager/chain_sync_timeout_tests.cpp
     integration-chain/invalidateblock_chain_tests.cpp
     integration-chain/chain_e2e_tests.cpp
     integration-chain/reorg_multi_node_tests.cpp
     integration-network/security/eclipse_attack_simulations.cpp
     integration-network/security/silent_peer_eclipse_tests.cpp
+    integration-network/security/fingerprint_protection_tests.cpp
     integration-network/addr_manager_tests2.cpp
     integration-network/feeler_anchor_tests.cpp
     integration-network/anchors_integration_tests.cpp
     integration-network/addr/getaddr_router_tests.cpp
     integration-network/addr/getaddr_multi_node_tests.cpp
+    integration-network/addr/getaddr_cache_adversarial_tests.cpp
     integration-network/addr/topology_privacy_tests.cpp
     integration-network/addr/addr_relay_timing_tests.cpp
+    integration-network/addr/addr_relay_dedup_tests.cpp
+    integration-network/addr/addr_relay_coordinated_attack_tests.cpp
+    integration-network/addr/addr_relay_prediction_tests.cpp
     integration-network/addr/addr_manager_netgroup_tests.cpp
     integration-network/addr/self_advertisement_integration_tests.cpp
     integration-network/addr/address_promotion_e2e_tests.cpp
     integration-network/self_advertisement_tests.cpp
+    integration-network/nat_integration_tests.cpp
     integration-network/real_transport_tests.cpp
     integration-network/real_transport_dos_tests.cpp
+    integration-network/tcp_fragmentation_tests.cpp
     integration-network/idle_timeout_tests.cpp
     integration-network/message_dispatcher_tests.cpp
     integration-network/rpc_integration_tests.cpp
@@ -201,7 +197,6 @@ target_include_directories(unicity_tests PRIVATE
 
 target_link_libraries(unicity_tests PRIVATE
     test2_network_infra
-    network
 )
 
 # Define test-only macro to enable debug hooks in production code (tests only)
@@ -257,6 +252,75 @@ target_link_libraries(unicity_tests_stress PRIVATE
 )
 
 set_target_properties(unicity_tests_stress PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+# Address simulation executable (separate tool for large-scale address relay testing)
+add_executable(addr_simulation
+    ${CMAKE_SOURCE_DIR}/test/common/catch_amalgamated.cpp
+    common/test_logging.cpp
+    addr-simulation/scenarios/propagation_tests.cpp
+    addr-simulation/scenarios/eclipse_attack_tests.cpp
+    addr-simulation/scenarios/sybil_attack_tests.cpp
+    addr-simulation/scenarios/timestamp_attack_tests.cpp
+    addr-simulation/scenarios/eviction_attack_tests.cpp
+    addr-simulation/scenarios/fingerprinting_tests.cpp
+    addr-simulation/scenarios/feeler_tests.cpp
+    addr-simulation/scenarios/longrun_health_tests.cpp
+    addr-simulation/scenarios/topology_tests.cpp
+    addr-simulation/scenarios/mixed_network_tests.cpp
+    addr-simulation/scenarios/attempt_tracking_tests.cpp
+    addr-simulation/scenarios/time_penalty_tests.cpp
+    addr-simulation/scenarios/memory_limits_tests.cpp
+    addr-simulation/scenarios/ipv6_netgroup_tests.cpp
+    addr-simulation/scenarios/bucketization_gap_tests.cpp
+    addr-simulation/scenarios/multi_source_tests.cpp
+    addr-simulation/scenarios/network_scale_tests.cpp
+)
+
+target_include_directories(addr_simulation PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/test
+    ${CMAKE_SOURCE_DIR}/test/common
+    ${CMAKE_SOURCE_DIR}/test/addr-simulation
+    ${Boost_INCLUDE_DIRS}
+)
+
+target_link_libraries(addr_simulation PRIVATE
+    network
+)
+
+set_target_properties(addr_simulation PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+# Eviction simulation executable (large-scale eviction behavior testing)
+add_executable(eviction_simulation
+    ${CMAKE_SOURCE_DIR}/test/common/catch_amalgamated.cpp
+    common/test_logging.cpp
+    eviction-simulation/scenarios/eclipse_resistance_tests.cpp
+    eviction-simulation/scenarios/block_relay_rotation_tests.cpp
+    eviction-simulation/scenarios/slot_stress_tests.cpp
+    eviction-simulation/scenarios/netgroup_diversity_tests.cpp
+    eviction-simulation/scenarios/eviction_protection_tests.cpp
+    eviction-simulation/scenarios/network_scale_tests.cpp
+    eviction-simulation/scenarios/advanced_eviction_tests.cpp
+)
+
+target_include_directories(eviction_simulation PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/test
+    ${CMAKE_SOURCE_DIR}/test/common
+    ${CMAKE_SOURCE_DIR}/test/eviction-simulation
+    ${Boost_INCLUDE_DIRS}
+)
+
+target_link_libraries(eviction_simulation PRIVATE
+    util
+    network  # For real EvictionManager
+)
+
+set_target_properties(eviction_simulation PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
@@ -374,7 +438,7 @@ add_custom_target(bench-chain
     COMMAND ${CMAKE_BINARY_DIR}/bin/unicity_bench "[benchmark][chain]"
     DEPENDS unicity_bench
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running chain benchmarks (header validation, orphans, reorgs)"
+    COMMENT "Running chain benchmarks (header validation, reorgs)"
 )
 
 add_custom_target(bench-network

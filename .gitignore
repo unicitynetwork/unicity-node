@@ -13,11 +13,13 @@ Makefile
 # IDE files
 .vscode/
 .idea/
+.cursorrules
 *.swp
 *.swo
 *~
 .claude/
 CLAUDE.md
+WARP.md
 
 # Compiled files
 *.o

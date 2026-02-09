@@ -2,7 +2,7 @@
 """
 Docker-based Peer Discovery Tests
 
-Tests PeerDiscoveryManager functionality using real TCP connections
+Tests AddrRelayManager functionality using real TCP connections
 from multiple peers across different netgroups.
 
 Prerequisites:
@@ -99,10 +99,10 @@ def create_version_message(nonce: int = None) -> bytes:
     payload += struct.pack("<q", int(time.time()))
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += b"\x00" * 10 + b"\xff\xff" + socket.inet_aton("127.0.0.1")
-    payload += struct.pack(">H", 8333)
+    payload += struct.pack(">H", 9590)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += b"\x00" * 10 + b"\xff\xff" + socket.inet_aton("127.0.0.1")
-    payload += struct.pack(">H", 8333)
+    payload += struct.pack(">H", 9590)
     payload += struct.pack("<Q", nonce)
     user_agent = b"/DiscoveryTest:1.0/"
     payload += bytes([len(user_agent)]) + user_agent
@@ -171,7 +171,7 @@ def seed_addresses_via_rpc(count: int, first_octet: int = 100) -> int:
 
         code, output = docker_exec(
             "discovery_target",
-            f"/app/build/bin/unicity-cli --datadir=/data addpeeraddress {address} 8333"
+            f"/app/build/bin/unicity-cli --datadir=/data addpeeraddress {address} 9590"
         )
         if '"success": true' in output:
             added += 1
@@ -191,7 +191,7 @@ def seed_addresses_via_rpc_netgroup(count: int, octet1: int, octet2: int) -> int
 
         code, output = docker_exec(
             "discovery_target",
-            f"/app/build/bin/unicity-cli --datadir=/data addpeeraddress {address} 8333"
+            f"/app/build/bin/unicity-cli --datadir=/data addpeeraddress {address} 9590"
         )
         if '"success": true' in output:
             added += 1
@@ -225,8 +225,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -284,8 +284,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -319,7 +319,7 @@ try:
         addr_payload += struct.pack("<I", ts)  # timestamp
         addr_payload += struct.pack("<Q", NODE_NETWORK)  # services
         addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([o1, o2, o3, o4])
-        addr_payload += struct.pack(">H", 8333)  # port
+        addr_payload += struct.pack(">H", 9590)  # port
 
     s.sendall(create_msg("addr", addr_payload))
     print("SENT")
@@ -363,8 +363,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -482,8 +482,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -520,7 +520,7 @@ try:
         addr_payload += struct.pack("<I", ts)  # timestamp
         addr_payload += struct.pack("<Q", NODE_NETWORK)  # services
         addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([o1, o2, 0, 1])
-        addr_payload += struct.pack(">H", 8333)  # port
+        addr_payload += struct.pack(">H", 9590)  # port
 
     s.sendall(create_msg("addr", addr_payload))
     print("SENT")
@@ -747,8 +747,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -901,8 +901,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -948,7 +948,7 @@ try:
             addr_payload += struct.pack("<I", ts)
             addr_payload += struct.pack("<Q", NODE_NETWORK)
             addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([o1, o2, 0, 1])
-            addr_payload += struct.pack(">H", 8333)
+            addr_payload += struct.pack(">H", 9590)
         s.sendall(create_msg("addr", addr_payload))
         time.sleep(0.1)
 
@@ -971,7 +971,7 @@ try:
         addr_payload += struct.pack("<I", ts)
         addr_payload += struct.pack("<Q", NODE_NETWORK)
         addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([o1, o2, 0, 1])
-        addr_payload += struct.pack(">H", 8333)
+        addr_payload += struct.pack(">H", 9590)
     s.sendall(create_msg("addr", addr_payload))
     print("SENT_BATCH")
 
@@ -1101,8 +1101,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -1155,7 +1155,7 @@ try:
         addr_payload += struct.pack("<I", ts)
         addr_payload += struct.pack("<Q", NODE_NETWORK)
         addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([o1, o2, o3, o4])
-        addr_payload += struct.pack(">H", 8333)
+        addr_payload += struct.pack(">H", 9590)
 
     s.sendall(create_msg("addr", addr_payload))
     print("SENT_MARKER_ADDRESSES")
@@ -1283,8 +1283,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -1326,7 +1326,7 @@ try:
         addr_payload += struct.pack("<I", ts)
         addr_payload += struct.pack("<Q", NODE_NETWORK)
         addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([8, 8, o3, o4])  # All 8.8.x.x
-        addr_payload += struct.pack(">H", 8333)
+        addr_payload += struct.pack(">H", 9590)
 
     s.sendall(create_msg("addr", addr_payload))
     print(f"SENT:{{addr_count}}")
@@ -1401,8 +1401,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -1431,7 +1431,7 @@ try:
         addr_payload += struct.pack("<I", ts)
         addr_payload += struct.pack("<Q", NODE_NETWORK)
         addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([199, 199, 0, i+1])  # 199.199.0.x marker
-        addr_payload += struct.pack(">H", 8333)
+        addr_payload += struct.pack(">H", 9590)
 
     s.sendall(create_msg("addr", addr_payload))
     print("SENT_PRE_VERACK_ADDR")
@@ -1519,8 +1519,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -1679,8 +1679,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -1718,7 +1718,7 @@ try:
         addr_payload += struct.pack("<I", future_ts)  # FUTURE TIMESTAMP!
         addr_payload += struct.pack("<Q", NODE_NETWORK)
         addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([188, 188, 0, i+1])  # 188.188.0.x marker
-        addr_payload += struct.pack(">H", 8333)
+        addr_payload += struct.pack(">H", 9590)
 
     s.sendall(create_msg("addr", addr_payload))
     print(f"SENT:{{addr_count}} with future timestamp {{future_ts}}")
@@ -1766,7 +1766,7 @@ def test_eviction_exhaustion() -> bool:
     """Test resistance to eviction exhaustion attack.
 
     Attack scenario: Attacker floods target with many addresses from diverse
-    netgroups to fill the NEW table to capacity (MAX_NEW_ADDRESSES = 20000),
+    netgroups to fill the NEW table to capacity (MAX_NEW_ADDRESSES = 65536),
     then continues flooding to trigger eviction of honest addresses.
 
     Tests that evict_worst_new_address() properly prioritizes eviction
@@ -1875,8 +1875,8 @@ def create_version():
     payload = struct.pack("<i", PROTOCOL_VERSION)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", NODE_NETWORK) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x13/DiscoveryTest:1.0/"
     payload += struct.pack("<i", 0)
@@ -1918,7 +1918,7 @@ try:
         addr_payload += struct.pack("<I", ts)
         addr_payload += struct.pack("<Q", NODE_NETWORK)
         addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([7, 7, o3, o4])  # All 7.7.x.x
-        addr_payload += struct.pack(">H", 8333)
+        addr_payload += struct.pack(">H", 9590)
 
     s.sendall(create_msg("addr", addr_payload))
     print("SENT")
@@ -2047,7 +2047,7 @@ import socket,struct,hashlib,time,random
 def sha(d): return hashlib.sha256(hashlib.sha256(d).digest()).digest()
 def msg(c,p): return struct.pack('<I',0x4B7C2E91)+c.encode().ljust(12,b'\\x00')+struct.pack('<I',len(p))+sha(p)[:4]+p
 p=struct.pack('<iQqQ',70016,1,int(time.time()),1)+b'\\x00'*10+b'\\xff\\xff'+socket.inet_aton('{target_ip}')+struct.pack('>H',29590)
-p+=struct.pack('<Q',1)+b'\\x00'*10+b'\\xff\\xff'+socket.inet_aton('172.40.2.1')+struct.pack('>H',8333)
+p+=struct.pack('<Q',1)+b'\\x00'*10+b'\\xff\\xff'+socket.inet_aton('172.40.2.1')+struct.pack('>H',9590)
 p+=struct.pack('<Q',random.getrandbits(64))+b'\\x0a/Test:1.0/'+struct.pack('<i',0)
 s=socket.socket();s.settimeout(10);s.connect(('{target_ip}',29590))
 s.sendall(msg('version',p));s.recv(4096);s.sendall(msg('verack',b''))
@@ -2105,7 +2105,7 @@ import socket,struct,hashlib,time,random
 def sha(d): return hashlib.sha256(hashlib.sha256(d).digest()).digest()
 def msg(c,p): return struct.pack('<I',0x4B7C2E91)+c.encode().ljust(12,b'\\x00')+struct.pack('<I',len(p))+sha(p)[:4]+p
 p=struct.pack('<iQqQ',70016,1,int(time.time()),1)+b'\\x00'*10+b'\\xff\\xff'+socket.inet_aton('{target_ip}')+struct.pack('>H',29590)
-p+=struct.pack('<Q',1)+b'\\x00'*10+b'\\xff\\xff'+socket.inet_aton('172.40.2.1')+struct.pack('>H',8333)
+p+=struct.pack('<Q',1)+b'\\x00'*10+b'\\xff\\xff'+socket.inet_aton('172.40.2.1')+struct.pack('>H',9590)
 p+=struct.pack('<Q',random.getrandbits(64))+b'\\x0a/Test:1.0/'+struct.pack('<i',0)
 s=socket.socket();s.settimeout(10);s.connect(('{target_ip}',29590))
 s.sendall(msg('version',p));s.recv(4096);s.sendall(msg('verack',b''));time.sleep(2);s.close()
@@ -2129,7 +2129,7 @@ import socket,struct,hashlib,time,random
 def sha(d): return hashlib.sha256(hashlib.sha256(d).digest()).digest()
 def msg(c,p): return struct.pack('<I',0x4B7C2E91)+c.encode().ljust(12,b'\\x00')+struct.pack('<I',len(p))+sha(p)[:4]+p
 p=struct.pack('<iQqQ',70016,1,int(time.time()),1)+b'\\x00'*10+b'\\xff\\xff'+socket.inet_aton('{target_ip2}')+struct.pack('>H',29590)
-p+=struct.pack('<Q',1)+b'\\x00'*10+b'\\xff\\xff'+socket.inet_aton('172.41.2.1')+struct.pack('>H',8333)
+p+=struct.pack('<Q',1)+b'\\x00'*10+b'\\xff\\xff'+socket.inet_aton('172.41.2.1')+struct.pack('>H',9590)
 p+=struct.pack('<Q',random.getrandbits(64))+b'\\x0a/Test:1.0/'+struct.pack('<i',0)
 s=socket.socket();s.settimeout(10);s.connect(('{target_ip2}',29590))
 s.sendall(msg('version',p));d=s.recv(4096);s.sendall(msg('verack',b''))

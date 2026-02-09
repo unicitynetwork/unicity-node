@@ -2,6 +2,7 @@
 // SimulatedNode implementation - Uses REAL P2P components with simulated transport
 
 #include "simulated_node.hpp"
+#include "test_access.hpp"
 #include <random>
 #include <sstream>
 #include "chain/block.hpp"
@@ -11,9 +12,8 @@
 #include "chain/randomx_pow.hpp"
 #include "util/sha256.hpp"
 #include "chain/validation.hpp"
-#include "network/block_relay_manager.hpp"
 #include "network/connection_types.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 
 namespace unicity {
 namespace test {
@@ -114,6 +114,9 @@ SimulatedNode::SimulatedNode(int node_id,
 }
 
 SimulatedNode::~SimulatedNode() {
+    // Unsubscribe from notifications before stopping network
+    tip_sub_.Unsubscribe();
+
     // Stop networking
     if (network_manager_) {
         network_manager_->stop();
@@ -141,7 +144,7 @@ void SimulatedNode::InitializeNetworking() {
     // CRITICAL: Set unique test_nonce for each node to prevent self-connection rejection
     // In multi-node tests, each SimulatedNode needs a unique nonce (node_id + offset)
     // Setting test_nonce disables process-wide nonce, and each peer gets this value
-    // via set_local_nonce() in PeerLifecycleManager, ensuring different nodes can connect
+    // via set_local_nonce() in ConnectionManager, ensuring different nodes can connect
     config.test_nonce = static_cast<uint64_t>(node_id_) + 1000000;
 
     // Create shared_ptr wrapper for io_context (NetworkManager requires shared ownership)
@@ -161,6 +164,26 @@ void SimulatedNode::InitializeNetworking() {
     if (!network_manager_->start()) {
         throw std::runtime_error("Failed to start NetworkManager");
     }
+
+    // Subscribe to chain tip changes to relay new blocks (mirrors Application behavior)
+    // IMPORTANT: Notifications() is a global singleton shared by all SimulatedNodes.
+    // We must verify the event matches OUR chainstate before relaying.
+    tip_sub_ = Notifications().SubscribeChainTip(
+        [this](const ChainTipEvent& event) {
+            // Verify this event is for OUR chainstate (not another node's)
+            const auto* our_tip = chainstate_ ? chainstate_->GetTip() : nullptr;
+            if (!our_tip || our_tip->GetBlockHash() != event.hash) {
+                return;  // Event is from another node's chainstate
+            }
+            // Skip tip announcement during IBD (matches Bitcoin Core's UpdatedBlockTip behavior)
+            if (event.is_initial_download) {
+                return;
+            }
+            // Announce new tip to all connected peers via direct HEADERS
+            if (network_manager_) {
+                network_manager_->announce_block(event.hash);
+            }
+        });
 }
 
 std::string SimulatedNode::GetAddress() const {
@@ -424,18 +447,14 @@ auto* pindex = chainstate_->AcceptBlockHeader(header, state);
         chainstate_->ActivateBestChain();
         stats_.blocks_mined++;
 
-        // Broadcast the block to peers via NetworkManager
-        uint256 block_hash = header.GetHash();
-        if (network_manager_) {
-            size_t peer_count = network_manager_->active_peer_count();
-            network_manager_->relay_block(block_hash);
-        }
+        // Block relay is handled automatically by ChainTipEvent callback
+        // which announces blocks via announce_block(). No need to call it here directly.
 
-        // Process events to ensure the block relay messages are queued
+        // Process events to ensure the block relay messages are sent
         // This is important in fast (non-TSAN) builds where async operations complete quickly
         ProcessEvents();
 
-        return block_hash;
+        return header.GetHash();
     }
 
     return uint256();  // Failed
@@ -490,26 +509,18 @@ CBlockHeader SimulatedNode::GetBlockHeader(const uint256& hash) const {
     return pindex ? pindex->GetBlockHeader() : CBlockHeader();
 }
 
-size_t SimulatedNode::GetOrphanCount() const {
-    return chainstate_->GetOrphanHeaderCount();
-}
-
-void SimulatedNode::EvictExpiredOrphans() {
-    chainstate_->EvictOrphanHeaders();
-}
-
 void SimulatedNode::ReceiveHeaders(int from_peer_id, const std::vector<CBlockHeader>& headers) {
     // This simulates receiving headers from a peer
     // Process headers directly through chainstate
+    // Headers with missing parents are skipped (no orphan pool)
+    (void)from_peer_id;  // Unused now that orphan pool is removed
     for (const auto& header : headers) {
         validation::ValidationState state;
         auto* pindex = chainstate_->AcceptBlockHeader(header, state);
         if (pindex) {
             chainstate_->TryAddBlockIndexCandidate(pindex);
-        } else if (state.GetRejectReason() == "prev-blk-not-found") {
-            // Add to orphan pool
-            chainstate_->AddOrphanHeader(header, from_peer_id);
         }
+        // Headers with missing parents are simply skipped
     }
 }
 
@@ -564,20 +575,6 @@ void SimulatedNode::ProcessEvents() {
         }
     }
 
-    // Flush pending block announcements after processing events
-    // This ensures announcements are sent regardless of how tests trigger event processing
-    // (matches Bitcoin's SendMessages loop which flushes after processing events)
-    if (network_manager_) {
-        network_manager_->flush_block_announcements();
-    }
-}
-
-void SimulatedNode::SetBlockRelayChunkSize(size_t chunk_size) {
-    // Access BlockRelayManager directly through NetworkManager
-    // Uses friend class privilege to call private SetInvChunkSize()
-    if (network_manager_) {
-        network_manager_->block_relay_for_test().SetInvChunkSize(chunk_size);
-    }
 }
 
 void SimulatedNode::ProcessPeriodic() {
@@ -585,16 +582,55 @@ void SimulatedNode::ProcessPeriodic() {
     // In a real node, these run on timers, but in simulation they're triggered by AdvanceTime()
     if (network_manager_) {
         // Trigger initial sync selection deterministically (no timers)
-        network_manager_->test_hook_check_initial_sync();
+        NetworkManagerTestAccess::CheckInitialSync(*network_manager_);
 
         network_manager_->peer_manager().process_periodic();
 
         // Process pending ADDR relays (trickle delay for privacy)
         network_manager_->discovery_manager().ProcessPendingAddrRelays();
 
-        // Call announce_tip_to_peers() to add blocks to announcement queues
-        // The actual flushing happens in ProcessEvents() (like Bitcoin's SendMessages loop)
-        network_manager_->announce_tip_to_peers();
+        // NOTE: We intentionally do NOT call announce_tip_to_peers() here.
+        // In production, tip announcements only happen via ChainTipEvent (gated by is_initial_download).
+        // This matches Bitcoin Core's event-driven relay model.
+    }
+}
+
+// Test hook wrappers using NetworkManagerTestAccess
+void SimulatedNode::CheckInitialSync() {
+    if (network_manager_) {
+        NetworkManagerTestAccess::CheckInitialSync(*network_manager_);
+    }
+}
+
+void SimulatedNode::ProcessHeaderSyncTimers() {
+    if (network_manager_) {
+        NetworkManagerTestAccess::ProcessHeaderSyncTimers(*network_manager_);
+    }
+}
+
+void SimulatedNode::TriggerSelfAdvertisement() {
+    if (network_manager_) {
+        NetworkManagerTestAccess::TriggerSelfAdvertisement(*network_manager_);
+    }
+}
+
+void SimulatedNode::AttemptFeelerConnection() {
+    if (network_manager_) {
+        NetworkManagerTestAccess::AttemptFeelerConnection(*network_manager_);
+    }
+}
+
+network::AddrRelayManager& SimulatedNode::GetDiscoveryManager() {
+    return NetworkManagerTestAccess::GetDiscoveryManager(*network_manager_);
+}
+
+network::HeaderSyncManager& SimulatedNode::GetHeaderSync() {
+    return NetworkManagerTestAccess::GetHeaderSync(*network_manager_);
+}
+
+void SimulatedNode::SetInboundPermissions(network::NetPermissionFlags flags) {
+    if (network_manager_) {
+        NetworkManagerTestAccess::SetDefaultInboundPermissions(*network_manager_, flags);
     }
 }
 

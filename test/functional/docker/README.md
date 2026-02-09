@@ -48,8 +48,8 @@ docker-compose down -v
 ### 1. Eclipse Attack Tests (`docker_eclipse/`)
 
 Tests requiring multiple source IPs:
-- Netgroup limits (MAX_INBOUND_PER_NETGROUP)
-- Netgroup eviction (Bitcoin Core parity - no per-IP limit)
+- Eviction-based netgroup limiting (Bitcoin Core parity)
+- Netgroup-aware eviction (targets overrepresented netgroups)
 - Multi-netgroup Sybil attacks
 - Malformed packet handling (via node_simulator)
 - Misbehavior banning

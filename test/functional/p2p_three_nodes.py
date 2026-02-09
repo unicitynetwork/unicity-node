@@ -17,8 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "test_framework"))
 
 from test_node import TestNode
-from util import wait_until
-from util import pick_free_port
+from util import wait_until, wait_for_peers, pick_free_port
 
 
 def main():
@@ -55,8 +54,6 @@ def main():
                         extra_args=["--listen", f"--port={port2}"])
         node2.start()
 
-        time.sleep(1)
-
         # Build network topology: node0 -> node1 -> node2
         print("\nBuilding network topology: node0 -> node1 -> node2")
 
@@ -67,7 +64,11 @@ def main():
         node2.add_node(f"127.0.0.1:{port1}", "add")
 
         # Wait for connections to establish
-        time.sleep(2)
+        print("Waiting for connections to establish...")
+        if not wait_for_peers(node1, 1, timeout=10):
+            raise Exception("node1 did not connect to node0")
+        if not wait_for_peers(node2, 1, timeout=10):
+            raise Exception("node2 did not connect to node1")
 
         # Verify all nodes start at genesis
         info0 = node0.get_info()

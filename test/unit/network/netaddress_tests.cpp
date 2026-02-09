@@ -224,9 +224,9 @@ TEST_CASE("ParseIPPort - IPv6 format", "[util][netaddress]") {
     SECTION("Full form IPv6 with port") {
         std::string ip;
         uint16_t port;
-        REQUIRE(ParseIPPort("[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:8333", ip, port));
+        REQUIRE(ParseIPPort("[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:9590", ip, port));
         REQUIRE(ip == "2001:db8:85a3::8a2e:370:7334");
-        REQUIRE(port == 8333);
+        REQUIRE(port == 9590);
     }
 
     SECTION("Link-local with port") {
@@ -356,7 +356,7 @@ TEST_CASE("Combined scenarios", "[util][netaddress]") {
             "192.168.1.1:8080",
             "[::1]:9590",
             "10.0.0.1:443",
-            "[2001:db8::1]:8333"
+            "[2001:db8::1]:9590"
         };
 
         for (const auto& addr : addresses) {
@@ -384,5 +384,99 @@ TEST_CASE("Combined scenarios", "[util][netaddress]") {
             uint16_t port;
             REQUIRE_FALSE(ParseIPPort(addr, ip, port));
         }
+    }
+}
+
+// ============================================================================
+// IsBadPort tests (Bitcoin Core parity: net.cpp IsBadPort)
+// ============================================================================
+
+TEST_CASE("IsBadPort - known bad ports", "[util][netaddress]") {
+    SECTION("Well-known system service ports") {
+        REQUIRE(IsBadPort(1));      // tcpmux
+        REQUIRE(IsBadPort(7));      // echo
+        REQUIRE(IsBadPort(21));     // ftp
+        REQUIRE(IsBadPort(22));     // ssh
+        REQUIRE(IsBadPort(23));     // telnet
+        REQUIRE(IsBadPort(25));     // smtp
+        REQUIRE(IsBadPort(53));     // domain (DNS)
+    }
+
+    SECTION("Mail-related ports") {
+        REQUIRE(IsBadPort(110));    // pop3
+        REQUIRE(IsBadPort(143));    // imap2
+        REQUIRE(IsBadPort(465));    // smtp+ssl
+        REQUIRE(IsBadPort(587));    // submission
+        REQUIRE(IsBadPort(993));    // imaps
+        REQUIRE(IsBadPort(995));    // pop3s
+    }
+
+    SECTION("Database ports") {
+        REQUIRE(IsBadPort(3306));   // mysql
+        REQUIRE(IsBadPort(5432));   // postgresql
+        REQUIRE(IsBadPort(27017));  // mongodb
+    }
+
+    SECTION("IRC ports") {
+        REQUIRE(IsBadPort(6665));   // irc (alt)
+        REQUIRE(IsBadPort(6666));   // irc (alt)
+        REQUIRE(IsBadPort(6667));   // irc (default)
+        REQUIRE(IsBadPort(6668));   // irc (alt)
+        REQUIRE(IsBadPort(6669));   // irc (alt)
+        REQUIRE(IsBadPort(6697));   // irc+tls
+    }
+
+    SECTION("Other commonly abused ports") {
+        REQUIRE(IsBadPort(5060));   // sip
+        REQUIRE(IsBadPort(5061));   // sips
+        REQUIRE(IsBadPort(5900));   // vnc
+        REQUIRE(IsBadPort(6000));   // x11
+        REQUIRE(IsBadPort(3389));   // rdp
+    }
+}
+
+TEST_CASE("IsBadPort - allowed ports", "[util][netaddress]") {
+    SECTION("Bitcoin standard ports") {
+        REQUIRE_FALSE(IsBadPort(9590));   // Bitcoin mainnet
+        REQUIRE_FALSE(IsBadPort(19590));  // Bitcoin testnet
+        REQUIRE_FALSE(IsBadPort(18444));  // Bitcoin regtest
+        REQUIRE_FALSE(IsBadPort(9590));   // Our default port
+    }
+
+    SECTION("Common web ports (not in bad list)") {
+        REQUIRE_FALSE(IsBadPort(80));     // http - NOT in bad list
+        REQUIRE_FALSE(IsBadPort(443));    // https - NOT in bad list
+    }
+
+    SECTION("Random high ports") {
+        REQUIRE_FALSE(IsBadPort(12345));
+        REQUIRE_FALSE(IsBadPort(50000));
+        REQUIRE_FALSE(IsBadPort(65535));
+    }
+
+    SECTION("Port 0 (edge case)") {
+        REQUIRE_FALSE(IsBadPort(0));      // Not in bad list (though invalid)
+    }
+}
+
+TEST_CASE("IsBadPort - boundary conditions", "[util][netaddress]") {
+    SECTION("Ports around FTP (20-21)") {
+        REQUIRE_FALSE(IsBadPort(18));
+        REQUIRE(IsBadPort(20));           // ftp data - BAD
+        REQUIRE(IsBadPort(21));           // ftp access - BAD
+        REQUIRE(IsBadPort(22));           // ssh - BAD
+        REQUIRE(IsBadPort(23));           // telnet - BAD
+    }
+
+    SECTION("Ports around SMTP (25)") {
+        REQUIRE_FALSE(IsBadPort(24));
+        REQUIRE(IsBadPort(25));           // smtp - BAD
+        REQUIRE_FALSE(IsBadPort(26));
+    }
+
+    SECTION("Ports around MySQL (3306)") {
+        REQUIRE_FALSE(IsBadPort(3305));
+        REQUIRE(IsBadPort(3306));         // mysql - BAD
+        REQUIRE_FALSE(IsBadPort(3307));
     }
 }

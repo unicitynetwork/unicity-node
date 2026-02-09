@@ -3,18 +3,20 @@
 #include "network/peer.hpp"
 #include "network/message.hpp"
 #include "infra/mock_transport.hpp"
+#include "infra/test_access.hpp"
 #include <thread>
 
 using namespace unicity;
 using namespace unicity::network;
 using namespace unicity::protocol;
+using unicity::test::PeerTestAccess;
 
 namespace {
 struct TimeoutGuard {
     TimeoutGuard(std::chrono::milliseconds hs, std::chrono::milliseconds idle) {
-        Peer::SetTimeoutsForTest(hs, idle);
+        PeerTestAccess::SetTimeouts(hs, idle);
     }
-    ~TimeoutGuard() { Peer::ResetTimeoutsForTest(); }
+    ~TimeoutGuard() { PeerTestAccess::ResetTimeouts(); }
 };
 
 static std::vector<uint8_t> make_msg(const std::string& cmd, const std::vector<uint8_t>& payload){

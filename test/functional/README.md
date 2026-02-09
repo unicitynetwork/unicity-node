@@ -1,11 +1,10 @@
 # Functional Tests README
 
-This directory contains Python-based functional tests that drive one or more Unicity nodes (`unicityd`) via the local RPC (Unix socket) and, where needed, P2P connections. Tests cover consensus rules, networking behavior, misbehavior handling, orphan-pool controls, and various workflow scenarios.
+This directory contains Python-based functional tests that drive one or more Unicity nodes (`unicityd`) via the local RPC (Unix socket) and, where needed, P2P connections. Tests cover consensus rules, networking behavior, misbehavior handling, and various workflow scenarios.
 
 Highlights:
 - Deterministic consensus tests using a testnet/regtest-only `submitheader` RPC. PoW bypass via `skip_pow=true` is **regtest-only**.
 - P2P misbehavior and disconnection tests via a test-only `reportmisbehavior` RPC.
-- Orphan pool inspection and eviction via `getorphanstats`, `addorphanheader`, and `evictorphans` RPCs.
 - A flexible test runner with discovery, filtering (`-k`), per-test timeouts, and optional JUnit XML output for CI.
 
 ## Prerequisites
@@ -23,7 +22,6 @@ Highlights:
   - `python3 test/functional/test_runner.py -k consensus_`
   - `python3 test/functional/test_runner.py -k rpc_`
 - Run a single test directly (including slow/excluded tests):
-  - `python3 test/functional/orphan_pool_tests.py`
   - `python3 test/functional/p2p_batching.py`  (slow; requires prebuilt chain, see below)
 - Increase the per-test timeout (seconds) or export JUnit XML:
   - `python3 test/functional/test_runner.py --timeout 1200 --junit functional-results.xml`
@@ -51,13 +49,11 @@ Notes:
   - `p2p_misbehavior_scores.py` (disconnects and scoring via `reportmisbehavior`)
   - `p2p_batching.py` (headers batching of 2000; slow by design)
   - `p2p_*` and `feature_*` scripts cover sync, fork resolution, IBD restart/resume, etc.
-- Orphan pool
-  - `orphan_pool_tests.py` (add/list/evict orphans, per-peer counts)
 - RPC surface
   - `rpc_errors_and_help.py` (unknown command, bad params, help behavior)
   - `rpc_ban_persistence.py` (banlist persists across restart; `clearbanned`)
 
-The test runner (`test/functional/test_runner.py`) discovers files starting with `feature_`, `test_`, `p2p_`, `rpc_`, `basic_`, `consensus_`, `orphan_`, excluding the slow/advanced list.
+The test runner (`test/functional/test_runner.py`) discovers files starting with `feature_`, `test_`, `p2p_`, `rpc_`, `basic_`, `consensus_`, excluding the slow/advanced list.
 
 ## Test-only RPCs (regtest/testnet only)
 These RPCs exist solely to enable deterministic functional testing. They are disabled on mainnet builds or at runtime on mainnet.
@@ -71,13 +67,9 @@ These RPCs exist solely to enable deterministic functional testing. They are dis
   - Immediately disconnects a peer (if connected).
 - `clearbanned`
   - Clears persistent ban entries.
-- Orphan pool controls
-  - `addorphanheader <100-byte-hex> [peer_id]`
-  - `getorphanstats` → `{ "count": N, "by_peer": [{"peer_id": P, "count": C}, ...] }`
-  - `evictorphans` → `{ "evicted": N }`
 - Misbehavior injection
   - `reportmisbehavior <peer_id> <type> [arg]`
-    - Types include: `invalid_pow`, `non_continuous <k>`, `oversized`, `low_work`, `invalid_header`, `too_many_orphans`, `increment_unconnecting <k>`, `reset_unconnecting`, `clear_discouraged`.
+    - Types include: `invalid_pow`, `non_continuous <k>`, `oversized`, `low_work`, `invalid_header`, `increment_unconnecting <k>`, `reset_unconnecting`, `clear_discouraged`.
     - Response includes `{ "peer_existed_before": bool, "peer_exists_after": bool }`.
 
 Tip: Many tests use `setmocktime` to control future-time validation and expiry windows.
@@ -139,6 +131,6 @@ You can always regenerate locally with the helper scripts if LFS assets are not 
   - Regenerate with `regenerate_test_chains.py` or adjust the test to a smaller dataset.
 
 ## Adding new tests
-- Place new scripts here with a filename starting with one of: `feature_`, `test_`, `p2p_`, `rpc_`, `basic_`, `consensus_`, `orphan_`.
+- Place new scripts here with a filename starting with one of: `feature_`, `test_`, `p2p_`, `rpc_`, `basic_`, `consensus_`.
 - Keep long/advanced tests out of the default run by adding them to `exclude_files` in `test_runner.py`.
 - Prefer deterministic setups (regtest, `setmocktime`, and test-only RPCs) to avoid flakiness.

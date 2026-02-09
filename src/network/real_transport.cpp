@@ -21,19 +21,25 @@ std::atomic<std::chrono::milliseconds> RealTransportConnection::connect_timeout_
     std::chrono::milliseconds{0}};
 std::atomic<size_t> RealTransportConnection::send_queue_limit_override_bytes_{0};
 
-TransportConnectionPtr RealTransportConnection::create_outbound(asio::io_context& io_context,
-                                                                const std::string& address, uint16_t port,
-                                                                ConnectCallback callback) {
+TransportConnectionPtr RealTransportConnection::create_outbound(
+    asio::io_context& io_context,
+    const std::string& address,
+    uint16_t port,
+    ConnectCallback callback)
+{
   auto conn = std::shared_ptr<RealTransportConnection>(new RealTransportConnection(io_context, false));
   // Defer do_connect onto the strand so shared_from_this() is safe and the
   // object lifetime is extended regardless of factory return-value usage.
-  asio::post(conn->strand_,
-             [conn, address, port, callback]() mutable { conn->do_connect(address, port, std::move(callback)); });
+  asio::post(conn->strand_, [conn, address, port, callback]() mutable {
+    conn->do_connect(address, port, std::move(callback));
+  });
   return conn;
 }
 
-TransportConnectionPtr RealTransportConnection::create_inbound(asio::io_context& io_context,
-                                                               asio::ip::tcp::socket socket) {
+TransportConnectionPtr RealTransportConnection::create_inbound(
+    asio::io_context& io_context,
+    asio::ip::tcp::socket socket)
+{
   auto conn = std::shared_ptr<RealTransportConnection>(new RealTransportConnection(io_context, true));
   conn->socket_ = std::move(socket);
   conn->open_ = true;
@@ -51,16 +57,16 @@ TransportConnectionPtr RealTransportConnection::create_inbound(asio::io_context&
 }
 
 RealTransportConnection::RealTransportConnection(asio::io_context& io_context, bool is_inbound)
-    : io_context_(io_context), socket_(io_context), strand_(io_context.get_executor()), is_inbound_(is_inbound),
-      id_(next_id_++), connect_timer_(std::make_unique<asio::steady_timer>(io_context)) {}
-
-RealTransportConnection::~RealTransportConnection() {
-  // Destructor should be defensive-only, never initiate cleanup
-  // All cleanup must happen in close() while the shared_ptr is still alive.
-  // IMPORTANT: Do not log via logger here; the logging subsystem may already be
-  // destroyed during program shutdown. If needed for debugging, use fprintf to
-  // stderr, but we avoid even that to keep destructor noexcept and safe.
+    : io_context_(io_context)
+    , socket_(io_context)
+    , strand_(io_context.get_executor())
+    , is_inbound_(is_inbound)
+    , id_(next_id_++)
+    , connect_timer_(std::make_unique<asio::steady_timer>(io_context))
+{
 }
+
+RealTransportConnection::~RealTransportConnection() {}
 
 void RealTransportConnection::do_connect(const std::string& address, uint16_t port, ConnectCallback callback) {
   remote_addr_ = address;
@@ -184,9 +190,7 @@ void RealTransportConnection::start_read_impl() {
   if (!open_)
     return;
 
-#ifndef NDEBUG
   assert(strand_.running_in_this_thread());
-#endif
 
   // Allocate a fresh buffer per read to avoid any possibility of scribbling on a
   // shared member buffer if future refactors accidentally post two reads.
@@ -287,9 +291,8 @@ bool RealTransportConnection::send(const std::vector<uint8_t>& data) {
 void RealTransportConnection::do_write_impl() {
   if (!open_)
     return;
-#ifndef NDEBUG
+
   assert(strand_.running_in_this_thread());
-#endif
 
   if (send_queue_.empty()) {
     writing_.store(false, std::memory_order_release);
@@ -326,9 +329,8 @@ void RealTransportConnection::do_write_impl() {
 }
 
 void RealTransportConnection::deliver_disconnect_once() {
-#ifndef NDEBUG
   assert(strand_.running_in_this_thread());
-#endif
+
   if (disconnect_delivered_) {
     return;  // Already delivered
   }
@@ -352,9 +354,8 @@ void RealTransportConnection::close() {
 }
 
 void RealTransportConnection::close_impl() {
-#ifndef NDEBUG
   assert(strand_.running_in_this_thread());
-#endif
+
   if (!open_.exchange(false)) {
     return;  // Already closed
   }
@@ -438,22 +439,6 @@ void RealTransportConnection::close_impl() {
 
 bool RealTransportConnection::is_open() const {
   return open_;
-}
-
-void RealTransportConnection::SetConnectTimeoutForTest(std::chrono::milliseconds timeout_ms) {
-  connect_timeout_override_ms_.store(timeout_ms, std::memory_order_relaxed);
-}
-
-void RealTransportConnection::ResetConnectTimeoutForTest() {
-  connect_timeout_override_ms_.store(std::chrono::milliseconds{0}, std::memory_order_relaxed);
-}
-
-void RealTransportConnection::SetSendQueueLimitForTest(size_t bytes) {
-  send_queue_limit_override_bytes_.store(bytes, std::memory_order_relaxed);
-}
-
-void RealTransportConnection::ResetSendQueueLimitForTest() {
-  send_queue_limit_override_bytes_.store(0, std::memory_order_relaxed);
 }
 
 std::chrono::milliseconds RealTransportConnection::connect_timeout_ms() const {
@@ -631,11 +616,6 @@ uint16_t RealTransport::listening_port() const {
 
 void RealTransport::stop() {
   running_.store(false);
-
-  // Don't log here - this is called from destructor, logger may be shut down
-
-  // Cancel all pending operations (listening, etc.)
-  // Note: We do NOT stop the io_context - it's owned externally and may be shared
   stop_listening();
 }
 

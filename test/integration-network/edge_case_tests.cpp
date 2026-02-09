@@ -23,11 +23,11 @@ TEST_CASE("Slow peer eviction - Peer times out if no headers sent", "[network][e
     for (int i = 0; i < 10; i++) (void)node1.MineBlock();
 
     REQUIRE(node2.ConnectTo(1));
-    for (int i = 0; i < 20; i++) network.AdvanceTime(network.GetCurrentTime() + 100);
+    for (int i = 0; i < 20; i++) network.AdvanceTime(100);
     CHECK(node1.GetPeerCount() == 1);
 
     // Advance significant time (simulate timeout window) without activity
-    for (int i = 0; i < 100; i++) network.AdvanceTime(network.GetCurrentTime() + 60000);
+    for (int i = 0; i < 100; i++) network.AdvanceTime(60000);
 
     // After extended timeout, peer may be disconnected due to inactivity
     // Verify peer count is reasonable (0 = disconnected, 1 = still connected)
@@ -43,12 +43,12 @@ TEST_CASE("Slow peer eviction - Active peer stays connected", "[network][evictio
 
     for (int i = 0; i < 5; i++) (void)node1.MineBlock();
     REQUIRE(node2.ConnectTo(1));
-    for (int i = 0; i < 20; i++) network.AdvanceTime(network.GetCurrentTime() + 100);
+    for (int i = 0; i < 20; i++) network.AdvanceTime(100);
     CHECK(node1.GetPeerCount() == 1);
 
     for (int i = 0; i < 10; i++) {
         (void)node1.MineBlock();
-        for (int j = 0; j < 10; j++) network.AdvanceTime(network.GetCurrentTime() + 1000);
+        for (int j = 0; j < 10; j++) network.AdvanceTime(1000);
     }
     CHECK(node1.GetPeerCount() == 1);
 }
@@ -61,15 +61,15 @@ TEST_CASE("Stale tip management - Node continues operating with stale tip", "[ne
     for (int i = 0; i < 10; i++) (void)node1.MineBlock();
     auto tip = node1.GetTipHash();
 
-    for (int i = 0; i < 100; i++) network.AdvanceTime(network.GetCurrentTime() + 120000);
+    for (int i = 0; i < 100; i++) network.AdvanceTime(120000);
     CHECK(node1.GetTipHash() == tip);
 
     REQUIRE(node2.ConnectTo(1));
-    for (int i = 0; i < 20; i++) network.AdvanceTime(network.GetCurrentTime() + 100);
+    for (int i = 0; i < 20; i++) network.AdvanceTime(100);
     CHECK(node1.GetPeerCount() == 1);
 
     (void)node1.MineBlock();
-    network.AdvanceTime(network.GetCurrentTime() + 100);
+    network.AdvanceTime(100);
     CHECK(node1.GetTipHash() != tip);
 }
 

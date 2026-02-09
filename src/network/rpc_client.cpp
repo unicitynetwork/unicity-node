@@ -58,7 +58,7 @@ std::optional<std::string> RPCClient::Connect() {
   }
 
   // Set recv() timeout to prevent client from hanging on slow/hung server
-  // Timeout: 10 minutes for long-running commands like 'generate' 
+  // Timeout: 10 minutes for long-running commands like 'generate'
   struct timeval timeout;
   timeout.tv_sec = 600;
   timeout.tv_usec = 0;
@@ -67,6 +67,12 @@ std::optional<std::string> RPCClient::Connect() {
     socket_fd_ = -1;
     return "Failed to set socket timeout: " + std::string(std::strerror(errno));
   }
+
+#ifdef __APPLE__
+  // macOS doesn't support MSG_NOSIGNAL; use SO_NOSIGPIPE instead
+  int nosigpipe = 1;
+  setsockopt(socket_fd_, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
+#endif
 
   return std::nullopt;
 }
@@ -94,10 +100,18 @@ std::string RPCClient::ExecuteCommand(const std::string& method, const std::vect
 
   std::string request_str = request.str();
 
-  // Send request
-  ssize_t sent = send(socket_fd_, request_str.c_str(), request_str.size(), 0);
-  if (sent < 0) {
-    throw std::runtime_error("Failed to send request");
+  // Send request (loop to handle partial writes)
+  size_t total_sent = 0;
+  while (total_sent < request_str.size()) {
+    int flags = 0;
+#ifdef MSG_NOSIGNAL
+    flags |= MSG_NOSIGNAL;
+#endif
+    ssize_t sent = send(socket_fd_, request_str.c_str() + total_sent, request_str.size() - total_sent, flags);
+    if (sent < 0) {
+      throw std::runtime_error("Failed to send request: " + std::string(std::strerror(errno)));
+    }
+    total_sent += sent;
   }
 
   // Receive response (read in loop to handle large responses)

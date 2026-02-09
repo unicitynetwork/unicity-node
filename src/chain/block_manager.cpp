@@ -10,19 +10,14 @@
 #include "util/logging.hpp"
 
 #include <algorithm>
-#include <cmath>
-#include <compare>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
-
-// DTC1
 
 namespace unicity {
 namespace chain {
@@ -119,95 +114,6 @@ const CBlockIndex* BlockManager::LookupBlockIndex(const uint256& hash) const {
   return &it->second;
 }
 
-bool BlockManager::HasChildren(const CBlockIndex* pindex) const {
-  if (!pindex) {
-    return false;
-  }
-  return m_children.find(pindex) != m_children.end();
-}
-
-size_t BlockManager::PruneStaleSideChains(int max_depth) {
-  if (!m_initialized || max_depth <= 0) {
-    return 0;
-  }
-
-  const CBlockIndex* tip = m_active_chain.Tip();
-  if (!tip) {
-    return 0;
-  }
-
-  int cutoff_height = tip->nHeight - max_depth;
-  if (cutoff_height <= 0) {
-    return 0;  // Nothing to prune yet
-  }
-
-  size_t total_pruned = 0;
-  bool found_prunable = true;
-
-  // Iterate until no more prunable headers found
-  // (removing a leaf may expose new leaves)
-  while (found_prunable) {
-    found_prunable = false;
-    std::vector<uint256> to_remove;
-
-    for (const auto& [hash, block_index] : m_block_index) {
-      // Skip if on active chain
-      if (m_active_chain.Contains(&block_index)) {
-        continue;
-      }
-
-      // Skip if above cutoff height
-      if (block_index.nHeight >= cutoff_height) {
-        continue;
-      }
-
-      // Skip if has children (not a leaf)
-      if (HasChildren(&block_index)) {
-        continue;
-      }
-
-      // This header can be pruned
-      to_remove.push_back(hash);
-      found_prunable = true;
-    }
-
-    // Remove the prunable headers
-    for (const uint256& hash : to_remove) {
-      auto it = m_block_index.find(hash);
-      if (it == m_block_index.end()) {
-        continue;
-      }
-
-      // Save parent pointer before erasing (pindex becomes invalid after erase)
-      const CBlockIndex* pprev = it->second.pprev;
-
-      // Remove from children tracking (this block as child of its parent)
-      if (pprev) {
-        auto range = m_children.equal_range(pprev);
-        for (auto child_it = range.first; child_it != range.second;) {
-          if (child_it->second == &it->second) {
-            child_it = m_children.erase(child_it);
-          } else {
-            ++child_it;
-          }
-        }
-      }
-
-      // Remove from block index
-      m_block_index.erase(it);
-      total_pruned++;
-    }
-  }
-
-  if (total_pruned > 0) {
-    LOG_CHAIN_DEBUG("Pruned {} stale side-chain headers (cutoff height={})", total_pruned, cutoff_height);
-
-    // Rebuild skip pointers - some may have pointed to pruned blocks
-    RebuildSkipPointers();
-  }
-
-  return total_pruned;
-}
 
 CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& header) {
   uint256 hash = header.GetHash();
@@ -224,9 +130,9 @@ CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& header) {
   // Find parent (nullptr for genesis)
   CBlockIndex* pprev = LookupBlockIndex(header.hashPrevBlock);
 
-  // Reject orphans before inserting - parent must exist unless genesis
+  // Reject unconnecting headers - parent must exist unless genesis
   if (!pprev && !header.hashPrevBlock.IsNull()) {
-    LOG_CHAIN_ERROR("AddToBlockIndex: orphan header {} (parent {} not found)", hash.ToString().substr(0, 16),
+    LOG_CHAIN_ERROR("AddToBlockIndex: unconnecting header {} (parent {} not found)", hash.ToString().substr(0, 16),
                     header.hashPrevBlock.ToString().substr(0, 16));
     return nullptr;
   }
@@ -247,11 +153,6 @@ CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& header) {
   }
   // Build Skip List
   pindex->BuildSkip();
-
-  // Add children
-  if (pindex->pprev) {
-    m_children.insert({pindex->pprev, pindex});
-  }
 
   return pindex;
 }
@@ -395,7 +296,6 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
 
     // Clear existing state
     m_block_index.clear();
-    m_children.clear();
     m_active_chain.Clear();
 
     // Validate blocks field exists and is an array
@@ -422,12 +322,14 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
     std::map<uint256, std::pair<CBlockIndex*, uint256>>
         block_map;  // hash -> (pindex, prev_hash), expected size: blocks.size()
 
+    // Required fields for each block entry 
+    static const std::vector<std::string> required_fields = {
+        "hash", "prev_hash", "version", "miner_address", "time",
+        "bits", "nonce",     "hash_randomx", "height", "chainwork", "status"};
+
     for (const auto& block_data : blocks) {
-      // Validate required fields are present (canonical set)
-      static const std::vector<std::string> required_fields_core = {"hash",   "prev_hash", "version", "miner_address",
-                                                                    "time",   "bits",      "nonce",   "hash_randomx",
-                                                                    "height", "chainwork", "status"};
-      for (const auto& field : required_fields_core) {
+      // Validate required fields are present
+      for (const auto& field : required_fields) {
         if (!block_data.contains(field)) {
           LOG_CHAIN_ERROR("Block entry missing required field '{}'. File corrupted.", field);
           return LoadResult::CORRUPTED;
@@ -575,10 +477,6 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
         }
       }
 
-      // Rebuild parent->child tracking for O(1) HasChildren lookup
-      if (pindex->pprev) {
-        m_children.insert({pindex->pprev, pindex});
-      }
     }
 
     // Rebuild skip pointers for O(log n) ancestor lookup

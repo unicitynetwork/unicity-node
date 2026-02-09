@@ -173,10 +173,9 @@ uint32_t GetNextWorkRequired(const chain::CBlockIndex* pindexPrev, const chain::
   // Use int64_t for height diff to match CalculateASERT() parameter type
   const int64_t nHeightDiff = static_cast<int64_t>(pindexPrev->nHeight) - consensus.nASERTAnchorHeight;
 
-  LOG_CHAIN_TRACE("GetNextWorkRequired: ASERT calculation: anchor_height={} anchor_bits={:#x} "
-                  "time_diff={}s height_diff={} target_spacing={}s half_life={}s",
-                  pindexAnchor->nHeight, pindexAnchor->nBits, nTimeDiff, nHeightDiff, consensus.nPowTargetSpacing,
-                  consensus.nASERTHalfLife);
+  LOG_CHAIN_TRACE("ASERT: anchor_h={} bits={:#x} dt={}s dh={} spacing={}s hl={}s",
+                  pindexAnchor->nHeight, pindexAnchor->nBits, nTimeDiff, nHeightDiff,
+                  consensus.nPowTargetSpacing, consensus.nASERTHalfLife);
 
   // Calculate next target using ASERT
   arith_uint256 nextTarget = CalculateASERT(refTarget, consensus.nPowTargetSpacing, nTimeDiff, nHeightDiff, powLimit,
@@ -211,7 +210,7 @@ double GetDifficulty(uint32_t nBits, const chain::ChainParams& params) {
   // Extract exponent and mantissa from compact nBits format
   // nBits format: 0xMMEEEEEE where MM is exponent, EEEEEE is mantissa
   int nShift = (nBits >> 24) & 0xff;
-  double dDiff = (double)0x0000ffff / (double)(nBits & 0x00ffffff);
+  double dDiff = static_cast<double>(0x0000ffff) / static_cast<double>(nBits & 0x00ffffff);
 
   // Adjust for exponent (shift)
   // Standard difficulty uses shift=29 as baseline

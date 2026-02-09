@@ -38,13 +38,11 @@ public:
     std::string remote_address() const override { return remote_address_; }
     uint16_t remote_port() const override { return remote_port_; }
     bool is_inbound() const override { return is_inbound_; }
-    uint64_t connection_id() const override { return id_; }
 
     void set_receive_callback(ReceiveCallback callback) override { receive_callback_ = callback; }
     void set_disconnect_callback(DisconnectCallback callback) override { disconnect_callback_ = callback; }
 
     void set_inbound(bool inbound) { is_inbound_ = inbound; }
-    void set_id(uint64_t id) { id_ = id; }
 
     void simulate_receive(const std::vector<uint8_t>& data) {
         if (receive_callback_) {
@@ -70,7 +68,6 @@ public:
 private:
     bool open_;
     bool is_inbound_ = false;
-    uint64_t id_ = 1;
     std::string remote_address_ = "127.0.0.1";
     uint16_t remote_port_ = 9590;
     ReceiveCallback receive_callback_;

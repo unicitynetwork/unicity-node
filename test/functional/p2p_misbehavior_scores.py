@@ -2,7 +2,7 @@
 """P2P misbehavior scoring tests (via reportmisbehavior RPC hooks).
 
 This test simulates misbehavior using a test-only RPC to exercise the
-PeerLifecycleManager misbehavior logic and disconnection behavior.
+ConnectionManager misbehavior logic and disconnection behavior.
 """
 
 import sys
@@ -108,31 +108,6 @@ def run_case_unconnecting(binary_path, base_dir):
         if b and b.is_running(): b.stop()
 
 
-def run_case_orphans(binary_path, base_dir):
-    a = b = None
-    try:
-        port_a = pick_free_port()
-        a = TestNode(0, base_dir / "A4", binary_path, extra_args=["--listen", f"--port={port_a}"])
-        a.start()
-        port_b = pick_free_port()
-        b = TestNode(1, base_dir / "B4", binary_path, extra_args=[f"--port={port_b}"])
-        b.start()
-        b.add_node(f"127.0.0.1:{port_a}")
-        assert wait_peer_count(a, 1, timeout=10)
-        peer_id = find_peer_id(a, expect_inbound=True)
-        res = a.rpc("reportmisbehavior", peer_id, "too_many_orphans")
-        try:
-            a.rpc("disconnectnode", str(peer_id))
-        except Exception:
-            pass
-        ok = wait_peer_count(a, 0, timeout=10)
-        assert ok, "Peer did not disconnect after too_many_orphans"
-        return True
-    finally:
-        if a and a.is_running(): a.stop()
-        if b and b.is_running(): b.stop()
-
-
 def main():
     print("Starting p2p_misbehavior_scores test...")
     test_dir = Path(tempfile.mkdtemp(prefix="unicity_misbehavior_"))
@@ -141,7 +116,6 @@ def main():
         assert run_case_invalid_pow(binary_path, test_dir)
         assert run_case_non_continuous(binary_path, test_dir)
         assert run_case_unconnecting(binary_path, test_dir)
-        assert run_case_orphans(binary_path, test_dir)
         print("✓ p2p_misbehavior_scores passed")
         return 0
     except Exception as e:

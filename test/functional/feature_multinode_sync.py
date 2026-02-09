@@ -194,7 +194,7 @@ def main():
     log("\n=== Multi-Node Concurrent Sync Test ===\n", BLUE)
 
     # Configuration
-    # Note: MAX_INBOUND_PER_NETGROUP=4 limits localhost connections
+    # Note: Eviction-based netgroup limiting (~4 per /16) affects localhost connections
     NUM_SYNC_NODES = 4  # 4 nodes syncing from Node0
     CHAIN_LENGTH = 50
 
@@ -247,7 +247,7 @@ def main():
         log(f"✓ All {NUM_SYNC_NODES} sync nodes started\n", GREEN)
 
         # Connect all sync nodes to Node0 (outbound from sync nodes)
-        # Note: MAX_INBOUND_PER_NETGROUP=4 limits localhost connections to Node0
+        # Note: Eviction-based netgroup limiting (~4 per /16) limits localhost connections to Node0
         log("Connecting all sync nodes to Node0...", BLUE)
         for node in nodes[1:]:
             node.connect_to_peer(f'127.0.0.1:{port0}')

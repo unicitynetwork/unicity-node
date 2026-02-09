@@ -15,14 +15,10 @@ namespace network {
 
 std::optional<int> EvictionManager::SelectNodeToEvict(std::vector<EvictionCandidate> candidates) {
   // Remove outbound peers - NEVER evict outbound connections
-  candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
-                                  [](const EvictionCandidate& c) { return c.is_outbound; }),
-                   candidates.end());
+  std::erase_if(candidates, [](const EvictionCandidate& c) { return c.is_outbound; });
 
   // Remove protected peers (NoBan, etc.)
-  candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
-                                  [](const EvictionCandidate& c) { return c.is_protected; }),
-                   candidates.end());
+  std::erase_if(candidates, [](const EvictionCandidate& c) { return c.is_protected; });
 
   if (candidates.empty()) {
     return std::nullopt;
@@ -47,16 +43,13 @@ std::optional<int> EvictionManager::SelectNodeToEvict(std::vector<EvictionCandid
 
     // Remove one peer from each protected netgroup
     std::set<std::string> removed_netgroups;
-    candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
-                                    [&](const EvictionCandidate& c) {
-                                      if (!c.netgroup.empty() && protected_netgroups.count(c.netgroup) &&
-                                          !removed_netgroups.count(c.netgroup)) {
-                                        removed_netgroups.insert(c.netgroup);
-                                        return true;
-                                      }
-                                      return false;
-                                    }),
-                     candidates.end());
+    std::erase_if(candidates, [&](const EvictionCandidate& c) {
+      if (!c.netgroup.empty() && protected_netgroups.count(c.netgroup) && !removed_netgroups.count(c.netgroup)) {
+        removed_netgroups.insert(c.netgroup);
+        return true;
+      }
+      return false;
+    });
   }
 
   if (candidates.empty()) {
@@ -82,13 +75,13 @@ std::optional<int> EvictionManager::SelectNodeToEvict(std::vector<EvictionCandid
 
   // Protect 4 peers that most recently sent us valid headers
   if (candidates.size() > PROTECT_BY_HEADERS) {
-    // Sort by last_headers_time descending (most recent first = best)
+    // Sort ascending by last_headers_time (oldest first, most recent at back)
     // Peers that never sent headers have epoch time (very old) - not protected
     std::sort(candidates.begin(), candidates.end(), [](const EvictionCandidate& a, const EvictionCandidate& b) {
       return a.last_headers_time < b.last_headers_time;
     });
 
-    // Remove last 4 (most recent header relay)
+    // Remove last 4 (most recent header senders = protected)
     candidates.resize(candidates.size() - PROTECT_BY_HEADERS);
   }
 
@@ -108,6 +101,19 @@ std::optional<int> EvictionManager::SelectNodeToEvict(std::vector<EvictionCandid
       // Remove last N (oldest connections = protected, newest remain as eviction candidates)
       candidates.resize(candidates.size() - protect_count);
     }
+  }
+
+  if (candidates.empty()) {
+    return std::nullopt;
+  }
+
+  // --- Prefer Evict Phase  ---
+  // If any remaining peers are preferred for eviction (discouraged), consider only them.
+  // This happens AFTER protection phases - if a discouraged peer is doing useful work
+  // (low ping, recent headers, long uptime), they're protected like any other peer.
+  // But if they're mediocre, they get evicted before good peers.
+  if (std::any_of(candidates.begin(), candidates.end(), [](const EvictionCandidate& c) { return c.prefer_evict; })) {
+    std::erase_if(candidates, [](const EvictionCandidate& c) { return !c.prefer_evict; });
   }
 
   if (candidates.empty()) {
@@ -149,6 +155,7 @@ std::optional<int> EvictionManager::SelectNodeToEvict(std::vector<EvictionCandid
                                      return a.connected_time < b.connected_time;
                                    });
 
+  // Unreachable given early-return guards
   if (to_evict != evict_group.end()) {
     LOG_NET_DEBUG("SelectNodeToEvict: peer={} from netgroup={} (group_size={})", to_evict->peer_id, worst_netgroup,
                   most_connections);

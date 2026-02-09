@@ -6,19 +6,26 @@
 
 #include "network/connection_types.hpp"
 #include "network/message.hpp"
+#include "network/peer_misbehavior.hpp"
+#include "network/peer_tracking.hpp"
 #include "network/protocol.hpp"
 #include "network/transport.hpp"
+#include "util/arith_uint256.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
-#include <mutex>
-#include <queue>
 
 #include <asio.hpp>
 
 namespace unicity {
+
+// Forward declaration for test access
+namespace test {
+class PeerTestAccess;
+}  // namespace test
+
 namespace network {
 
 // Forward declarations
@@ -44,7 +51,8 @@ struct PeerStats {
   std::atomic<std::chrono::seconds> connected_time{std::chrono::seconds{0}};
   std::atomic<std::chrono::seconds> last_send{std::chrono::seconds{0}};
   std::atomic<std::chrono::seconds> last_recv{std::chrono::seconds{0}};
-  std::atomic<std::chrono::milliseconds> ping_time_ms{std::chrono::milliseconds{-1}};  // -1 means not measured yet
+  std::atomic<std::chrono::milliseconds> ping_time_ms{std::chrono::milliseconds{-1}};      // -1 means not measured yet
+  std::atomic<std::chrono::milliseconds> min_ping_time_ms{std::chrono::milliseconds{-1}};  // Best ever (for eviction)
 };
 
 // Message handler callback type (ownership of message transfers to handler)
@@ -69,7 +77,6 @@ using LocalAddrLearnedHandler = std::function<void(const std::string& ip)>;
 //
 // Threading Model:
 // - All Peer I/O operations run on NetworkManager's single io_context thread
-//   (no strand/locks needed for state_, recv_buffer_, etc.)
 // - PeerStats members are atomic because they're accessed from multiple threads:
 //   * Updated by io_context thread during send/receive operations
 //   * Read by RPC server thread for monitoring/metrics (see RPCServer::handle_getpeerinfo)
@@ -81,13 +88,18 @@ private:
 
 public:
   // Create outbound peer (we initiate connection)
-  static PeerPtr create_outbound(asio::io_context& io_context, TransportConnectionPtr connection,
-                                 uint32_t network_magic, int32_t start_height, const std::string& target_address = "",
+  static PeerPtr create_outbound(asio::io_context& io_context,
+                                 TransportConnectionPtr connection,
+                                 uint32_t network_magic,
+                                 int32_t start_height,
+                                 const std::string& target_address = "",
                                  uint16_t target_port = 0,
                                  ConnectionType conn_type = ConnectionType::OUTBOUND_FULL_RELAY);
 
   // Create inbound peer (they connected to us)
-  static PeerPtr create_inbound(asio::io_context& io_context, TransportConnectionPtr connection, uint32_t network_magic,
+  static PeerPtr create_inbound(asio::io_context& io_context,
+                                TransportConnectionPtr connection,
+                                uint32_t network_magic,
                                 int32_t start_height);
 
   ~Peer();
@@ -96,8 +108,6 @@ public:
   Peer(const Peer&) = delete;
   Peer& operator=(const Peer&) = delete;
 
-  // Start peer connection (outbound: initiates connection, inbound: starts
-  // receiving messages)
   void start();
 
   void disconnect();
@@ -106,30 +116,7 @@ public:
   void set_verack_complete_handler(VerackCompleteHandler handler);
   void set_local_addr_learned_handler(LocalAddrLearnedHandler handler);
 
-  // Test-only: override timeouts to keep tests fast
-  // Pass 0ms to clear an override (use defaults).
-  static void SetTimeoutsForTest(std::chrono::milliseconds handshake_ms, std::chrono::milliseconds inactivity_ms);
-  static void ResetTimeoutsForTest();
-  // Test-only: mark peer as having completed handshake
-  void set_successfully_connected_for_test(bool value) { successfully_connected_ = value; }
-  // Test-only: set connection state (peers created with nullptr transport start DISCONNECTED)
-  void set_state_for_test(PeerConnectionState state) { state_ = state; }
-  // Test-only: set peer's remote nonce (normally set when VERSION received)
-  void set_peer_nonce_for_test(uint64_t nonce) { peer_nonce_ = nonce; }
-  // Test-only: set ping time (for deterministic eviction testing)
-  void set_ping_time_for_test(std::chrono::milliseconds ms) {
-    stats_.ping_time_ms.store(ms, std::memory_order_relaxed);
-  }
-
-  // Setters (called by ConnectionManager)
   void set_id(int id) { id_ = id; }
-  // Test-only: override per-peer nonce to simulate self-connection scenarios
-  void set_local_nonce(uint64_t nonce) { local_nonce_ = nonce; }
-
-  // Process-wide nonce for self-connection detection
-  // Set once at startup, shared by all peers for reliable self-connect detection
-  static void set_process_nonce(uint64_t nonce) { process_nonce_ = nonce; }
-  static uint64_t get_process_nonce() { return process_nonce_; }
 
   // Getters
   PeerConnectionState state() const { return state_; }
@@ -154,7 +141,7 @@ public:
   bool is_full_relay() const { return connection_type_ == ConnectionType::OUTBOUND_FULL_RELAY; }
 
   // Returns true if this peer participates in address relay (ADDR/GETADDR)
-  // Block-relay-only, manual, and feeler connections do NOT relay addresses
+  // Block-relay-only and feeler connections do NOT relay addresses
   bool relays_addr() const { return RelaysAddr(connection_type_); }
 
   int id() const { return id_; }
@@ -170,17 +157,90 @@ public:
   bool sync_started() const { return sync_started_; }
   void set_sync_started(bool started) { sync_started_ = started; }
 
+  // Chain sync timeout state (for post-IBD stall detection)
+  // Tracks whether outbound peer is keeping up with our chain
+  struct ChainSyncTimeoutState {
+    std::chrono::steady_clock::time_point timeout{};  // When timeout expires (default = not set)
+    int64_t work_header_height{-1};    // Height of our tip when timeout was set
+    bool sent_getheaders{false};       // Already sent verification GETHEADERS?
+    bool protect{false};               // Protected from eviction?
+  };
+
+  ChainSyncTimeoutState& chain_sync_state() { return chain_sync_state_; }
+  const ChainSyncTimeoutState& chain_sync_state() const { return chain_sync_state_; }
+
+  // Best known block this peer has announced (for chain sync timeout)
+  int best_known_block_height() const { return best_known_block_height_; }
+  void set_best_known_block_height(int height) { best_known_block_height_ = height; }
+
+  // Best known chain work this peer has announced (for stale chain eviction - security)
+  const arith_uint256& best_known_chain_work() const { return best_known_chain_work_; }
+  void set_best_known_chain_work(const arith_uint256& work) { best_known_chain_work_ = work; }
+
+  // Returns the time of the last GETHEADERS we sent to this peer (for throttling)
+  std::chrono::steady_clock::time_point last_getheaders_time() const { return last_getheaders_time_; }
+  void set_last_getheaders_time(std::chrono::steady_clock::time_point t) { last_getheaders_time_ = t; }
+  void clear_last_getheaders_time() { last_getheaders_time_ = {}; }
+
   // Discovery state
   bool has_sent_getaddr() const { return getaddr_sent_; }
   void mark_getaddr_sent() { getaddr_sent_ = true; }
+  // Reset after receiving non-full ADDR response
+  void reset_sent_getaddr() { getaddr_sent_ = false; }
+
+  // Creation time (for feeler lifetime enforcement)
+  std::chrono::steady_clock::time_point created_at() const { return created_at_; }
+  void set_created_at(std::chrono::steady_clock::time_point tp) { created_at_ = tp; }
+
+  // Misbehavior tracking
+  PeerMisbehaviorData& misbehavior() { return misbehavior_; }
+  const PeerMisbehaviorData& misbehavior() const { return misbehavior_; }
+  NetPermissionFlags permissions() const { return misbehavior_.permissions; }
+  void set_permissions(NetPermissionFlags p) { misbehavior_.permissions = p; }
+
+  // Eviction protection (peers sending headers get protection)
+  std::chrono::steady_clock::time_point last_headers_received() const { return last_headers_received_; }
+  void update_last_headers_received() { last_headers_received_ = std::chrono::steady_clock::now(); }
+
+  // Eviction priority (discouraged inbound peers are evicted first)
+  bool prefer_evict() const { return prefer_evict_; }
+  void set_prefer_evict(bool v) { prefer_evict_ = v; }
+
+  // GETADDR reply tracking (once-per-connection policy)
+  bool has_replied_to_getaddr() const { return getaddr_replied_; }
+  void mark_getaddr_replied() { getaddr_replied_ = true; }
+
+  // Echo suppression for ADDR relay
+  const LearnedMap& learned_addresses() const { return learned_addresses_; }
+  LearnedMap& learned_addresses() { return learned_addresses_; }
+  void add_learned_address(const AddressKey& key, const LearnedEntry& entry) { learned_addresses_[key] = entry; }
+  void clear_learned_addresses() { learned_addresses_.clear(); }
+
+  // === Test Support & Static Init ===
+
+  // Test-only: override per-peer nonce to simulate self-connection scenarios
+  void set_local_nonce(uint64_t nonce) { local_nonce_ = nonce; }
+
+  // Process-wide nonce for self-connection detection
+  // Set once at startup, shared by all peers for reliable self-connect detection
+  static void set_process_nonce(uint64_t nonce) { process_nonce_ = nonce; }
+  static uint64_t get_process_nonce() { return process_nonce_; }
 
   // Public constructor for make_shared, but requires PrivateTag (passkey idiom)
   // DO NOT call directly - use create_outbound() or create_inbound() factory functions
-  Peer(PrivateTag, asio::io_context& io_context, TransportConnectionPtr connection, uint32_t network_magic,
-       bool is_inbound, int32_t start_height, const std::string& target_address = "", uint16_t target_port = 0,
+  Peer(PrivateTag,
+       asio::io_context& io_context,
+       TransportConnectionPtr connection,
+       uint32_t network_magic,
+       bool is_inbound,
+       int32_t start_height,
+       const std::string& target_address = "",
+       uint16_t target_port = 0,
        ConnectionType conn_type = ConnectionType::OUTBOUND_FULL_RELAY);
 
 private:
+
+
   // Connection management
   // Disconnect flow: disconnect() or on_transport_disconnect() -> do_disconnect() -> on_disconnect()
   // - disconnect(): public API, callable from any thread (posts to io_context if not already on it)
@@ -188,7 +248,6 @@ private:
   // - on_disconnect(): cleanup callback after disconnect completes
   // - on_transport_disconnect(): transport layer detected connection closed
   void do_disconnect();
-  void on_connected();
   void on_disconnect();
   void on_transport_receive(const std::vector<uint8_t>& data);
   void on_transport_disconnect();
@@ -234,21 +293,33 @@ private:
   // Stored peer address
   // For outbound: target address we're connecting to (passed to create_outbound)
   // For inbound: runtime address from accepted socket (set in create_inbound)
-  // Used for duplicate prevention and peer lookup (see ConnectionManager::find_peer_by_address)
   std::string target_address_;
   uint16_t target_port_{0};
 
-  PeerConnectionState state_;
+  std::atomic<PeerConnectionState> state_;
   PeerStats stats_;
   MessageHandler message_handler_;
   VerackCompleteHandler verack_complete_handler_;
   LocalAddrLearnedHandler local_addr_learned_handler_;
-  bool successfully_connected_{false};  // Set to true after VERACK received
+  std::atomic<bool> successfully_connected_{false};  // Set to true after VERACK received
+  std::atomic<bool> disconnect_posted_{false};       // Set by post_disconnect() to stop buffer processing loop
 
   // Millisecond-precision last activity (used for test inactivity timeouts)
   std::atomic<std::chrono::milliseconds> last_activity_ms_{std::chrono::milliseconds{0}};
   bool sync_started_{false};  // Whether we've started headers sync with this peer
   bool getaddr_sent_{false};  // Whether we've sent GETADDR to this peer (discovery)
+
+  // === Consolidated Peer State ===
+  std::chrono::steady_clock::time_point created_at_{};           // For feeler lifetime enforcement
+  PeerMisbehaviorData misbehavior_{};                            // Misbehavior tracking
+  std::chrono::steady_clock::time_point last_headers_received_;  // Eviction protection
+  bool prefer_evict_{false};                                     // Eviction priority
+  bool getaddr_replied_{false};                                  // Once-per-connection GETADDR
+  LearnedMap learned_addresses_;                                 // Echo suppression
+  std::chrono::steady_clock::time_point last_getheaders_time_{};  // Time of last GETHEADERS sent (for throttling)
+  ChainSyncTimeoutState chain_sync_state_{};  // Chain sync timeout tracking
+  int best_known_block_height_{-1};  // Best block height this peer has announced
+  arith_uint256 best_known_chain_work_;  // Best chain work this peer has announced (security: use this, not height)
 
   // Ensures start() executes exactly once (Peer objects are single-use)
   std::atomic<bool> started_{false};
@@ -269,16 +340,15 @@ private:
   uint64_t last_ping_nonce_ = 0;
   std::chrono::steady_clock::time_point ping_sent_time_;
 
-  // Rate limiting for unknown commands to prevent log spam DoS
-  std::atomic<int> unknown_command_count_{0};
-  std::chrono::steady_clock::time_point last_unknown_reset_{};
-
   // Process-wide nonce for self-connection detection (set once at startup)
   static std::atomic<uint64_t> process_nonce_;
 
   // Test-only timeout overrides (0ms = disabled)
   static std::atomic<std::chrono::milliseconds> handshake_timeout_override_ms_;
   static std::atomic<std::chrono::milliseconds> inactivity_timeout_override_ms_;
+
+  // Test access - allows test code to manipulate internal state without polluting public API
+  friend class test::PeerTestAccess;
 
 public:
 };

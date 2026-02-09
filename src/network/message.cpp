@@ -154,11 +154,6 @@ void MessageSerializer::write_network_address(const protocol::NetworkAddress& ad
   endian::WriteBE16(buffer_.data() + pos, addr.port);
 }
 
-void MessageSerializer::write_inventory_vector(const protocol::InventoryVector& inv) {
-  write_uint32(static_cast<uint32_t>(inv.type));
-  inv.hash.Serialize(*this);
-}
-
 // MessageDeserializer implementation
 MessageDeserializer::MessageDeserializer(const uint8_t* data, size_t size)
     : data_(data), size_(size), position_(0), error_(false) {}
@@ -294,19 +289,6 @@ protocol::TimestampedAddress MessageDeserializer::read_timestamped_address() {
   return ts_addr;
 }
 
-protocol::InventoryVector MessageDeserializer::read_inventory_vector() {
-  protocol::InventoryVector inv;
-  inv.type = static_cast<protocol::InventoryType>(read_uint32());
-
-  check_available(32);
-  if (error_)
-    return inv;
-  std::memcpy(inv.hash.data(), data_ + position_, 32);
-  position_ += 32;
-
-  return inv;
-}
-
 // Helper for creating headers with checksums (for tests and internal use)
 protocol::MessageHeader create_header(uint32_t magic, const std::string& command, const std::vector<uint8_t>& payload) {
   protocol::MessageHeader header(magic, command, static_cast<uint32_t>(payload.size()));
@@ -397,8 +379,6 @@ std::unique_ptr<Message> create_message(const std::string& command) {
     return std::make_unique<AddrMessage>();
   if (command == protocol::commands::GETADDR)
     return std::make_unique<GetAddrMessage>();
-  if (command == protocol::commands::INV)
-    return std::make_unique<InvMessage>();
   if (command == protocol::commands::GETHEADERS)
     return std::make_unique<GetHeadersMessage>();
   if (command == protocol::commands::HEADERS)
@@ -532,39 +512,6 @@ std::vector<uint8_t> GetAddrMessage::serialize() const {
 
 bool GetAddrMessage::deserialize(const uint8_t* data, size_t size) {
   return size == 0;
-}
-
-// InvMessage
-std::vector<uint8_t> InvMessage::serialize() const {
-  MessageSerializer s;
-  s.write_varint(inventory.size());
-  for (const auto& inv : inventory) {
-    s.write_inventory_vector(inv);
-  }
-  return s.data();
-}
-
-bool InvMessage::deserialize(const uint8_t* data, size_t size) {
-  MessageDeserializer d(data, size);
-  uint64_t count = d.read_varint();
-  if (count > protocol::MAX_INV_SIZE)
-    return false;
-
-  // Incremental allocation to prevent DoS attacks
-  inventory.clear();
-  uint64_t allocated = 0;
-  constexpr size_t batch_size = protocol::MAX_VECTOR_ALLOCATE / sizeof(protocol::InventoryVector);
-
-  for (uint64_t i = 0; i < count; ++i) {
-    if (inventory.size() >= allocated) {
-      allocated = std::min(count, allocated + batch_size);
-      inventory.reserve(allocated);
-    }
-    inventory.push_back(d.read_inventory_vector());
-    if (d.has_error())
-      return false;
-  }
-  return !d.has_error();
 }
 
 // GetHeadersMessage

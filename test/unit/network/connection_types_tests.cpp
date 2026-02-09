@@ -97,9 +97,12 @@ TEST_CASE("ConnectionType - RelaysAddr helper", "[network][connection_types]") {
         CHECK(RelaysAddr(ConnectionType::INBOUND) == true);
     }
 
-    SECTION("Block-relay, manual, and feeler connections do NOT relay addresses") {
+    SECTION("Manual connections relay addresses (Core parity)") {
+        CHECK(RelaysAddr(ConnectionType::MANUAL) == true);
+    }
+
+    SECTION("Block-relay and feeler connections do NOT relay addresses") {
         CHECK(RelaysAddr(ConnectionType::BLOCK_RELAY) == false);
-        CHECK(RelaysAddr(ConnectionType::MANUAL) == false);
         CHECK(RelaysAddr(ConnectionType::FEELER) == false);
     }
 }

@@ -2,6 +2,10 @@
 // Copyright (c) 2025 The Unicity Foundation
 // Distributed under the MIT software license
 
+// See timedata.hpp for module documentation.
+// TL;DR: This tracks peer time offsets for DIAGNOSTIC WARNINGS only.
+// The offset is NOT used for consensus.
+
 #include "chain/timedata.hpp"
 
 #include "network/protocol.hpp"
@@ -15,7 +19,7 @@ namespace unicity {
 namespace chain {
 
 static std::mutex g_timeoffset_mutex;
-static int64_t nTimeOffset = 0;
+static int64_t nTimeOffset = 0;  // Diagnostic only - not used for consensus
 static constexpr size_t TIMEDATA_MAX_SAMPLES = 200;
 static std::set<protocol::NetworkAddress> g_sources;
 static CMedianFilter<int64_t> g_time_offsets{TIMEDATA_MAX_SAMPLES, 0};

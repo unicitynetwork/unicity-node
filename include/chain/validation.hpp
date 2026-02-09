@@ -45,9 +45,8 @@ namespace validation {
 // INTEGRATION POINT:
 // - ChainstateManager::AcceptBlockHeader() orchestrates all validation layers
 //
-// DoS PROTECTION: (NOTE NOT USED CURRENTLY AS LOW WORK IS REJECTED AT NETWORK LEVEL)
-// - GetAntiDoSWorkThreshold(): Rejects low-work header spam
-// - CalculateHeadersWork()    : Computes cumulative chain work
+// DoS PROTECTION:
+// - CalculateHeadersWork(): Computes cumulative chain work (used by HeaderSyncManager)
 // ============================================================================
 
 // Validation state - tracks why validation failed
@@ -102,19 +101,12 @@ bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& para
 bool ContextualCheckBlockHeader(const CBlockHeader& header, const chain::CBlockIndex* pindexPrev,
                                 const chain::ChainParams& params, int64_t adjusted_time, ValidationState& state);
 
-// Returns network-adjusted time (wall clock + median peer offset)
-int64_t GetAdjustedTime();
 
 // Validation constants
 static constexpr int64_t MAX_FUTURE_BLOCK_TIME = 10 * 60;  // 10 minutes
 
 // Block version validation
 static constexpr int32_t MIN_BLOCK_VERSION = 1;  // Minimum valid block version
-
-// Returns minimum chainwork for DoS protection
-// Dynamic threshold: max(nMinimumChainWork, tip->nChainWork - work_buffer_blocks)
-// work_buffer_blocks is chain-specific
-arith_uint256 GetAntiDoSWorkThreshold(const chain::CBlockIndex* tip, const chain::ChainParams& params);
 
 // Calculate total cumulative PoW work for headers
 // Invalid headers (bad nBits) are skipped and contribute 0 work

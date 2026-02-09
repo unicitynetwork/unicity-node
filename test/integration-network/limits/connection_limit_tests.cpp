@@ -25,10 +25,9 @@ TestOrchestrator orch(&network);
     REQUIRE(orch.WaitForCondition([&]{ return victim.GetPeerCount() >= (size_t)N; }, std::chrono::seconds(10)));
 }
 
-TEST_CASE("Inbound limit - Eviction when limit reached", "[network][limits][inbound][eviction]") {
-    // Test that eviction is triggered when at capacity and new peer connects
-    // Note: Default limit is 125, but per-netgroup limit is 4. We test the eviction
-    // mechanism with a smaller set of diverse peers.
+TEST_CASE("Inbound limit - Eviction algorithm works when called directly", "[network][limits][inbound][eviction]") {
+    // Test that evict_inbound_peer() works correctly when called directly.
+    // This validates the eviction algorithm in isolation.
 
     SimulatedNetwork network(12346);
     SetZeroLatency(network);
@@ -46,12 +45,12 @@ TEST_CASE("Inbound limit - Eviction when limit reached", "[network][limits][inbo
     REQUIRE(orch.WaitForPeerCount(*victim, 20));
     REQUIRE(victim->GetInboundPeerCount() == 20);
 
-    // Wait for protection window to expire (60s) so peers become evictable
+    // Wait for uptime to accrue so peers become evictable
     for (int i = 0; i < 65; i++) {
         orch.AdvanceTime(std::chrono::seconds(1));
     }
 
-    // Trigger eviction directly (this is what happens when at capacity)
+    // Trigger eviction directly
     auto& peer_mgr = victim->GetNetworkManager().peer_manager();
     bool evicted = peer_mgr.evict_inbound_peer();
     REQUIRE(evicted);
@@ -66,7 +65,6 @@ TEST_CASE("Inbound limit - Eviction when limit reached", "[network][limits][inbo
 
     // Back to 20 peers
     REQUIRE(victim->GetInboundPeerCount() == 20);
-    INFO("Eviction mechanism working: old peer evicted, new peer connected");
 }
 
 TEST_CASE("Outbound limit - Accept up to limit", "[network][limits][outbound]") {

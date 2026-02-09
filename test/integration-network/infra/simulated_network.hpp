@@ -66,6 +66,10 @@ public:
 
         // Jitter (additional random delay)
         std::chrono::milliseconds jitter_max{10};
+
+        // Block specific commands (by command name, e.g., "headers", "getheaders")
+        // Messages with these commands are silently dropped
+        std::set<std::string> blocked_commands;
     };
 
     struct PendingMessage {
@@ -100,8 +104,9 @@ public:
     // Returns number of messages delivered
     size_t ProcessMessages(uint64_t current_time_ms);
 
-    // Advance time and process all messages up to new_time_ms
-    size_t AdvanceTime(uint64_t new_time_ms);
+    // Advance time by duration_ms and process all messages
+    // Note: This adds duration_ms to current time (relative advancement)
+    size_t AdvanceTime(uint64_t duration_ms);
 
     // Network partitioning
     void CreatePartition(const std::vector<int>& group_a, const std::vector<int>& group_b);
@@ -178,7 +183,10 @@ private:
     std::mt19937_64 rng_;
 
     // Current simulation time
-    uint64_t current_time_ms_ = 0;
+    // Start at a realistic time (Jan 1, 2024 00:00:00 UTC) to avoid edge cases
+    // with timestamp validation that assumes post-1973 times
+    static constexpr uint64_t SIMULATION_START_TIME_MS = 1704067200000ULL;  // Jan 1, 2024
+    uint64_t current_time_ms_ = SIMULATION_START_TIME_MS;
 
     // Message sequence counter (for stable ordering when delivery_time is equal)
     uint64_t message_sequence_ = 0;

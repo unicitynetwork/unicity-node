@@ -1,12 +1,14 @@
 #include "catch_amalgamated.hpp"
-#include "network/peer_lifecycle_manager.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "infra/test_access.hpp"
+#include "network/connection_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 #include "network/protocol.hpp"
 #include "infra/mock_transport.hpp"
 #include <asio.hpp>
 #include <memory>
 
 using namespace unicity;
+using unicity::test::AddrRelayManagerTestAccess;
 using namespace unicity::network;
 
 namespace {
@@ -25,7 +27,6 @@ public:
         }
         auto conn = std::make_shared<MockTransportConnection>();
         conn->set_inbound(false);
-        conn->set_id(++next_id_);
         if (callback) callback(true);
         return conn;
     }
@@ -38,7 +39,6 @@ public:
 
 private:
     bool next_success_;
-    uint64_t next_id_{0};
 };
 
 static protocol::NetworkAddress MakeAddr(const std::string& ip, uint16_t port) {
@@ -49,25 +49,21 @@ static protocol::NetworkAddress MakeAddr(const std::string& ip, uint16_t port) {
 
 TEST_CASE("Feeler ID allocation and slot exclusion", "[network][feeler][peer_id]") {
     asio::io_context io;
-    PeerLifecycleManager::Config cfg; // defaults: target_outbound_peers = 8
-    PeerLifecycleManager plm(io, cfg);
+    ConnectionManager::Config cfg; // defaults: target_outbound_peers = 8
+    ConnectionManager plm(io, cfg);
 
     // Discovery manager (owns addrman); registers itself with plm
-    PeerDiscoveryManager pdm(&plm);
+    AddrRelayManager pdm(&plm);
 
     // Seed one routable address into NEW table for feeler
     auto addr = MakeAddr("93.184.216.34", protocol::ports::REGTEST);
-    REQUIRE(pdm.addr_manager_for_test().add(addr));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(pdm).add(addr));
 
     auto transport = std::make_shared<FakeTransport>(/*next_success=*/false);
-
-    auto is_running = [](){ return true; };
-    auto get_transport = [transport](){ return std::static_pointer_cast<Transport>(transport); };
-    auto setup_handler = [](Peer*){};
+    plm.Init(transport, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/12345);
 
     // Attempt feeler with failing transport: should NOT allocate a peer/ID
-    plm.AttemptFeelerConnection(is_running, get_transport, setup_handler,
-                                protocol::magic::REGTEST, /*height=*/0, /*nonce=*/12345);
+    plm.AttemptFeelerConnection(/*current_height=*/0);
     // Run posted callback
     io.poll();
     io.restart();
@@ -77,8 +73,7 @@ TEST_CASE("Feeler ID allocation and slot exclusion", "[network][feeler][peer_id]
 
     // Now succeed: should allocate exactly one feeler peer and still not consume outbound slot
     transport->SetNextConnectResult(true);
-    plm.AttemptFeelerConnection(is_running, get_transport, setup_handler,
-                                protocol::magic::REGTEST, /*height=*/0, /*nonce=*/12346);
+    plm.AttemptFeelerConnection(/*current_height=*/0);
     io.poll();
     io.restart();
 

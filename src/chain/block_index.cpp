@@ -157,12 +157,8 @@ const CBlockIndex* LastCommonAncestor(const CBlockIndex* pa, const CBlockIndex* 
     pb = pb->pprev;
   }
 
-  // Return common ancestor (could be nullptr if chains diverged from different
-  // genesis) Caller MUST check for nullptr and handle gracefully This can
-  // happen with:
-  // - Orphan chains from different networks
-  // - Corrupted disk state
-  // - Malicious peers sending fake chains
+  // Return common ancestor. In normal operation this is never nullptr since all
+  // headers connect back to genesis. Could theoretically be nullptr with corrupted state.
   return pa;
 }
 

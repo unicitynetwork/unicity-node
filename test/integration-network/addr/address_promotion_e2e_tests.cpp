@@ -24,7 +24,7 @@
 #include "network/protocol.hpp"
 #include "network/message.hpp"
 #include "network/addr_manager.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 #include "util/hash.hpp"
 #include <cstring>
 
@@ -90,6 +90,7 @@ TEST_CASE("E2E: Address received via ADDR protocol is stored in NEW table", "[ne
     // Node A receives ADDR from peer → Address stored in NEW table
 
     SimulatedNetwork net(50001);
+    // Simulation starts at realistic time (Jan 2024), so timestamps are valid
     TestOrchestrator orch(&net);
     net.EnableCommandTracking(true);
 
@@ -151,6 +152,7 @@ TEST_CASE("E2E: Successful connection promotes address from NEW to TRIED", "[net
     // 5. Address moves to TRIED
 
     SimulatedNetwork net(50002);
+    // Simulation starts at realistic time (Jan 2024), so timestamps are valid
     TestOrchestrator orch(&net);
     net.EnableCommandTracking(true);
 
@@ -233,6 +235,7 @@ TEST_CASE("E2E: Failed connection does not promote address to TRIED", "[network]
     // Verify that if connection fails, address stays in NEW table
 
     SimulatedNetwork net(50003);
+    // Simulation starts at realistic time (Jan 2024), so timestamps are valid
     TestOrchestrator orch(&net);
     net.EnableCommandTracking(true);
 
@@ -271,24 +274,21 @@ TEST_CASE("E2E: Failed connection does not promote address to TRIED", "[network]
     size_t tried_before = discovery.TriedCount();
     REQUIRE(new_before >= 1);
 
-    // Manually add the address to simulate what would happen
+    // Manually mark attempt to simulate what would happen
     // In a real scenario, attempt_outbound_connections() would try to connect
-    // and fail, then call failed() on the address
+    // Note: Bitcoin Core has no Failed() - terrible addresses are just filtered
 
     auto bad_addr = MakeIPv4Address("185.1.2.200", ports::REGTEST);
 
     // Mark an attempt (simulating what NetworkManager does)
     discovery.Attempt(bad_addr);
 
-    // Mark failure (simulating connection failure)
-    discovery.Failed(bad_addr);
-
-    // Verify address is still in NEW, not TRIED
+    // Verify address is still in NEW, not TRIED (attempt doesn't promote)
     size_t new_after = discovery.NewCount();
     size_t tried_after = discovery.TriedCount();
 
     CHECK(tried_after == tried_before);  // No promotion to TRIED
-    CHECK(new_after >= 1);  // Address still tracked (may have failure count)
+    CHECK(new_after >= 1);  // Address still tracked
 }
 
 TEST_CASE("E2E: good() with correct timestamp update (Bitcoin Core parity)", "[network][addr][e2e][parity]") {
@@ -321,6 +321,7 @@ TEST_CASE("E2E: Multiple address lifecycle - parallel flows", "[network][addr][e
     // Test multiple addresses going through the lifecycle simultaneously
 
     SimulatedNetwork net(50004);
+    // Simulation starts at realistic time (Jan 2024), so timestamps are valid
     TestOrchestrator orch(&net);
     net.EnableCommandTracking(true);
 
@@ -345,7 +346,7 @@ TEST_CASE("E2E: Multiple address lifecycle - parallel flows", "[network][addr][e
 
     // Boost token bucket to allow ADDR processing (simulates A sent GETADDR to B)
     int peer_id = orch.GetPeerId(nodeA, nodeB);
-    nodeA.GetNetworkManager().discovery_manager_for_test().NotifyGetAddrSent(peer_id);
+    nodeA.GetDiscoveryManager().NotifyGetAddrSent(peer_id);
 
     // B sends ADDR with both C's and D's addresses
     auto now_s = static_cast<uint32_t>(
@@ -402,6 +403,7 @@ TEST_CASE("E2E: Address learned via relay chain", "[network][addr][e2e][relay]")
     // This verifies multi-hop address propagation
 
     SimulatedNetwork net(50005);
+    // Simulation starts at realistic time (Jan 2024), so timestamps are valid
     TestOrchestrator orch(&net);
     net.EnableCommandTracking(true);
 

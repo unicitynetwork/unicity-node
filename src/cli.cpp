@@ -43,12 +43,15 @@ void PrintUsage(const char *program_name) {
       << "Network:\n"
       << "  getconnectioncount           Get number of connections\n"
       << "  getpeerinfo                  Get connected peer information\n"
+      << "  getnettotals                 Get network traffic statistics\n"
+      << "  getnetworkinfo               Get network state and configuration\n"
       << "  getaddrmaninfo               Get address manager statistics\n"
       << "  addnode <node> <add|remove|onetry>  Manage node connections\n"
       << "  disconnectnode <address>     Disconnect a peer\n"
       << "  setban <subnet> <add|remove> Ban/unban IP address or subnet\n"
       << "  listbanned                   List all banned IPs\n"
       << "  clearbanned                  Clear all banned IPs\n"
+      << "  setnetworkactive <true|false>  Enable/disable P2P network activity\n"
       << "\n"
       << "Logging:\n"
       << "  logging [<category>:<level>...]  Get/set logging configuration\n"
@@ -63,9 +66,6 @@ void PrintUsage(const char *program_name) {
       << "  addconnection <addr> <type>  Add connection (type: outbound-full-relay,\n"
       << "                               block-relay-only, feeler)\n"
       << "  reportmisbehavior <peerid> <score>  Report peer misbehavior\n"
-      << "  addorphanheader <hex>        Add orphan header\n"
-      << "  getorphanstats               Get orphan header statistics\n"
-      << "  evictorphans                 Force orphan header eviction\n"
       << std::endl;
 }
 

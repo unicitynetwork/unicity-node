@@ -1,7 +1,10 @@
 #include "catch_amalgamated.hpp"
 #include "infra/simulated_network.hpp"
 #include "infra/simulated_node.hpp"
+#include "infra/mock_transport.hpp"
 #include "test_orchestrator.hpp"
+#include "network/connection_manager.hpp"
+#include <asio.hpp>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -9,6 +12,40 @@
 using namespace unicity;
 using namespace unicity::test;
 using json = nlohmann::json;
+
+namespace {
+
+// Transport that counts connect() calls with configurable failure
+class CountingTransport : public network::Transport {
+public:
+    explicit CountingTransport(int fail_first_n = 0) : fail_first_n_(fail_first_n) {}
+    int connect_count() const { return count_; }
+
+    network::TransportConnectionPtr connect(const std::string& address, uint16_t port,
+                                            network::ConnectCallback callback) override {
+        ++count_;
+        if (count_ <= fail_first_n_) {
+            if (callback) callback(false);
+            return nullptr;
+        }
+        auto conn = std::make_shared<network::MockTransportConnection>(address, port);
+        conn->set_inbound(false);
+        if (callback) callback(true);
+        return conn;
+    }
+
+    bool listen(uint16_t, std::function<void(network::TransportConnectionPtr)>) override { return true; }
+    void stop_listening() override {}
+    void run() override {}
+    void stop() override {}
+    bool is_running() const override { return true; }
+
+private:
+    int fail_first_n_{0};
+    int count_{0};
+};
+
+} // namespace
 
 static json read_json_file(const std::string& path) {
     std::ifstream f(path);
@@ -149,16 +186,17 @@ TEST_CASE("Anchors - Load rejects malformed entries and returns false", "[networ
     CHECK(n1.GetNetworkManager().outbound_peer_count() == 0);
 }
 
-TEST_CASE("Anchors - Loaded anchors are whitelisted (NoBan)", "[network][anchor][whitelist]") {
+TEST_CASE("Anchors - Loaded anchors have no special permissions (can be banned)", "[network][anchor][ban]") {
     SimulatedNetwork net(999);
     TestOrchestrator orch(&net);
 
     SimulatedNode n1(1, &net);
+    SimulatedNode n2(2, &net);  // Actual peer so the connection succeeds
 
     const std::string path = anchors_path("anchors_whitelist_test.json");
     std::filesystem::remove(path);
 
-    // Write one anchor: 127.0.0.2
+    // Write one anchor: 127.0.0.2 (node 2's address)
     json root;
     root["version"] = 1;
     root["count"] = 1;
@@ -171,22 +209,27 @@ TEST_CASE("Anchors - Loaded anchors are whitelisted (NoBan)", "[network][anchor]
         f << root.dump(2);
     }
 
-    // Load anchors; this should whitelist 127.0.0.2
+    // Load anchors through the real NetworkManager path
     REQUIRE(n1.GetNetworkManager().LoadAnchors(path));
 
-    // Give the system a moment to process callbacks
-    orch.AdvanceTime(std::chrono::milliseconds(100));
+    // Wait for connection to complete
+    REQUIRE(orch.WaitForPeerCount(n1, 1));
 
-    // Check that anchor address is whitelisted
+    // Verify anchor peer has no special permissions (Core parity)
+    auto peers = n1.GetNetworkManager().peer_manager().get_all_peers();
+    REQUIRE(peers.size() >= 1);
+    for (const auto& peer : peers) {
+        if (peer) {
+            CHECK(peer->permissions() == network::NetPermissionFlags::None);
+        }
+    }
+
+    // Anchors can be banned if they misbehave
     auto& bm = n1.GetNetworkManager().peer_manager();
-    // 127.0.0.2 should be normal dotted-quad
-    CHECK(bm.IsWhitelisted("127.0.0.2"));
-
-    // Note: Like Bitcoin Core, whitelist and ban are independent states
-    // Whitelisted addresses CAN be banned; whitelist only affects connection acceptance
     bm.Ban("127.0.0.2", 3600);
-    CHECK(bm.IsBanned("127.0.0.2"));  // Ban succeeds
-    CHECK(bm.IsWhitelisted("127.0.0.2"));  // Still whitelisted
+    CHECK(bm.IsBanned("127.0.0.2"));
+
+    std::filesystem::remove(path);
 }
 
 // === ConnectToAnchors Unit Tests ===
@@ -198,26 +241,26 @@ TEST_CASE("ConnectToAnchors - empty vector does nothing", "[network][anchor][uni
 
     auto& peer_mgr = n1.GetNetworkManager().peer_manager();
     size_t initial_peer_count = peer_mgr.peer_count();
+    uint64_t initial_attempts = peer_mgr.GetOutboundAttempts();
 
     // Call with empty vector
     std::vector<protocol::NetworkAddress> empty_anchors;
-    bool connect_called = false;
-    peer_mgr.ConnectToAnchors(empty_anchors, [&](const protocol::NetworkAddress&, network::ConnectionType) {
-        connect_called = true;
-        return network::ConnectionResult::Success;
-    });
+    peer_mgr.ConnectToAnchors(empty_anchors, /*current_height=*/0);
 
-    // Connect callback should never be called
-    CHECK_FALSE(connect_called);
+    // No connections should be attempted
+    CHECK(peer_mgr.GetOutboundAttempts() == initial_attempts);
     CHECK(peer_mgr.peer_count() == initial_peer_count);
 }
 
-TEST_CASE("ConnectToAnchors - whitelists addresses before connecting", "[network][anchor][unit]") {
-    SimulatedNetwork net(1002);
-    TestOrchestrator orch(&net);
-    SimulatedNode n1(1, &net);
+TEST_CASE("ConnectToAnchors - does NOT whitelist addresses", "[network][anchor][unit]") {
+    asio::io_context io;
+    network::ConnectionManager plm(io, network::ConnectionManager::Config{});
 
-    auto& peer_mgr = n1.GetNetworkManager().peer_manager();
+    auto transport = std::make_shared<CountingTransport>();
+    plm.Init(transport, [](network::Peer*){}, [](){ return true; },
+             protocol::magic::REGTEST, /*local_nonce=*/42);
+
+    uint64_t initial_attempts = plm.GetOutboundAttempts();
 
     // Create anchor address (93.184.216.34 - routable)
     protocol::NetworkAddress addr;
@@ -229,53 +272,51 @@ TEST_CASE("ConnectToAnchors - whitelists addresses before connecting", "[network
 
     std::vector<protocol::NetworkAddress> anchors = {addr};
 
-    // Track if whitelist was set before connect callback
-    bool whitelisted_before_connect = false;
-    peer_mgr.ConnectToAnchors(anchors, [&](const protocol::NetworkAddress&, network::ConnectionType) {
-        // Check whitelist status at the moment connect is called
-        whitelisted_before_connect = peer_mgr.IsWhitelisted("93.184.216.34");
-        return network::ConnectionResult::Success;
-    });
+    // Anchors should attempt connection (without whitelisting)
+    plm.ConnectToAnchors(anchors, /*current_height=*/0);
 
-    CHECK(whitelisted_before_connect);
-    CHECK(peer_mgr.IsWhitelisted("93.184.216.34"));
+    CHECK(plm.GetOutboundAttempts() >= initial_attempts + 1);
 }
 
 TEST_CASE("ConnectToAnchors - uses BLOCK_RELAY connection type", "[network][anchor][unit]") {
     SimulatedNetwork net(1003);
     TestOrchestrator orch(&net);
     SimulatedNode n1(1, &net);
+    SimulatedNode n2(2, &net);
 
     auto& peer_mgr = n1.GetNetworkManager().peer_manager();
 
-    // Create anchor address
-    protocol::NetworkAddress addr;
-    addr.services = protocol::NODE_NETWORK;
-    addr.port = protocol::ports::REGTEST;
-    for (int i = 0; i < 10; ++i) addr.ip[i] = 0;
-    addr.ip[10] = 0xFF; addr.ip[11] = 0xFF;
-    addr.ip[12] = 8; addr.ip[13] = 8; addr.ip[14] = 8; addr.ip[15] = 8;
+    // Use n2's address so the simulated transport can actually connect
+    protocol::NetworkAddress n2_addr;
+    n2_addr.services = protocol::NODE_NETWORK;
+    n2_addr.port = protocol::ports::REGTEST + 2;
+    for (int i = 0; i < 10; ++i) n2_addr.ip[i] = 0;
+    n2_addr.ip[10] = 0xFF; n2_addr.ip[11] = 0xFF;
+    n2_addr.ip[12] = 127; n2_addr.ip[13] = 0; n2_addr.ip[14] = 0; n2_addr.ip[15] = 2;
+    std::vector<protocol::NetworkAddress> anchors_vec = {n2_addr};
 
-    std::vector<protocol::NetworkAddress> anchors = {addr};
+    peer_mgr.ConnectToAnchors(anchors_vec, /*current_height=*/0);
 
-    network::ConnectionType received_type = network::ConnectionType::INBOUND;
-    peer_mgr.ConnectToAnchors(anchors, [&](const protocol::NetworkAddress&, network::ConnectionType type) {
-        received_type = type;
-        return network::ConnectionResult::Success;
-    });
+    // Process async callbacks
+    for (int i = 0; i < 5; ++i) orch.AdvanceTime(std::chrono::milliseconds(50));
 
     // Anchors should connect as BLOCK_RELAY for eclipse resistance
-    CHECK(received_type == network::ConnectionType::BLOCK_RELAY);
+    auto peers = peer_mgr.get_outbound_peers();
+    REQUIRE(peers.size() >= 1);
+    CHECK(peers[0]->connection_type() == network::ConnectionType::BLOCK_RELAY);
 }
 
 TEST_CASE("ConnectToAnchors - handles multiple anchors", "[network][anchor][unit]") {
-    SimulatedNetwork net(1004);
-    TestOrchestrator orch(&net);
-    SimulatedNode n1(1, &net);
+    asio::io_context io;
+    network::ConnectionManager plm(io, network::ConnectionManager::Config{});
 
-    auto& peer_mgr = n1.GetNetworkManager().peer_manager();
+    auto transport = std::make_shared<CountingTransport>();
+    plm.Init(transport, [](network::Peer*){}, [](){ return true; },
+             protocol::magic::REGTEST, /*local_nonce=*/44);
 
-    // Create two anchor addresses
+    uint64_t initial_attempts = plm.GetOutboundAttempts();
+
+    // Create two anchor addresses (routable IPs)
     std::vector<protocol::NetworkAddress> anchors;
     for (int i = 0; i < 2; ++i) {
         protocol::NetworkAddress addr;
@@ -287,24 +328,20 @@ TEST_CASE("ConnectToAnchors - handles multiple anchors", "[network][anchor][unit
         anchors.push_back(addr);
     }
 
-    int connect_count = 0;
-    peer_mgr.ConnectToAnchors(anchors, [&](const protocol::NetworkAddress&, network::ConnectionType) {
-        ++connect_count;
-        return network::ConnectionResult::Success;
-    });
+    plm.ConnectToAnchors(anchors, /*current_height=*/0);
 
     // Should attempt to connect to both anchors
-    CHECK(connect_count == 2);
-    CHECK(peer_mgr.IsWhitelisted("10.0.0.1"));
-    CHECK(peer_mgr.IsWhitelisted("10.0.0.2"));
+    CHECK(plm.GetOutboundAttempts() >= initial_attempts + 2);
 }
 
 TEST_CASE("ConnectToAnchors - continues on connection failure", "[network][anchor][unit]") {
-    SimulatedNetwork net(1005);
-    TestOrchestrator orch(&net);
-    SimulatedNode n1(1, &net);
+    asio::io_context io;
+    network::ConnectionManager plm(io, network::ConnectionManager::Config{});
 
-    auto& peer_mgr = n1.GetNetworkManager().peer_manager();
+    // First connection fails, second succeeds
+    auto transport = std::make_shared<CountingTransport>(/*fail_first_n=*/1);
+    plm.Init(transport, [](network::Peer*){}, [](){ return true; },
+             protocol::magic::REGTEST, /*local_nonce=*/45);
 
     // Create two anchor addresses
     std::vector<protocol::NetworkAddress> anchors;
@@ -318,16 +355,71 @@ TEST_CASE("ConnectToAnchors - continues on connection failure", "[network][ancho
         anchors.push_back(addr);
     }
 
-    int connect_count = 0;
-    peer_mgr.ConnectToAnchors(anchors, [&](const protocol::NetworkAddress&, network::ConnectionType) -> network::ConnectionResult {
-        ++connect_count;
-        // First connection fails, second succeeds
-        if (connect_count == 1) {
-            return network::ConnectionResult::TransportFailed;
-        }
-        return network::ConnectionResult::Success;
-    });
+    plm.ConnectToAnchors(anchors, /*current_height=*/0);
 
-    // Should attempt both connections even if first fails
-    CHECK(connect_count == 2);
+    // Both connections should be attempted even though the first failed
+    CHECK(transport->connect_count() == 2);
+}
+
+// ============================================================================
+// End-to-End Anchor Connection Type Tests
+// These tests verify the FULL flow from NetworkManager -> ConnectionManager -> actual connection
+// ============================================================================
+
+TEST_CASE("NetworkManager anchor connections use BLOCK_RELAY end-to-end", "[network][anchor][integration][e2e]") {
+    // This test caught a bug where NetworkManager's callback ignored the conn_type parameter
+    // from ConnectToAnchors, causing anchors to connect as FULL_RELAY instead of BLOCK_RELAY
+
+    SimulatedNetwork net(2001);
+    TestOrchestrator orch(&net);
+
+    // Create two nodes
+    SimulatedNode n1(1, &net);
+    SimulatedNode n2(2, &net);
+
+    // Create anchors file with n2's address
+    std::string test_anchors_path = anchors_path("anchor_e2e_test.json");
+
+    {
+        json root;
+        root["version"] = 1;
+        root["count"] = 1;
+
+        json anchors_array = json::array();
+        write_anchor_entry(anchors_array, 2);  // Node 2's address
+        root["anchors"] = anchors_array;
+
+        std::ofstream f(test_anchors_path);
+        f << root.dump(2);
+    }
+
+    // Load anchors through NetworkManager (this exercises the full callback chain)
+    bool loaded = n1.GetNetworkManager().LoadAnchors(test_anchors_path);
+    REQUIRE(loaded);
+
+    // Process connections
+    REQUIRE(orch.WaitForPeerCount(n1, 1));
+
+    // Verify the peer connected as BLOCK_RELAY
+    auto peers = n1.GetNetworkManager().peer_manager().get_all_peers();
+    REQUIRE(peers.size() >= 1);
+
+    bool found_block_relay_anchor = false;
+    bool has_no_special_permissions = false;
+    for (const auto& peer : peers) {
+        if (peer && peer->is_block_relay_only()) {
+            found_block_relay_anchor = true;
+            // Anchors must NOT have NoBan or any special permissions (Core parity)
+            has_no_special_permissions = (peer->permissions() == network::NetPermissionFlags::None);
+            break;
+        }
+    }
+
+    // The anchor should have been connected as BLOCK_RELAY, not FULL_RELAY
+    CHECK(found_block_relay_anchor);
+    // Anchors are regular peers — no ban immunity (Core parity)
+    CHECK(has_no_special_permissions);
+
+    // Cleanup
+    std::filesystem::remove(test_anchors_path);
 }

@@ -2,7 +2,7 @@
 // Unit tests for BanManager improvements - dirty flag, file permissions, and capacity enforcement
 
 #include "catch_amalgamated.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/connection_manager.hpp"
 #include "network/ban_manager.hpp"
 #include "util/time.hpp"
 #include <asio.hpp>
@@ -64,8 +64,8 @@ TEST_CASE("BanManager - Constructor initializes ban_file_path", "[network][ban][
 
     SECTION("Constructor with datadir sets path immediately") {
         asio::io_context io;
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(io, config, fixture.test_dir);
+        ConnectionManager::Config config;
+        ConnectionManager pm(io, config, fixture.test_dir);
 
         // Ban an address - should auto-save since path is set
         pm.Ban("192.168.1.1", 3600);
@@ -77,8 +77,8 @@ TEST_CASE("BanManager - Constructor initializes ban_file_path", "[network][ban][
 
     SECTION("Constructor with empty datadir doesn't create file") {
         asio::io_context io;
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(io, config, "");
+        ConnectionManager::Config config;
+        ConnectionManager pm(io, config, "");
 
         // Ban an address - should not create any file
         pm.Ban("192.168.1.1", 3600);
@@ -93,11 +93,11 @@ TEST_CASE("BanManager - File permissions are 0600 (owner-only)", "[network][ban]
 
     SECTION("SaveBans creates file with 0600 permissions") {
         asio::io_context io;
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(io, config, fixture.test_dir);
+        ConnectionManager::Config config;
+        ConnectionManager pm(io, config, fixture.test_dir);
 
-        // Ban an address
-        pm.Ban("192.168.1.1", 0);  // Permanent ban
+        // Ban an address (uses default 24h duration)
+        pm.Ban("192.168.1.1");
 
         // Verify SaveBans creates file with correct permissions
         REQUIRE(pm.SaveBans());
@@ -116,11 +116,11 @@ TEST_CASE("BanManager - Dirty flag prevents redundant saves", "[network][ban][im
 
     SECTION("Multiple SaveBans without modifications doesn't rewrite file") {
         asio::io_context io;
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(io, config, fixture.test_dir);
+        ConnectionManager::Config config;
+        ConnectionManager pm(io, config, fixture.test_dir);
 
         // Ban an address
-        pm.Ban("192.168.1.1", 0);
+        pm.Ban("192.168.1.1", 86400);
         REQUIRE(pm.SaveBans());
 
         std::string banlist_path = fixture.GetBanlistPath();
@@ -144,11 +144,11 @@ TEST_CASE("BanManager - Dirty flag prevents redundant saves", "[network][ban][im
 
     SECTION("SaveBans after modification does write file") {
         asio::io_context io;
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(io, config, fixture.test_dir);
+        ConnectionManager::Config config;
+        ConnectionManager pm(io, config, fixture.test_dir);
 
         // Ban an address
-        pm.Ban("192.168.1.1", 0);
+        pm.Ban("192.168.1.1", 86400);
         REQUIRE(pm.SaveBans());
 
         std::string banlist_path = fixture.GetBanlistPath();
@@ -157,7 +157,7 @@ TEST_CASE("BanManager - Dirty flag prevents redundant saves", "[network][ban][im
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
         // Modify state by adding another ban
-        pm.Ban("192.168.1.2", 0);
+        pm.Ban("192.168.1.2", 86400);
         REQUIRE(pm.SaveBans());
 
         auto content2 = fixture.GetFileContent(banlist_path);
@@ -168,11 +168,11 @@ TEST_CASE("BanManager - Dirty flag prevents redundant saves", "[network][ban][im
 
     SECTION("Unban marks dirty and triggers save") {
         asio::io_context io;
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(io, config, fixture.test_dir);
+        ConnectionManager::Config config;
+        ConnectionManager pm(io, config, fixture.test_dir);
 
-        pm.Ban("192.168.1.1", 0);
-        pm.Ban("192.168.1.2", 0);
+        pm.Ban("192.168.1.1", 86400);
+        pm.Ban("192.168.1.2", 86400);
         REQUIRE(pm.SaveBans());
 
         std::string banlist_path = fixture.GetBanlistPath();
@@ -196,11 +196,11 @@ TEST_CASE("BanManager - Dirty flag prevents redundant saves", "[network][ban][im
 
     SECTION("ClearBanned marks dirty") {
         asio::io_context io;
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(io, config, fixture.test_dir);
+        ConnectionManager::Config config;
+        ConnectionManager pm(io, config, fixture.test_dir);
 
-        pm.Ban("192.168.1.1", 0);
-        pm.Ban("192.168.1.2", 0);
+        pm.Ban("192.168.1.1", 86400);
+        pm.Ban("192.168.1.2", 86400);
         REQUIRE(pm.SaveBans());
 
         std::string banlist_path = fixture.GetBanlistPath();
@@ -250,8 +250,8 @@ TEST_CASE("BanManager - LoadBans sets dirty flag correctly", "[network][ban][imp
         }
 
         asio::io_context io;
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(io, config, fixture.test_dir);
+        ConnectionManager::Config config;
+        ConnectionManager pm(io, config, fixture.test_dir);
 
         // LoadBans should:
         // 1. Skip expired entry
@@ -268,14 +268,12 @@ TEST_CASE("BanManager - LoadBans sets dirty flag correctly", "[network][ban][imp
 TEST_CASE("BanManager - Discourage capacity enforcement", "[network][ban][improvements][dos]") {
     BanImprovementsFixture fixture;
     asio::io_context io;
-    PeerLifecycleManager::Config config;
-    PeerLifecycleManager pm(io, config, "");
+    ConnectionManager::Config config;
+    ConnectionManager pm(io, config, "");
 
     SECTION("Discourage never exceeds MAX_DISCOURAGED (10000)") {
         // Discourage MAX_DISCOURAGED addresses
-        const size_t MAX_DISCOURAGED = 10000;
-
-        for (size_t i = 0; i < MAX_DISCOURAGED; ++i) {
+        for (size_t i = 0; i < BanManager::MAX_DISCOURAGED; ++i) {
             std::string addr = "192.168." + std::to_string(i / 256) + "." + std::to_string(i % 256);
             pm.Discourage(addr);
         }
@@ -290,10 +288,8 @@ TEST_CASE("BanManager - Discourage capacity enforcement", "[network][ban][improv
     }
 
     SECTION("Discourage at capacity evicts oldest entry") {
-        const size_t MAX_DISCOURAGED = 10000;
-
         // Fill to capacity
-        for (size_t i = 0; i < MAX_DISCOURAGED; ++i) {
+        for (size_t i = 0; i < BanManager::MAX_DISCOURAGED; ++i) {
             std::string addr = "192.168." + std::to_string(i / 256) + "." + std::to_string(i % 256);
             pm.Discourage(addr);
         }
@@ -316,12 +312,12 @@ TEST_CASE("BanManager - SweepBanned marks dirty when removing expired", "[networ
 
     SECTION("SweepBanned with expired bans marks dirty and auto-saves") {
         asio::io_context io;
-        PeerLifecycleManager::Config config;
-        PeerLifecycleManager pm(io, config, fixture.test_dir);
+        ConnectionManager::Config config;
+        ConnectionManager pm(io, config, fixture.test_dir);
 
         // Ban with short duration (1 second)
         pm.Ban("192.168.1.1", 1);
-        pm.Ban("192.168.1.2", 0);  // Permanent
+        pm.Ban("192.168.1.2", 86400);  // Long duration (24h)
         REQUIRE(pm.SaveBans());
 
         std::string banlist_path = fixture.GetBanlistPath();
@@ -337,7 +333,7 @@ TEST_CASE("BanManager - SweepBanned marks dirty when removing expired", "[networ
             auto content2 = fixture.GetFileContent(banlist_path);
             REQUIRE(content1 != content2);
 
-            // Verify only permanent ban remains
+            // Verify only the long-duration ban remains
             auto bans = pm.GetBanned();
             REQUIRE(bans.size() == 1);
             REQUIRE(bans.find("192.168.1.2") != bans.end());

@@ -15,7 +15,7 @@ using namespace unicity::network;
 using namespace unicity::protocol;
 
 // Helper: Create IPv4-mapped address from octets
-static NetworkAddress MakeIPv4(uint8_t a, uint8_t b, uint8_t c, uint8_t d, uint16_t port = 8333) {
+static NetworkAddress MakeIPv4(uint8_t a, uint8_t b, uint8_t c, uint8_t d, uint16_t port = 9590) {
     NetworkAddress addr;
     addr.ip.fill(0);
     addr.ip[10] = 0xff;
@@ -30,7 +30,7 @@ static NetworkAddress MakeIPv4(uint8_t a, uint8_t b, uint8_t c, uint8_t d, uint1
 }
 
 // Helper: Create address with specific netgroup (a.b.x.x)
-static NetworkAddress MakeAddressInNetgroup(uint8_t a, uint8_t b, uint8_t index, uint16_t port = 8333) {
+static NetworkAddress MakeAddressInNetgroup(uint8_t a, uint8_t b, uint8_t index, uint16_t port = 9590) {
     return MakeIPv4(a, b, index / 256, (index % 256) + 1, port);
 }
 
@@ -53,7 +53,7 @@ TEST_CASE("select_new_for_feeler() basic functionality", "[network][addrman][fee
 
         auto result = am.select_new_for_feeler();
         REQUIRE(result.has_value());
-        REQUIRE(result->port == 8333);
+        REQUIRE(result->port == 9590);
     }
 
     SECTION("Does not return addresses from TRIED table") {
@@ -125,7 +125,7 @@ TEST_CASE("Port handling - same IP different ports are separate entries", "[netw
     AddressManager am;
 
     SECTION("Different ports create separate entries") {
-        auto addr1 = MakeIPv4(1, 2, 3, 100, 8333);
+        auto addr1 = MakeIPv4(1, 2, 3, 100, 9590);
         auto addr2 = MakeIPv4(1, 2, 3, 100, 8334);  // Same IP, different port
 
         REQUIRE(am.add(addr1));
@@ -134,37 +134,47 @@ TEST_CASE("Port handling - same IP different ports are separate entries", "[netw
     }
 
     SECTION("Good() on one port doesn't affect other port") {
-        auto addr1 = MakeIPv4(1, 2, 3, 101, 8333);
+        auto addr1 = MakeIPv4(1, 2, 3, 101, 9590);
         auto addr2 = MakeIPv4(1, 2, 3, 101, 8334);
 
         am.add(addr1);
         am.add(addr2);
         REQUIRE(am.new_count() == 2);
 
-        // Mark only port 8333 as good
+        // Mark only port 9590 as good
         am.good(addr1);
         REQUIRE(am.tried_count() == 1);
         REQUIRE(am.new_count() == 1);  // Port 8334 still in NEW
     }
 
     SECTION("Failed() on one port doesn't affect other port") {
-        auto addr1 = MakeIPv4(1, 2, 3, 102, 8333);
+        auto addr1 = MakeIPv4(1, 2, 3, 102, 9590);
         auto addr2 = MakeIPv4(1, 2, 3, 102, 8334);
 
         am.add(addr1);
         am.add(addr2);
 
-        // Fail port 8333 enough to remove it
-        for (int i = 0; i < 5; ++i) {
-            am.failed(addr1);
-        }
+        // Bitcoin Core parity: use attempt() to increment failures
+        // Need to advance m_last_good_ between attempts
+        am.attempt(addr1, true);  // attempts = 1
+        am.good(addr2);  // advance m_last_good_, moves addr2 to TRIED
+        am.attempt(addr1, true);  // attempts = 2
+        am.good(addr2);  // advance m_last_good_
+        am.attempt(addr1, true);  // attempts = 3
 
-        // Port 8334 should still be there
-        REQUIRE(am.size() == 1);
+        // Note: is_terrible() has a 60-second grace period, so addr1 won't be
+        // removed immediately. Bitcoin Core has no failed() function; terrible
+        // addresses are filtered via GetChance() and cleaned by cleanup_stale().
+        // The key test here is that operations on addr1 don't affect addr2 (different port = separate entry).
+
+        // Both addresses still present (addr1 protected by grace period, addr2 in TRIED)
+        REQUIRE(am.size() == 2);
+        REQUIRE(am.tried_count() == 1);  // addr2 in TRIED
+        REQUIRE(am.new_count() == 1);    // addr1 still in NEW (grace period)
     }
 
     SECTION("Select can return different ports for same IP") {
-        auto addr1 = MakeIPv4(1, 2, 3, 103, 8333);
+        auto addr1 = MakeIPv4(1, 2, 3, 103, 9590);
         auto addr2 = MakeIPv4(1, 2, 3, 103, 8334);
 
         am.add(addr1);
@@ -377,7 +387,7 @@ TEST_CASE("add_multiple() edge cases", "[network][addrman][batch]") {
         loopback.ip[13] = 0;
         loopback.ip[14] = 0;
         loopback.ip[15] = 1;
-        loopback.port = 8333;
+        loopback.port = 9590;
         loopback.services = NODE_NETWORK;
         addrs.push_back({ts, loopback});
 
@@ -467,8 +477,8 @@ TEST_CASE("Load() error handling", "[network][addrman][persistence]") {
             "new_count": 2,
             "tried": [],
             "new": [
-                {"ip": [0,0,0,0,0,0,0,0,0,0,255,255,1,2,3,211], "port": 8333, "services": 1, "timestamp": 1000000, "last_try": 0, "last_success": 0, "attempts": 0},
-                {"ip": "invalid", "port": 8333}
+                {"ip": [0,0,0,0,0,0,0,0,0,0,255,255,1,2,3,211], "port": 9590, "services": 1, "timestamp": 1000000, "last_try": 0, "last_success": 0, "attempts": 0},
+                {"ip": "invalid", "port": 9590}
             ]
         })";
         f.close();
@@ -500,26 +510,20 @@ TEST_CASE("Timestamp edge cases", "[network][addrman][timestamp]") {
         REQUIRE(sel.has_value());
     }
 
-    SECTION("Very old timestamp is clamped") {
+    SECTION("Very old timestamp is rejected") {
         auto addr = MakeIPv4(1, 2, 3, 221);
-        // Timestamp from year 1970
-        REQUIRE(am.add(addr, 1));
-        REQUIRE(am.size() == 1);
-
-        // Should still be there (clamped to reasonable value)
-        auto sel = am.select();
-        REQUIRE(sel.has_value());
+        // Timestamp from year 1970 - way older than 30-day horizon
+        // Bitcoin Core parity: old timestamps are rejected by is_terrible(), not clamped
+        CHECK_FALSE(am.add(addr, 1));
+        CHECK(am.size() == 0);
     }
 
-    SECTION("Future timestamp is clamped") {
+    SECTION("Future timestamp is rejected") {
         auto addr = MakeIPv4(1, 2, 3, 222);
         uint32_t far_future = UINT32_MAX - 1000;
-        REQUIRE(am.add(addr, far_future));
-        REQUIRE(am.size() == 1);
-
-        // Should be selectable (clamped)
-        auto sel = am.select();
-        REQUIRE(sel.has_value());
+        // Bitcoin Core parity: future timestamps (> 10 min) are rejected by is_terrible()
+        CHECK_FALSE(am.add(addr, far_future));
+        CHECK(am.size() == 0);
     }
 }
 
@@ -571,7 +575,7 @@ TEST_CASE("get_addresses() edge cases", "[network][addrman][getaddr]") {
 TEST_CASE("Netgroup count cache consistency", "[network][addrman][netgroup][cache]") {
     AddressManager am;
 
-    SECTION("Counts remain consistent through add/good/failed cycle") {
+    SECTION("Counts remain consistent through add/good cycle (Bitcoin Core parity)") {
         // Add addresses from same netgroup
         for (int i = 0; i < 8; ++i) {
             am.add(MakeAddressInNetgroup(103, 1, i));
@@ -592,14 +596,10 @@ TEST_CASE("Netgroup count cache consistency", "[network][addrman][netgroup][cach
         // Some should be added (NEW limit is 32)
         REQUIRE(am.new_count() > 0);
 
-        // Demote some from TRIED via failures
-        for (int i = 0; i < 3; ++i) {
-            auto addr = MakeAddressInNetgroup(103, 1, i);
-            for (int f = 0; f < 15; ++f) {
-                am.failed(addr);
-            }
-        }
-        // Some should have moved back to NEW
-        REQUIRE(am.tried_count() < 8);
+        // Bitcoin Core parity: TRIED addresses are NOT demoted back to NEW via failures.
+        // They stay in TRIED until evicted by collision during Good().
+        // Bitcoin Core has no failed() function - terrible addresses filtered via GetChance().
+        // TRIED count unchanged (no demotion)
+        REQUIRE(am.tried_count() == 8);
     }
 }

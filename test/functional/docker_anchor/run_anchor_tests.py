@@ -16,6 +16,7 @@ Usage:
     python3 run_anchor_tests.py [--test <name>]
 """
 
+import os
 import socket
 import struct
 import hashlib
@@ -167,8 +168,8 @@ def create_version():
     payload = struct.pack("<i", 70016)
     payload += struct.pack("<Q", 1)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x0c/AnchorTest/"
     payload += struct.pack("<i", 0)
@@ -259,40 +260,48 @@ def test_anchor_creation() -> bool:
     subprocess.run(["docker", "stop", "--timeout", "10", "anchor_target"], capture_output=True)
     time.sleep(2)
 
-    # Step 4: Start container temporarily to check the anchors file
-    # Note: anchors.json is a single-use file - deleted after loading on startup
-    # So we need to check it BEFORE the node starts, or check the logs
-    print("\n  Step 4: Checking for anchor save in logs...")
+    # Step 4: Check anchor file directly from the stopped container
+    # anchors.json is deleted after loading on startup, so check BEFORE restarting
+    print("\n  Step 4: Checking anchors.json...")
+    tmp_path = "/tmp/anchors_check.json"
+    cp_result = subprocess.run(
+        ["docker", "cp", "anchor_target:/data/anchors.json", tmp_path],
+        capture_output=True, text=True)
 
-    # Start container to access log file
+    anchor_data = None
+    if cp_result.returncode == 0:
+        try:
+            with open(tmp_path) as f:
+                anchor_data = json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError):
+            pass
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    # Restart container for subsequent tests regardless of result
     subprocess.run(["docker", "start", "anchor_target"], capture_output=True)
     time.sleep(3)
 
-    # Check debug log for anchor save messages (the file gets deleted after loading)
-    code, log_output = docker_exec("anchor_target",
-        "grep -i 'Saving.*anchor\\|Selected.*anchor\\|Successfully saved.*anchor' /data/debug.log 2>/dev/null | tail -5")
-
-    if log_output.strip():
-        print(f"    Anchor log entries:\n{log_output.strip()}")
-        if "Successfully saved" in log_output or "Saving" in log_output:
+    if anchor_data is not None:
+        # anchors.json has {"version":1, "count":N, "anchors":[...]}
+        anchor_list = anchor_data.get("anchors", [])
+        anchor_count = len(anchor_list)
+        print(f"    Found {anchor_count} anchors in anchors.json")
+        if anchor_count >= 2:
             print("\nPASS: Anchors saved successfully during shutdown!")
             return True
+        else:
+            print(f"\nFAIL: Expected >= 2 anchors, found {anchor_count}")
+            return False
 
-    # Also check if anchors were loaded (indicates file was created)
-    code, load_output = docker_exec("anchor_target",
-        "grep -i 'Loaded.*anchor' /data/debug.log 2>/dev/null | tail -3")
-    if load_output.strip():
-        print(f"    Anchor load entries:\n{load_output.strip()}")
-        if "Loaded" in load_output:
-            print("\nPASS: Anchors file was created and loaded on restart!")
-            return True
-
-    # If no anchor logs found, check if there were READY peers
     if outbound_ready == 0:
-        print("    NOTE: No outbound peers were in READY state - no anchors to save")
+        print("    NOTE: No outbound peers were in READY state")
         print("\nFAIL: Could not establish outbound connections for anchor creation")
         return False
-    print("\nFAIL: Anchors not saved despite having READY outbound peers")
+    print("\nFAIL: anchors.json not found despite having READY outbound peers")
     return False
 
 
@@ -428,8 +437,8 @@ def create_version():
     payload = struct.pack("<i", 70016)
     payload += struct.pack("<Q", 1)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x09/Poisoner/"
     payload += struct.pack("<i", 0)
@@ -459,7 +468,7 @@ try:
         addr_payload += struct.pack("<I", ts)
         addr_payload += struct.pack("<Q", 1)
         addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([99, i // 256, i % 256, 1])
-        addr_payload += struct.pack(">H", 8333)
+        addr_payload += struct.pack(">H", 9590)
 
     s.sendall(create_msg("addr", addr_payload))
     print("POISONED:100")

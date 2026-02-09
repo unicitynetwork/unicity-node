@@ -7,7 +7,7 @@
 #include "network/message.hpp"
 #include "util/hash.hpp"
 #include "test_orchestrator.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/connection_manager.hpp"
 #include <cstring>
 
 using namespace unicity;
@@ -32,8 +32,8 @@ TEST_CASE("HeaderSync - IBD selects single sync peer among many", "[network_head
 
     // Allow selection passes
     for (int i = 0; i < 50; ++i) {
-        victim.GetNetworkManager().test_hook_check_initial_sync();
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        victim.CheckInitialSync();
+        net.AdvanceTime(200);
     }
 
     // Exactly one outbound peer should have received GETHEADERS during IBD
@@ -52,12 +52,12 @@ TEST_CASE("HeaderSync - Genesis locator uses tip when no pprev (pprev trick fall
 
     victim.ConnectTo(peer.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
 
     auto payloads = net.GetCommandPayloads(victim.GetId(), peer.GetId(), protocol::commands::GETHEADERS);
     for (int i = 0; i < 10 && payloads.empty(); ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
         payloads = net.GetCommandPayloads(victim.GetId(), peer.GetId(), protocol::commands::GETHEADERS);
     }
     REQUIRE_FALSE(payloads.empty());
@@ -83,7 +83,7 @@ TEST_CASE("HeaderSync - Repeated empty HEADERS from sync peer does not thrash se
 
     victim.ConnectTo(p1.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
     victim.ConnectTo(p2.GetId());
     net.AdvanceTime(200);
@@ -99,9 +99,9 @@ TEST_CASE("HeaderSync - Repeated empty HEADERS from sync peer does not thrash se
         full.insert(full.end(), hdr_bytes.begin(), hdr_bytes.end());
         full.insert(full.end(), payload.begin(), payload.end());
         net.SendMessage(p1.GetId(), victim.GetId(), full);
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
+        victim.CheckInitialSync();
+        net.AdvanceTime(200);
     }
 
     // Should have solicited headers, but not from many peers
@@ -109,56 +109,9 @@ TEST_CASE("HeaderSync - Repeated empty HEADERS from sync peer does not thrash se
     CHECK(distinct <= 2);
 }
 
-TEST_CASE("HeaderSync - Unconnecting headers threshold triggers discouragement & cleanup", "[network_header_sync][edge]") {
-    SimulatedNetwork net(51004);
-    SetZeroLatency(net);
-    net.EnableCommandTracking(true);
-
-    SimulatedNode victim(40, &net);
-    SimulatedNode bad(41, &net);
-
-    // Inbound bad peer connects to victim
-    bad.ConnectTo(victim.GetId());
-    net.AdvanceTime(200);
-
-    // Build a small headers batch that does NOT connect to known chain
-    auto make_unconnecting_headers = [&]() {
-        std::vector<CBlockHeader> headers; headers.reserve(2);
-        uint256 bogus_prev; bogus_prev.SetHex("deadbeef00000000000000000000000000000000000000000000000000000000");
-        uint32_t nBits = unicity::chain::GlobalChainParams::Get().GenesisBlock().nBits;
-        uint32_t t0 = static_cast<uint32_t>(net.GetCurrentTime() / 1000);
-        for (int i = 0; i < 2; ++i) {
-            CBlockHeader h; h.nVersion=1; h.hashPrevBlock = (i==0? bogus_prev : headers.back().GetHash()); h.nTime=t0+i+1; h.nBits=nBits; h.nNonce=i+1;
-            h.hashRandomX.SetHex("0000000000000000000000000000000000000000000000000000000000000000");
-            headers.push_back(h);
-        }
-        return headers;
-    };
-
-    auto send_headers = [&](const std::vector<CBlockHeader>& hs){
-        message::HeadersMessage m; m.headers = hs; auto payload = m.serialize();
-        protocol::MessageHeader hdr(protocol::magic::REGTEST, protocol::commands::HEADERS, static_cast<uint32_t>(payload.size()));
-        uint256 hash = Hash(payload);
-        std::memcpy(hdr.checksum.data(), hash.begin(), 4);
-        auto hdr_bytes = message::serialize_header(hdr);
-        std::vector<uint8_t> full; full.reserve(hdr_bytes.size()+payload.size());
-        full.insert(full.end(), hdr_bytes.begin(), hdr_bytes.end());
-        full.insert(full.end(), payload.begin(), payload.end());
-        net.SendMessage(bad.GetId(), victim.GetId(), full);
-    };
-
-    // Send more than MAX_UNCONNECTING_HEADERS messages
-    for (int i = 0; i < unicity::network::MAX_UNCONNECTING_HEADERS + 1; ++i) {
-        send_headers(make_unconnecting_headers());
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
-        // Periodic processing applies discouragement removal
-        victim.GetNetworkManager().peer_manager().process_periodic();
-    }
-
-    // Expect peer count dropped (bad peer disconnected)
-    CHECK(victim.GetPeerCount() == 0);
-}
+// NOTE: Removed "HeaderSync - Unconnecting headers threshold" test.
+// Bitcoin Core (March 2024+) no longer penalizes unconnecting headers - they are just ignored.
+// The getheaders throttling provides sufficient DoS protection.
 
 TEST_CASE("HeaderSync - Oversized HEADERS clears sync and we reselect another peer", "[network_header_sync][edge]") {
     SimulatedNetwork net(51005);
@@ -173,7 +126,7 @@ TEST_CASE("HeaderSync - Oversized HEADERS clears sync and we reselect another pe
     SimulatedNode victim(52, &net);
     victim.ConnectTo(p1.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
     victim.ConnectTo(p2.GetId());
     net.AdvanceTime(200);
@@ -200,8 +153,8 @@ TEST_CASE("HeaderSync - Oversized HEADERS clears sync and we reselect another pe
 
     // Allow processing and reselection
     for (int i = 0; i < 20; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(200);
+        victim.CheckInitialSync();
     }
 
     // Verify we solicited p2 with GETHEADERS after clearing sync
@@ -225,7 +178,7 @@ TEST_CASE("HeaderSync - Empty headers response when no common blocks (genesis bl
 
     // Wait for handshake to complete
     for (int i = 0; i < 20; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 100);
+        net.AdvanceTime(100);
     }
     REQUIRE(node1.GetPeerCount() > 0);
 
@@ -255,7 +208,7 @@ TEST_CASE("HeaderSync - Empty headers response when no common blocks (genesis bl
     full.insert(full.end(), payload.begin(), payload.end());
     net.SendMessage(node2.GetId(), node1.GetId(), full);
 
-    net.AdvanceTime(net.GetCurrentTime() + 500);
+    net.AdvanceTime(500);
 
     // Verify node1 sent HEADERS response
     auto responses = net.GetCommandPayloads(node1.GetId(), node2.GetId(),
@@ -298,7 +251,7 @@ TEST_CASE("HeaderSync - IBD only requests continuation from sync peer", "[networ
     // Connect to sync_peer first and trigger sync selection
     victim.ConnectTo(sync_peer.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     net.AdvanceTime(200);
 
     // Connect other_peer
@@ -348,9 +301,9 @@ TEST_CASE("HeaderSync - IBD only requests continuation from sync peer", "[networ
     // Send a small batch (not full) from other_peer - should NOT trigger continuation
     auto small_batch = make_headers(10);
     send_headers(other_peer.GetId(), small_batch);
-    net.AdvanceTime(net.GetCurrentTime() + 200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
-    net.AdvanceTime(net.GetCurrentTime() + 200);
+    net.AdvanceTime(200);
+    victim.CheckInitialSync();
+    net.AdvanceTime(200);
 
     // During IBD, victim should NOT send GETHEADERS to other_peer
     int gh_to_other = net.CountCommandSent(victim.GetId(), other_peer.GetId(),
@@ -380,24 +333,24 @@ TEST_CASE("HeaderSync - Post-IBD requests continuation from any peer with full b
 
     victim.ConnectTo(sync_peer.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
 
     // Let sync complete
     for (int i = 0; i < 100; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(200);
+        victim.CheckInitialSync();
         if (victim.GetTipHeight() >= 10) break;
     }
 
-    // Move time forward to make tip recent (exit IBD)
-    net.AdvanceTime(std::time(nullptr) * 1000ULL);
+    // Mine blocks to make tip recent (exit IBD)
+    // Simulation starts at realistic time (Jan 2024)
     for (int i = 0; i < 5; ++i) {
         sync_peer.MineBlock();
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
     }
     for (int i = 0; i < 50; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(200);
+        victim.CheckInitialSync();
     }
 
     // Verify we're now post-IBD
@@ -448,9 +401,9 @@ TEST_CASE("HeaderSync - Post-IBD requests continuation from any peer with full b
     auto headers_batch = build_headers_from_peer(other_peer, 1, 20);
     if (!headers_batch.empty()) {
         send_headers(other_peer.GetId(), headers_batch);
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
-        net.AdvanceTime(net.GetCurrentTime() + 500);
+        net.AdvanceTime(200);
+        victim.CheckInitialSync();
+        net.AdvanceTime(500);
     }
 
     // Post-IBD should accept headers from any peer
@@ -478,13 +431,12 @@ TEST_CASE("HeaderSync - Continuation uses pindexLast for locator (Bitcoin Core b
     // Create peer with a DIFFERENT chain (fork at genesis)
     SimulatedNode forked_peer(81, &net);
 
-    // Make forked_peer's time more recent to exit IBD when victim syncs
-    net.AdvanceTime(std::time(nullptr) * 1000ULL);
+    // Simulation starts at realistic time (Jan 2024), so blocks will have recent timestamps
 
     // Mine a longer chain on forked_peer
     for (int i = 0; i < 20; ++i) {
         forked_peer.MineBlock();
-        net.AdvanceTime(net.GetCurrentTime() + 200);
+        net.AdvanceTime(200);
     }
 
     // Verify chains diverged
@@ -494,12 +446,12 @@ TEST_CASE("HeaderSync - Continuation uses pindexLast for locator (Bitcoin Core b
     // Connect victim to forked_peer
     victim.ConnectTo(forked_peer.GetId());
     net.AdvanceTime(200);
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
 
     // Let header sync proceed
     for (int i = 0; i < 100; ++i) {
-        net.AdvanceTime(net.GetCurrentTime() + 200);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(200);
+        victim.CheckInitialSync();
         if (victim.GetTipHeight() >= 20) break;
     }
 
@@ -512,67 +464,10 @@ TEST_CASE("HeaderSync - Continuation uses pindexLast for locator (Bitcoin Core b
 // ADDITIONAL EDGE CASE TESTS
 // ==============================================================================
 
-TEST_CASE("HeaderSync - Orphan resolved when parent arrives", "[network_header_sync][edge][orphan]") {
-    // Tests that when an orphan header arrives before its parent,
-    // it's cached and then activated when the parent arrives.
-    // This exercises ProcessOrphanHeaders via the direct ReceiveHeaders API.
-    SimulatedNetwork net(51010);
-    SetZeroLatency(net);
-
-    SimulatedNode victim(90, &net);
-    victim.SetBypassPOWValidation(true);
-    SimulatedNode peer(91, &net);
-
-    victim.ConnectTo(peer.GetId());
-    net.AdvanceTime(200);
-
-    // Build a chain of 3 headers on top of genesis
-    std::vector<CBlockHeader> chain;
-    uint256 prev = victim.GetTipHash();
-    uint32_t nBits = unicity::chain::GlobalChainParams::Get().GenesisBlock().nBits;
-    uint32_t t0 = static_cast<uint32_t>(net.GetCurrentTime() / 1000);
-
-    for (int i = 0; i < 3; ++i) {
-        CBlockHeader h;
-        h.nVersion = 1;
-        h.hashPrevBlock = prev;
-        h.nTime = t0 + i + 1;
-        h.nBits = nBits;
-        h.nNonce = i + 1;
-        h.hashRandomX.SetHex("0000000000000000000000000000000000000000000000000000000000000000");
-        chain.push_back(h);
-        prev = h.GetHash();
-    }
-
-    // Send header 2 FIRST (orphan - references header 1 which doesn't exist)
-    // Use ReceiveHeaders which directly injects into chainstate
-    std::vector<CBlockHeader> orphan_batch = {chain[1]};
-    victim.ReceiveHeaders(peer.GetId(), orphan_batch);
-    net.AdvanceTime(net.GetCurrentTime() + 200);
-
-    // Orphan should be cached but not activated
-    CHECK(victim.GetTipHeight() == 0);  // Still at genesis
-
-    // Now send header 1 (the parent that connects to genesis)
-    std::vector<CBlockHeader> parent_batch = {chain[0]};
-    victim.ReceiveHeaders(peer.GetId(), parent_batch);
-    net.AdvanceTime(net.GetCurrentTime() + 200);
-
-    // ReceiveHeaders calls AcceptBlockHeader which internally calls ProcessOrphanHeaders.
-    // When parent (chain[0]) is accepted, it triggers processing of the orphan (chain[1]).
-    // We still need to call ActivateBestChain to update the tip.
-    victim.GetChainstate().ActivateBestChain();
-
-    // Both header 1 (parent) and orphan header 2 should now be in the chain
-    CHECK(victim.GetTipHeight() >= 2);
-}
-
-// NOTE: Tests for "Exactly MAX_HEADERS_SIZE unconnecting batch boundary" and
-// "Small unconnecting batch under MAX_HEADERS_SIZE is cached" have been removed.
-// These tests require P2P layer behavior (disconnect logic in HeaderSyncManager)
-// which is not properly simulated by raw net.SendMessage() calls.
-// The P2P disconnect behavior is tested by functional tests in test/functional/
-// that use the full node stack including proper connection handshakes.
+// NOTE: Test "HeaderSync - Orphan resolved when parent arrives" was removed.
+// Orphan header pool infrastructure was removed from the codebase.
+// Headers with unknown parents are now simply discarded and trigger GETHEADERS
+// requests to fill the gap. The P2P layer handles re-requesting missing headers.
 
 TEST_CASE("HeaderSync - Mixed valid and invalid headers in batch stops at first invalid", "[network_header_sync][edge][validation]") {
     // Tests that when a batch contains valid headers followed by an unconnecting header,
@@ -608,7 +503,7 @@ TEST_CASE("HeaderSync - Mixed valid and invalid headers in batch stops at first 
 
     // Send the valid headers first
     victim.ReceiveHeaders(peer.GetId(), valid_headers);
-    net.AdvanceTime(net.GetCurrentTime() + 200);
+    net.AdvanceTime(200);
 
     // ReceiveHeaders only calls AcceptBlockHeader and TryAddBlockIndexCandidate
     // but doesn't call ActivateBestChain. Call it manually for this unit test.
@@ -630,9 +525,90 @@ TEST_CASE("HeaderSync - Mixed valid and invalid headers in batch stops at first 
 
     std::vector<CBlockHeader> unconnecting_batch = {unconnecting};
     victim.ReceiveHeaders(peer.GetId(), unconnecting_batch);
-    net.AdvanceTime(net.GetCurrentTime() + 200);
+    net.AdvanceTime(200);
     victim.GetChainstate().ActivateBestChain();
 
     // Tip should still be at height 5 (unconnecting header was not accepted into chain)
+    CHECK(victim.GetTipHeight() == 5);
+}
+
+TEST_CASE("HeaderSync - Unconnecting headers trigger GETHEADERS request", "[network_header_sync][edge][getheaders]") {
+    // Tests that receiving headers with unknown parent triggers GETHEADERS.
+    // This is the mechanism that makes orphan header pools unnecessary.
+    //
+    // Scenario:
+    // 1. Both nodes share the same chain at height 5
+    // 2. Peer sends headers with an unknown hashPrevBlock (simulates gap)
+    // 3. Victim should send exactly one GETHEADERS to request missing headers
+
+    SimulatedNetwork net(51014);
+    SetZeroLatency(net);
+    net.EnableCommandTracking(true);
+
+    SimulatedNode victim(1, &net);
+    victim.SetBypassPOWValidation(true);
+    for (int i = 0; i < 5; ++i) {
+        victim.MineBlock();
+    }
+    REQUIRE(victim.GetTipHeight() == 5);
+
+    SimulatedNode peer(2, &net);
+    peer.SetBypassPOWValidation(true);
+    // Peer syncs to victim's chain (both at height 5 — sync settles, GETHEADERS throttle clears)
+    peer.ConnectTo(victim.GetId());
+    for (int i = 0; i < 20; ++i) {
+        net.AdvanceTime(100);
+    }
+    REQUIRE(peer.GetTipHeight() == 5);
+
+    // GETHEADERS baseline after sync has fully settled
+    int gh_before = net.CountCommandSent(victim.GetId(), peer.GetId(), protocol::commands::GETHEADERS);
+
+    // Construct synthetic headers with unknown hashPrevBlock
+    uint256 unknown_prev;
+    unknown_prev.SetHex("deadbeef00000000000000000000000000000000000000000000000000000001");
+    uint32_t nBits = chain::GlobalChainParams::Get().GenesisBlock().nBits;
+    uint32_t t0 = static_cast<uint32_t>(net.GetCurrentTime() / 1000);
+
+    std::vector<CBlockHeader> unconnecting_headers;
+    for (int i = 0; i < 3; ++i) {
+        CBlockHeader h;
+        h.nVersion = 1;
+        h.hashPrevBlock = (i == 0) ? unknown_prev : unconnecting_headers.back().GetHash();
+        h.nTime = t0 + i + 1;
+        h.nBits = nBits;
+        h.nNonce = 100 + i;
+        h.hashRandomX.SetHex("0000000000000000000000000000000000000000000000000000000000000000");
+        unconnecting_headers.push_back(h);
+    }
+
+    // Serialize and send via raw message (goes through full P2P HandleHeadersMessage path)
+    message::HeadersMessage headers_msg;
+    headers_msg.headers = unconnecting_headers;
+    auto payload = headers_msg.serialize();
+
+    protocol::MessageHeader hdr(protocol::magic::REGTEST, protocol::commands::HEADERS,
+                                 static_cast<uint32_t>(payload.size()));
+    uint256 hash = Hash(payload);
+    std::memcpy(hdr.checksum.data(), hash.begin(), 4);
+    auto hdr_bytes = message::serialize_header(hdr);
+
+    std::vector<uint8_t> full;
+    full.reserve(hdr_bytes.size() + payload.size());
+    full.insert(full.end(), hdr_bytes.begin(), hdr_bytes.end());
+    full.insert(full.end(), payload.begin(), payload.end());
+
+    net.SendMessage(peer.GetId(), victim.GetId(), full);
+
+    // Process the message
+    for (int i = 0; i < 5; ++i) {
+        net.AdvanceTime(100);
+    }
+
+    // KEY: Unconnecting headers trigger exactly one GETHEADERS to fill the gap
+    int gh_after = net.CountCommandSent(victim.GetId(), peer.GetId(), protocol::commands::GETHEADERS);
+    CHECK(gh_after == gh_before + 1);
+
+    // Tip unchanged — unconnecting headers are not applied to chain
     CHECK(victim.GetTipHeight() == 5);
 }

@@ -1,14 +1,16 @@
 #include "catch_amalgamated.hpp"
 #include "infra/simulated_network.hpp"
 #include "infra/simulated_node.hpp"
+#include "infra/test_access.hpp"
 #include "network/message.hpp"
 #include "util/hash.hpp"
 #include "network/network_manager.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 #include "test_orchestrator.hpp"
 #include <cstring>
 
 using namespace unicity;
+using unicity::test::AddrRelayManagerTestAccess;
 using namespace unicity::test;
 using namespace unicity::protocol;
 
@@ -47,6 +49,7 @@ static std::string key_of(const protocol::NetworkAddress& a) {
 
 TEST_CASE("Multi-node: cross-peer echo suppression and inclusion", "[network][addr][multi]") {
     SimulatedNetwork net(49001);
+    // Simulation starts at realistic time (Jan 2024), so timestamps are valid
     TestOrchestrator orch(&net);
     net.EnableCommandTracking(true);
 
@@ -63,10 +66,10 @@ TEST_CASE("Multi-node: cross-peer echo suppression and inclusion", "[network][ad
         NetworkAddress a; a.services = NODE_NETWORK; a.port = 9590;
         for (int j=0;j<10;++j) a.ip[j]=0; a.ip[10]=0xFF; a.ip[11]=0xFF;
         a.ip[12] = 93; a.ip[13] = 184; a.ip[14] = 216; a.ip[15] = static_cast<uint8_t>(50+i);
-        am.addr_manager_for_test().add(a);
+        AddrRelayManagerTestAccess::GetAddrManager(am).add(a);
     }
 
-    size_t initial_addrman_size = am.addr_manager_for_test().size();
+    size_t initial_addrman_size = AddrRelayManagerTestAccess::GetAddrManager(am).size();
 
     // Connect C first so A can learn X from C
     REQUIRE(C.ConnectTo(A.GetId()));
@@ -82,7 +85,7 @@ TEST_CASE("Multi-node: cross-peer echo suppression and inclusion", "[network][ad
 
     // INCLUSION TEST: Verify X was added to A's addr_manager
     // This is the key test - address learning from ADDR messages
-    size_t new_addrman_size = am.addr_manager_for_test().size();
+    size_t new_addrman_size = AddrRelayManagerTestAccess::GetAddrManager(am).size();
     CHECK(new_addrman_size == initial_addrman_size + 1);
 
     // Connect B; B's GETADDR should be served by A
@@ -153,7 +156,7 @@ TEST_CASE("Multi-node: composition counters under mixed sources", "[network][add
         NetworkAddress a; a.services = NODE_NETWORK; a.port = 9590;
         for (int j=0;j<10;++j) a.ip[j]=0; a.ip[10]=0xFF; a.ip[11]=0xFF;
         a.ip[12] = 93; a.ip[13] = 184; a.ip[14] = 216; a.ip[15] = static_cast<uint8_t>(50+i);
-        am.addr_manager_for_test().add(a);
+        AddrRelayManagerTestAccess::GetAddrManager(am).add(a);
     }
 
     // Connect B and C
@@ -175,7 +178,7 @@ TEST_CASE("Multi-node: composition counters under mixed sources", "[network][add
     net.SendMessage(B.GetId(), A.GetId(), MakeWire(commands::GETADDR, {}));
     for (int i=0;i<6;++i) orch.AdvanceTime(std::chrono::milliseconds(100));
 
-    auto stats = A.GetNetworkManager().discovery_manager_for_test().GetGetAddrDebugStats();
+    auto stats = A.GetDiscoveryManager().GetGetAddrDebugStats();
     // Bitcoin Core parity: GETADDR response comes exclusively from AddrMan
     REQUIRE(stats.last_from_addrman > 0);
 }

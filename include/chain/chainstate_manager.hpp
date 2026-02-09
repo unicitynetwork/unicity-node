@@ -16,7 +16,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -110,15 +109,6 @@ public:
   // Returns active tip plus any fork tips
   std::vector<ChainTip> GetChainTips() const;
 
-  // Add orphan header (network-layer helper) with per-peer limits/DoS checks
-  bool AddOrphanHeader(const CBlockHeader& header, int peer_id);
-
-  // Remove expired orphan headers; returns count evicted
-  size_t EvictOrphanHeaders();
-
-  // Return number of cached orphan headers
-  size_t GetOrphanHeaderCount() const;
-
   // Mark block and descendants invalid (for invalidateblock RPC)
   bool InvalidateBlock(const uint256& hash);
 
@@ -139,22 +129,6 @@ public:
 
   // Return hashes of all chain tip candidates
   std::vector<uint256> DebugCandidateHashes() const;
-
-  // Return orphan count per peer (for DoS diagnostics)
-  std::map<int, int> GetPeerOrphanCounts() const;
-
-  // Orphan metrics for observability (lifetime counters)
-  struct OrphanMetrics {
-    std::atomic<uint64_t> total_added{0};            // Orphans ever added
-    std::atomic<uint64_t> total_resolved{0};         // Orphans that found parent
-    std::atomic<uint64_t> total_evicted_expired{0};  // Evicted due to time expiry
-    std::atomic<uint64_t> total_evicted_oldest{0};   // Evicted as oldest (forced)
-    std::atomic<uint64_t> per_peer_limit_hits{0};    // Times per-peer limit blocked add
-    std::atomic<uint64_t> global_limit_hits{0};      // Times global limit triggered eviction
-  };
-
-  // Return orphan metrics (lifetime counters for observability)
-  const OrphanMetrics& GetOrphanMetrics() const { return m_orphan_metrics; }
 
 protected:
   // Verify PoW commitment (virtual for test mocking)
@@ -185,7 +159,10 @@ private:
 
   // Try to switch chain tip to pindexNewTip. Handles reorg if needed.
   // Assumes validation_mutex_ is held by caller. Appends events on success only.
-  ActivateResult TrySwitchToNewTip(chain::CBlockIndex* pindexNewTip, std::vector<PendingNotification>& events);
+  // is_initial_download: captured at ActivateBestChain() entry, passed to all events.
+  ActivateResult TrySwitchToNewTip(chain::CBlockIndex* pindexNewTip,
+                                   std::vector<PendingNotification>& events,
+                                   bool is_initial_download);
 
   // Validate that a reorg from oldTip to newTip via fork is allowed.
   // Returns SYSTEM_ERROR on fatal conditions (no common ancestor, deep reorg), nullopt if OK.
@@ -201,10 +178,13 @@ private:
   // Returns SYSTEM_ERROR on failure, nullopt on success.
   std::optional<ActivateResult> ConnectFromFork(const chain::CBlockIndex* fork,
                                                 chain::CBlockIndex* newTip,
-                                                std::vector<PendingNotification>& events);
+                                                std::vector<PendingNotification>& events,
+                                                bool is_initial_download);
 
   // Advance tip to pindexNew; appends BlockConnected event
-  bool ConnectTip(chain::CBlockIndex* pindexNew, std::vector<PendingNotification>& events);
+  bool ConnectTip(chain::CBlockIndex* pindexNew,
+                  std::vector<PendingNotification>& events,
+                  bool is_initial_download);
 
   // Revert tip by one block
   bool DisconnectTip();
@@ -218,47 +198,25 @@ private:
   // Check if network has expired; notifies fatal error if so
   bool IsNetworkExpired();
 
-  // Prune stale side-chain headers that can never become active
-  void PruneStaleSideChains();
 
   // Dispatch pending notifications (called after releasing lock)
   void DispatchNotifications(const std::vector<PendingNotification>& events);
 
-  // Process orphan headers waiting for parent (recursive)
-  void ProcessOrphanHeaders(const uint256& parentHash);
-
-  // Try to add orphan header (checks DoS limits, evicts old orphans)
-  bool TryAddOrphanHeader(const CBlockHeader& header, int peer_id);
-
   chain::BlockManager block_manager_;
   ActiveTipCandidates active_tip_candidates_;
   const chain::ChainParams& params_;
-  int suspicious_reorg_depth_;
-
-  // Orphan header storage (headers with missing parent, auto-processed when
-  // parent arrives)
-  struct OrphanHeader {
-    CBlockHeader header;
-    int64_t nTimeReceived;
-    int peer_id;
-  };
-
-  // DoS Protection: limited size, time-based eviction, per-peer limits
-  std::map<uint256, OrphanHeader> m_orphan_headers;
-  std::map<int, int> m_peer_orphan_count;  // peer_id -> orphan count
-  OrphanMetrics m_orphan_metrics;
-
-  // Failed blocks (prevents reprocessing, marks descendants as BLOCK_FAILED_CHILD)
-  std::set<chain::CBlockIndex*> m_failed_blocks;
 
   // Cached IBD status (latches false once complete, atomic for lock-free reads)
   mutable std::atomic<bool> m_cached_finished_ibd{false};
 
   // THREAD SAFETY: Recursive mutex serializes all validation operations
-  // Protected: block_manager_, active_tip_candidates_, m_failed_blocks, m_orphan_headers
+  // Protected: block_manager_, active_tip_candidates_
   // Not protected: m_cached_finished_ibd (atomic), params_ (const)
   // All public methods acquire lock, private methods assume lock held
   mutable std::recursive_mutex validation_mutex_;
+
+  // Track last height at which expiration grace period warning was logged
+  int32_t last_expiration_warning_height_{-1};
 
   // Test-only (regtest): when true, bypass PoW checks in CheckProofOfWork and
   // CheckBlockHeaderWrapper for RPC-driven acceptance. Default false.

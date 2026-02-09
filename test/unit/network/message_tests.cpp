@@ -447,51 +447,6 @@ TEST_CASE("MessageDeserializer - Position Tracking", "[network][message][deseria
     REQUIRE(des.bytes_remaining() == 0);
 }
 
-TEST_CASE("MessageSerializer - Protocol Structures", "[network][message][serializer][unit]") {
-    MessageSerializer ser;
-
-    SECTION("InventoryVector") {
-        InventoryVector inv;
-        inv.type = InventoryType::MSG_BLOCK;
-        std::memset(inv.hash.data(), 0xaa, inv.hash.size());
-
-        ser.write_inventory_vector(inv);
-
-        auto data = ser.data();
-        REQUIRE(data.size() == 36);  // 4 (type) + 32 (hash)
-
-        // Type should be little-endian
-        REQUIRE(data[0] == static_cast<uint8_t>(InventoryType::MSG_BLOCK));
-
-        // Hash should be raw bytes
-        for (size_t i = 4; i < 36; i++) {
-            REQUIRE(data[i] == 0xaa);
-        }
-    }
-}
-
-TEST_CASE("MessageDeserializer - Protocol Structures", "[network][message][deserializer][unit]") {
-    SECTION("InventoryVector") {
-        MessageSerializer ser;
-
-        InventoryVector original;
-        original.type = InventoryType::MSG_BLOCK;
-        for (size_t i = 0; i < 32; i++) {
-            original.hash.data()[i] = static_cast<uint8_t>(i);
-        }
-
-        ser.write_inventory_vector(original);
-
-        MessageDeserializer des(ser.data());
-        auto decoded = des.read_inventory_vector();
-
-        REQUIRE(decoded.type == InventoryType::MSG_BLOCK);
-        for (size_t i = 0; i < 32; i++) {
-            REQUIRE(decoded.hash.data()[i] == static_cast<uint8_t>(i));
-        }
-        REQUIRE_FALSE(des.has_error());
-    }
-}
 
 TEST_CASE("VarInt - Edge Cases", "[network][message][varint][unit]") {
     SECTION("Boundary values") {
@@ -636,7 +591,7 @@ TEST_CASE("VERSION Message - User Agent Length Enforcement", "[network][message]
         s.write_uint64(0);  // services
         std::array<uint8_t, 16> ipv6 = {0};
         s.write_bytes(ipv6.data(), 16);
-        s.write_uint16(8333);  // port
+        s.write_uint16(9590);  // port
 
         // addr_from (26 bytes)
         s.write_uint64(0);  // services
@@ -663,7 +618,7 @@ TEST_CASE("VERSION Message - User Agent Length Enforcement", "[network][message]
         s.write_uint64(0);
         std::array<uint8_t, 16> ipv6 = {0};
         s.write_bytes(ipv6.data(), 16);
-        s.write_uint16(8333);
+        s.write_uint16(9590);
 
         // addr_from
         s.write_uint64(0);
@@ -694,7 +649,7 @@ TEST_CASE("VERSION Message - User Agent Length Enforcement", "[network][message]
         s.write_uint64(0);
         std::array<uint8_t, 16> ipv6 = {0};
         s.write_bytes(ipv6.data(), 16);
-        s.write_uint16(8333);
+        s.write_uint16(9590);
 
         // addr_from
         s.write_uint64(0);
@@ -725,7 +680,7 @@ TEST_CASE("VERSION Message - User Agent Length Enforcement", "[network][message]
         s.write_uint64(0);
         std::array<uint8_t, 16> ipv6 = {0};
         s.write_bytes(ipv6.data(), 16);
-        s.write_uint16(8333);
+        s.write_uint16(9590);
 
         // addr_from
         s.write_uint64(0);
@@ -755,7 +710,7 @@ TEST_CASE("VERSION Message - User Agent Length Enforcement", "[network][message]
         s.write_uint64(0);
         std::array<uint8_t, 16> ipv6 = {0};
         s.write_bytes(ipv6.data(), 16);
-        s.write_uint16(8333);
+        s.write_uint16(9590);
 
         // addr_from
         s.write_uint64(0);
@@ -790,7 +745,7 @@ TEST_CASE("NetworkAddress - Serialization", "[network][message][netaddr][unit]")
         // IPv4 127.0.0.1 mapped to IPv6 (::ffff:127.0.0.1)
         addr.ip = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                    0x00, 0x00, 0xff, 0xff, 0x7f, 0x00, 0x00, 0x01};
-        addr.port = 8333;
+        addr.port = 9590;
 
         ser.write_network_address(addr);
 
@@ -808,8 +763,8 @@ TEST_CASE("NetworkAddress - Serialization", "[network][message][netaddr][unit]")
         }
 
         // Verify port (big-endian!)
-        REQUIRE(data[24] == 0x20);  // 8333 = 0x208d
-        REQUIRE(data[25] == 0x8d);
+        REQUIRE(data[24] == 0x25);  // 9590 = 0x2576
+        REQUIRE(data[25] == 0x76);
     }
 
     SECTION("All-zeros address") {
@@ -916,7 +871,7 @@ TEST_CASE("TimestampedAddress - Round Trip", "[network][message][netaddr][unit]"
     addr.services = 1;
     addr.ip = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                0x00, 0x00, 0xff, 0xff, 0x7f, 0x00, 0x00, 0x01};
-    addr.port = 8333;
+    addr.port = 9590;
     ser.write_network_address(addr);
 
     // Deserialize using read_timestamped_address
@@ -959,7 +914,7 @@ TEST_CASE("AddrMessage - Single Address", "[network][message][addr][unit]") {
     ts_addr.address.services = 1;
     ts_addr.address.ip = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                           0x00, 0x00, 0xff, 0xff, 0x7f, 0x00, 0x00, 0x01};
-    ts_addr.address.port = 8333;
+    ts_addr.address.port = 9590;
 
     msg.addresses.push_back(ts_addr);
 

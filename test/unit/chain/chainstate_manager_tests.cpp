@@ -3,17 +3,16 @@
 //
 // Tests are organized into sections:
 // 1. Basic Operations - Construction, initialization, header acceptance
-// 2. Orphan Management - Orphan caching, processing, eviction
-// 3. Chain Activation - Extending chain, reorgs, best chain selection
-// 4. Persistence - Save/Load, round-trip, hardening
-// 5. Query API - LookupBlockIndex, GetLocator, IsOnActiveChain, etc.
-// 6. IBD Detection - IsInitialBlockDownload latch behavior
-// 7. InvalidateBlock - Manual block invalidation
-// 8. Contextual Validation - Difficulty, timestamps, network expiration
-// 9. Security - PoW skip guard, divergent chain detection
-// 10. Edge Cases - Thread safety, error conditions
-// 11. ActiveTipCandidates - Candidate hash set operations
-// 12. GetChainTips - Chain tip enumeration and status
+// 2. Chain Activation - Extending chain, reorgs, best chain selection
+// 3. Persistence - Save/Load, round-trip, hardening
+// 4. Query API - LookupBlockIndex, GetLocator, IsOnActiveChain, etc.
+// 5. IBD Detection - IsInitialBlockDownload latch behavior
+// 6. InvalidateBlock - Manual block invalidation
+// 7. Contextual Validation - Difficulty, timestamps, network expiration
+// 8. Security - PoW skip guard, divergent chain detection
+// 9. Edge Cases - Thread safety, error conditions
+// 10. ActiveTipCandidates - Candidate hash set operations
+// 11. GetChainTips - Chain tip enumeration and status
 
 #include "catch_amalgamated.hpp"
 #include "chain/chainstate_manager.hpp"
@@ -323,133 +322,7 @@ TEST_CASE("ChainstateManager - ProcessNewBlockHeader", "[chain][chainstate_manag
 }
 
 // =============================================================================
-// Section 2: Orphan Management
-// =============================================================================
-
-TEST_CASE("ChainstateManager - Orphan Headers", "[chain][chainstate_manager][unit]") {
-    auto params = ChainParams::CreateRegTest();
-    TestChainstateManager csm(*params);
-
-    CBlockHeader genesis = CreateTestHeader();
-    csm.Initialize(genesis);
-
-    SECTION("Orphan header cached when parent missing") {
-        uint256 missing_parent;
-        missing_parent.SetNull();
-        memset((void*)missing_parent.data(), 0xaa, 32);
-
-        CBlockHeader block2 = CreateChildHeader(missing_parent, 1234567900);
-        ValidationState state;
-
-        CBlockIndex* pindex = csm.AcceptBlockHeader(block2, state);
-        REQUIRE(pindex == nullptr);
-        REQUIRE_FALSE(state.IsValid());
-        REQUIRE(state.GetRejectReason() == "prev-blk-not-found");
-        REQUIRE(csm.AddOrphanHeader(block2, 1));
-        REQUIRE(csm.GetOrphanHeaderCount() == 1);
-    }
-
-    SECTION("Orphan processed when parent arrives") {
-        CBlockHeader block1 = CreateChildHeader(genesis.GetHash(), 1234567900);
-        CBlockHeader block2 = CreateChildHeader(block1.GetHash(), 1234567910);
-
-        ValidationState state1;
-        REQUIRE(csm.AddOrphanHeader(block2, 1));
-        REQUIRE(csm.GetOrphanHeaderCount() == 1);
-
-        ValidationState state2;
-        CBlockIndex* pindex1 = csm.AcceptBlockHeader(block1, state2);
-        REQUIRE(pindex1 != nullptr);
-
-        REQUIRE(csm.GetOrphanHeaderCount() == 0);
-        REQUIRE(csm.GetBlockCount() == 3);
-    }
-
-    SECTION("Per-peer orphan limit") {
-        for (int i = 0; i < 51; i++) {
-            uint256 missing_parent;
-            missing_parent.SetNull();
-            memset((void*)missing_parent.data(), 0xaa + i, 32);
-
-            CBlockHeader orphan = CreateChildHeader(missing_parent, 1234567900 + i);
-            ValidationState state;
-            (void)csm.AddOrphanHeader(orphan, 1);
-        }
-
-        REQUIRE(csm.GetOrphanHeaderCount() <= 50);
-    }
-
-    SECTION("Multiple orphans from different peers") {
-        uint256 missing1, missing2;
-        missing1.SetNull();
-        memset((void*)missing1.data(), 0xaa, 32);
-        missing2.SetNull();
-        memset((void*)missing2.data(), 0xbb, 32);
-
-        CBlockHeader orphan1 = CreateChildHeader(missing1, 1000);
-        CBlockHeader orphan2 = CreateChildHeader(missing2, 2000);
-
-        ValidationState state1, state2;
-        csm.AcceptBlockHeader(orphan1, state1);
-        REQUIRE(csm.AddOrphanHeader(orphan1, 1));
-        csm.AcceptBlockHeader(orphan2, state2);
-        REQUIRE(csm.AddOrphanHeader(orphan2, 2));
-
-        REQUIRE(csm.GetOrphanHeaderCount() == 2);
-    }
-}
-
-// Custom params with tiny orphan expire time for eviction test
-class OrphanExpireParams : public ChainParams {
-public:
-    OrphanExpireParams() {
-        chainType = ChainType::REGTEST;
-        consensus.powLimit = uint256S("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-        consensus.nPowTargetSpacing = 2*60;
-        consensus.nRandomXEpochDuration = 365ULL * 24 * 60 * 60 * 100;
-        consensus.nASERTHalfLife = 60*60;
-        consensus.nASERTAnchorHeight = 1;
-        consensus.nMinimumChainWork = uint256S("0x0");
-        consensus.nNetworkExpirationInterval = 0;
-        consensus.nNetworkExpirationGracePeriod = 0;
-        consensus.nOrphanHeaderExpireTime = 1;
-        consensus.nSuspiciousReorgDepth = 100;
-        consensus.nAntiDosWorkBufferBlocks = 144;
-        nDefaultPort = 29590;
-        genesis = CreateGenesisBlock(1296688602, 2, 0x207fffff, 1);
-        consensus.hashGenesisBlock = genesis.GetHash();
-    }
-};
-
-TEST_CASE("Orphan headers time-based eviction", "[chain][chainstate_manager][orphan][dos]") {
-    auto params = std::make_unique<OrphanExpireParams>();
-    TestChainstateManager csm(*params);
-
-    REQUIRE(csm.Initialize(params->GenesisBlock()));
-
-    uint256 unknown;
-    unknown.SetNull();
-    memset((void*)unknown.data(), 0xaa, 32);
-    CBlockHeader orphan = MakeChild(nullptr, params->GenesisBlock().nTime + 100);
-    orphan.hashPrevBlock = unknown;
-
-    ValidationState st;
-    CBlockIndex* r = csm.AcceptBlockHeader(orphan, st);
-    REQUIRE(r == nullptr);
-    REQUIRE(csm.AddOrphanHeader(orphan, 1));
-    REQUIRE(csm.GetOrphanHeaderCount() == 1);
-
-    int64_t base = util::GetTime();
-    util::SetMockTime(base + params->GetConsensus().nOrphanHeaderExpireTime + 2);
-
-    size_t evicted = csm.EvictOrphanHeaders();
-    util::SetMockTime(0);
-    REQUIRE(evicted >= 1);
-    REQUIRE(csm.GetOrphanHeaderCount() == 0);
-}
-
-// =============================================================================
-// Section 3: Chain Activation
+// Section 2: Chain Activation
 // =============================================================================
 
 TEST_CASE("ChainstateManager - Chain Activation", "[chain][chainstate_manager][unit]") {
@@ -970,7 +843,7 @@ TEST_CASE("ChainstateManager - IsOnActiveChain", "[chain][chainstate_manager][un
         REQUIRE(csm.IsOnActiveChain(pindex));
     }
 
-    SECTION("Orphaned block not on active chain") {
+    SECTION("Stale block not on active chain") {
         CBlockHeader blockA1 = CreateChildHeader(genesis.GetHash(), 1000);
         ValidationState stateA1;
         csm.ProcessNewBlockHeader(blockA1, stateA1);
@@ -1377,9 +1250,7 @@ public:
         consensus.nMinimumChainWork = uint256S("0x0");
         consensus.nNetworkExpirationInterval = 3;
         consensus.nNetworkExpirationGracePeriod = 1;
-        consensus.nOrphanHeaderExpireTime = 12 * 60;
         consensus.nSuspiciousReorgDepth = 100;
-        consensus.nAntiDosWorkBufferBlocks = 144;
         nDefaultPort = 29590;
         genesis = CreateGenesisBlock(1296688602, 2, 0x207fffff, 1);
         consensus.hashGenesisBlock = genesis.GetHash();
@@ -1402,8 +1273,9 @@ TEST_CASE("Network expiration triggers reject + notification", "[chain][chainsta
         user_msg = user_message;
     });
 
+    // Build to height 1 (before grace period)
     const CBlockIndex* tip = csm.GetTip();
-    for (int i = 0; i < 2; i++) {
+    {
         uint32_t bits = consensus::GetNextWorkRequired(tip, *params);
         CBlockHeader h = MakeChild(tip, tip->nTime + 120, bits);
         ValidationState s;
@@ -1413,8 +1285,24 @@ TEST_CASE("Network expiration triggers reject + notification", "[chain][chainsta
         REQUIRE(csm.ActivateBestChain());
         tip = csm.GetTip();
     }
-    REQUIRE(tip->nHeight == 2);
+    REQUIRE(tip->nHeight == 1);
+    REQUIRE_FALSE(got_notify);  // Before grace period — no fatal
 
+    // Build to height 2 (grace period: expiration=3, grace=1, so warning at height 2)
+    {
+        uint32_t bits = consensus::GetNextWorkRequired(tip, *params);
+        CBlockHeader h = MakeChild(tip, tip->nTime + 120, bits);
+        ValidationState s;
+        auto* pi = csm.AcceptBlockHeader(h, s);
+        REQUIRE(pi != nullptr);
+        csm.TryAddBlockIndexCandidate(pi);
+        REQUIRE(csm.ActivateBestChain());  // Grace period: chain continues
+        tip = csm.GetTip();
+    }
+    REQUIRE(tip->nHeight == 2);
+    REQUIRE_FALSE(got_notify);  // Grace period warning only — no fatal notification
+
+    // Build to height 3 (expiration)
     uint32_t bits = consensus::GetNextWorkRequired(tip, *params);
     CBlockHeader expH = MakeChild(tip, tip->nTime + 120, bits);
     ValidationState s;

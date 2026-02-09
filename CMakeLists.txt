@@ -35,6 +35,11 @@ if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
     set(CMAKE_BUILD_TYPE "Release")
 endif()
 
+# Keep assert() active in all build types (matches Bitcoin Core).
+# Asserts guard consensus-critical invariants like genesis hash checks.
+string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+
 option(BUILD_TESTING "Build tests" ON)
 
 # =============================================================================
@@ -228,12 +233,14 @@ add_library(util STATIC
     src/util/fs_lock.cpp
     src/util/logging.cpp
     src/util/rate_limiter.cpp
+    src/util/siphash.cpp
     src/util/time.cpp
     src/util/sha256.cpp
     src/util/uint.cpp
     src/util/arith_uint256.cpp
     src/util/netaddress.cpp
     src/util/string_parsing.cpp
+    src/util/ntp.cpp
 )
 
 target_include_directories(util PUBLIC
@@ -285,13 +292,12 @@ add_library(network STATIC
     src/network/addr_manager.cpp
     src/network/ban_manager.cpp
     src/network/misbehavior_manager.cpp
-    src/network/peer_lifecycle_manager.cpp
+    src/network/connection_manager.cpp
     src/network/eviction_manager.cpp
     src/network/anchor_manager.cpp
     src/network/header_sync_manager.cpp
-    src/network/block_relay_manager.cpp
     src/network/message_dispatcher.cpp
-    src/network/peer_discovery_manager.cpp
+    src/network/addr_relay_manager.cpp
     src/network/network_manager.cpp
     src/network/real_transport.cpp
     src/network/nat_manager.cpp

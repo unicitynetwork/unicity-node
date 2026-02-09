@@ -23,7 +23,7 @@ TEST_CASE("AnchorManager - JSON file format validation", "[network][anchor]") {
         root["count"] = 2;
 
         json anchor1;
-        anchor1["port"] = 8333;
+        anchor1["port"] = 9590;
         anchor1["services"] = 1;
         anchor1["ip"] = json::array();
         for (int i = 0; i < 16; i++) {
@@ -54,7 +54,7 @@ TEST_CASE("AnchorManager - JSON file format validation", "[network][anchor]") {
         REQUIRE(loaded["anchors"].is_array());
         REQUIRE(loaded["anchors"].size() == 2);
 
-        CHECK(loaded["anchors"][0]["port"] == 8333);
+        CHECK(loaded["anchors"][0]["port"] == 9590);
         CHECK(loaded["anchors"][0]["services"] == 1);
         CHECK(loaded["anchors"][0]["ip"].is_array());
         CHECK(loaded["anchors"][0]["ip"].size() == 16);
@@ -70,7 +70,7 @@ TEST_CASE("AnchorManager - JSON file format validation", "[network][anchor]") {
 TEST_CASE("AnchorManager - IPv4-mapped IPv6 format", "[network][anchor]") {
     SECTION("IPv4 192.168.1.1 as IPv4-mapped") {
         json anchor;
-        anchor["port"] = 8333;
+        anchor["port"] = 9590;
         anchor["services"] = 1;
         anchor["ip"] = json::array();
 
@@ -197,7 +197,7 @@ TEST_CASE("AnchorManager - Maximum anchors limit", "[network][anchor]") {
         root["count"] = 2;
 
         json anchor1;
-        anchor1["port"] = 8333;
+        anchor1["port"] = 9590;
         anchor1["services"] = 1;
         anchor1["ip"] = json::array();
         for (int i = 0; i < 16; i++) anchor1["ip"].push_back(0);
@@ -222,7 +222,7 @@ TEST_CASE("AnchorManager - Maximum anchors limit", "[network][anchor]") {
         json anchors_arr = json::array();
         for (int i = 0; i < 5; i++) {
             json anchor;
-            anchor["port"] = 8333 + i;
+            anchor["port"] = 9590 + i;
             anchor["services"] = 1;
             anchor["ip"] = json::array();
             for (int j = 0; j < 16; j++) anchor["ip"].push_back(i);
@@ -250,7 +250,7 @@ TEST_CASE("AnchorManager - Empty anchors file", "[network][anchor]") {
 TEST_CASE("AnchorManager - Services field values", "[network][anchor]") {
     SECTION("Various service flags") {
         json anchor;
-        anchor["port"] = 8333;
+        anchor["port"] = 9590;
         anchor["ip"] = json::array();
         for (int i = 0; i < 16; i++) anchor["ip"].push_back(0);
 

@@ -5,12 +5,11 @@
 // 1. ValidationState - State tracking for validation
 // 2. Header Continuity - CheckHeadersAreContinuous
 // 3. Work Calculation - CalculateHeadersWork
-// 4. DoS Protection - GetAntiDoSWorkThreshold
-// 5. Time Handling - GetAdjustedTime, MedianTimePast
-// 6. Block Header Validation - CheckBlockHeader
-// 7. Contextual Validation - ContextualCheckBlockHeader
-// 8. Network Expiration - Timebomb checks
-// 9. PoW Validation - CheckHeadersPoW
+// 4. Time Handling - MedianTimePast
+// 5. Block Header Validation - CheckBlockHeader
+// 6. Contextual Validation - ContextualCheckBlockHeader
+// 7. Network Expiration - Timebomb checks
+// 8. PoW Validation - CheckHeadersPoW
 
 #include "catch_amalgamated.hpp"
 #include "chain/validation.hpp"
@@ -268,88 +267,8 @@ TEST_CASE("CalculateHeadersWork - work calculation", "[validation]") {
 }
 
 // =============================================================================
-// Section 4: DoS Protection
+// Section 4: Time Handling
 // =============================================================================
-
-TEST_CASE("GetAntiDoSWorkThreshold - DoS protection", "[validation]") {
-    auto params = ChainParams::CreateRegTest();
-
-    SECTION("Returns minimum chain work with null tip") {
-        arith_uint256 threshold = GetAntiDoSWorkThreshold(nullptr, *params);
-
-        arith_uint256 min_work = UintToArith256(params->GetConsensus().nMinimumChainWork);
-        REQUIRE(threshold == min_work);
-    }
-
-    SECTION("Returns value with valid tip") {
-        CBlockIndex tip;
-        tip.nBits = 0x207fffff;
-        tip.nHeight = 200;
-        tip.nChainWork = arith_uint256(10000);
-
-        arith_uint256 threshold = GetAntiDoSWorkThreshold(&tip, *params);
-
-        REQUIRE(threshold > 0);
-        REQUIRE(threshold <= tip.nChainWork);
-    }
-
-    SECTION("Tip with zero chainwork returns minimum") {
-        CBlockIndex tip;
-        tip.nHeight = 100;
-        tip.nChainWork = arith_uint256(0);
-
-        arith_uint256 threshold = GetAntiDoSWorkThreshold(&tip, *params);
-        arith_uint256 min_work = UintToArith256(params->GetConsensus().nMinimumChainWork);
-        REQUIRE(threshold == min_work);
-    }
-
-    SECTION("High chainwork returns work minus buffer") {
-        uint64_t buffer_blocks = params->GetConsensus().nAntiDosWorkBufferBlocks;
-
-        CBlockIndex tip;
-        tip.nHeight = 1000;
-        tip.nBits = 0x207fffff;
-
-        arith_uint256 block_proof = GetBlockProof(tip);
-        arith_uint256 high_work = block_proof * (buffer_blocks + 1000);
-        tip.nChainWork = high_work;
-
-        arith_uint256 threshold = GetAntiDoSWorkThreshold(&tip, *params);
-
-        REQUIRE(threshold < high_work);
-
-        arith_uint256 expected = high_work - (block_proof * buffer_blocks);
-        REQUIRE(threshold >= expected);
-    }
-}
-
-// =============================================================================
-// Section 5: Time Handling
-// =============================================================================
-
-TEST_CASE("GetAdjustedTime - time source", "[validation]") {
-    SECTION("Returns non-zero timestamp") {
-        int64_t adjusted_time = GetAdjustedTime();
-        REQUIRE(adjusted_time > 0);
-    }
-
-    SECTION("Returns reasonable current time") {
-        int64_t adjusted_time = GetAdjustedTime();
-
-        int64_t year_2024 = 1704067200;
-        int64_t year_2030 = 1893456000;
-
-        REQUIRE(adjusted_time > year_2024);
-        REQUIRE(adjusted_time < year_2030);
-    }
-
-    SECTION("Is consistent across multiple calls") {
-        int64_t time1 = GetAdjustedTime();
-        int64_t time2 = GetAdjustedTime();
-
-        REQUIRE(std::abs(time2 - time1) <= 1);
-    }
-}
 
 TEST_CASE("CBlockIndex::GetMedianTimePast - median time calculation", "[validation]") {
     SECTION("Single block returns its own time") {
@@ -607,21 +526,10 @@ TEST_CASE("Validation constants", "[validation]") {
     SECTION("MAX_HEADERS_SIZE is reasonable") {
         REQUIRE(protocol::MAX_HEADERS_SIZE == 80000);
     }
-
-    SECTION("nAntiDosWorkBufferBlocks is chain-specific") {
-        auto mainnet = chain::ChainParams::CreateMainNet();
-        REQUIRE(mainnet->GetConsensus().nAntiDosWorkBufferBlocks == 6);
-
-        auto testnet = chain::ChainParams::CreateTestNet();
-        REQUIRE(testnet->GetConsensus().nAntiDosWorkBufferBlocks == 144);
-
-        auto regtest = chain::ChainParams::CreateRegTest();
-        REQUIRE(regtest->GetConsensus().nAntiDosWorkBufferBlocks == 144);
-    }
 }
 
 // =============================================================================
-// Section 9: PoW Validation
+// Section 8: PoW Validation
 // =============================================================================
 
 TEST_CASE("CheckHeadersPoW - Direct validation function tests", "[validation][pow]") {

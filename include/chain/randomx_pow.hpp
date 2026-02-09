@@ -15,12 +15,6 @@
 namespace unicity {
 namespace crypto {
 
-// Forward declarations
-class ChainParams;
-namespace chain {
-struct ConsensusParams;
-}
-
 // RandomX Proof-of-Work Implementation
 
 // POW verification modes

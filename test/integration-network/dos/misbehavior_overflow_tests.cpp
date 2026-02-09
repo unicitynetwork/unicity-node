@@ -30,29 +30,19 @@ TEST_CASE("DoS: Misbehavior system - instant discourage design", "[dos][network]
     }
 }
 
-TEST_CASE("DoS: Misbehavior system - unconnecting headers threshold", "[dos][network][misbehavior][unit]") {
-    SECTION("Unconnecting headers is the only threshold-based check") {
-        // The unconnecting headers counter is the only case where we don't instantly discourage.
-        // We allow up to MAX_UNCONNECTING_HEADERS (10) small unconnecting batches
-        // before discouraging, to allow for honest reorg scenarios.
-
-        PeerMisbehaviorData data;
-        CHECK(data.num_unconnecting_headers_msgs == 0);  // Default
-        CHECK(data.unconnecting_penalized == false);     // Not yet penalized
-
-        // Simulate threshold behavior
-        for (int i = 0; i < MAX_UNCONNECTING_HEADERS; ++i) {
-            data.num_unconnecting_headers_msgs++;
-        }
-        CHECK(data.num_unconnecting_headers_msgs == MAX_UNCONNECTING_HEADERS);
-        // At threshold, next increment would trigger penalty (done by caller)
-    }
-}
+// NOTE: Removed "unconnecting headers threshold" test case.
+// Bitcoin Core (March 2024+) no longer penalizes unconnecting headers - they are just ignored.
+// The getheaders throttling (2-minute ignore window) provides sufficient DoS protection.
 
 TEST_CASE("DoS: Misbehavior system - NoBan permission", "[dos][network][misbehavior][unit]") {
     SECTION("NoBan peers are not disconnected") {
         // Peers with NetPermissionFlags::NoBan are tracked for misbehavior
         // (should_discourage is set to true) but are NOT disconnected.
+        //
+        // This is a unit test for data structures. For integration tests that
+        // verify NoBan peers stay connected during actual attacks, see:
+        // - test/integration-network/permission_tests.cpp: "NoBan peer survives invalid PoW"
+        // - test/integration-network/permission_tests.cpp: "NoBan peer survives orphan spam"
 
         PeerMisbehaviorData data;
         data.permissions = NetPermissionFlags::NoBan;
@@ -85,20 +75,17 @@ TEST_CASE("DoS: Misbehavior system - duplicate header tracking", "[dos][network]
 }
 
 TEST_CASE("DoS: Misbehavior system - latching behavior", "[dos][network][misbehavior][unit]") {
-    SECTION("Unconnecting penalty is latched") {
-        // Once a peer exceeds MAX_UNCONNECTING_HEADERS, the unconnecting_penalized
-        // flag is set to true. This prevents redundant Misbehaving() calls.
+    SECTION("should_discourage is latched") {
+        // Once should_discourage is set to true, it stays true.
+        // This is the instant-discourage model (Bitcoin Core March 2024+).
 
         PeerMisbehaviorData data;
-        CHECK(data.unconnecting_penalized == false);
+        CHECK(data.should_discourage == false);  // Default
 
-        // After penalty is applied, flag latches
-        data.unconnecting_penalized = true;
-        CHECK(data.unconnecting_penalized == true);
-
-        // should_discourage also latches
+        // After misbehavior is detected, flag latches
         data.should_discourage = true;
         CHECK(data.should_discourage == true);
+
         // Setting again has no effect (already true)
         data.should_discourage = true;
         CHECK(data.should_discourage == true);

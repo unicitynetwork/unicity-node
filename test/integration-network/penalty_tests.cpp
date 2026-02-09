@@ -6,6 +6,7 @@
 #include "infra/node_simulator.hpp"
 #include "test_orchestrator.hpp"
 #include "util/hash.hpp"
+#include "chain/chainparams.hpp"
 
 using namespace unicity;
 using namespace unicity::test;
@@ -111,7 +112,7 @@ TEST_CASE("DuplicateHeaders - Resending same valid header does not penalize or d
 
     // Send first time
     network.SendMessage(attacker.GetId(), victim.GetId(), full);
-    for (int i = 0; i < 5; ++i) network.AdvanceTime(network.GetCurrentTime() + 200);
+    for (int i = 0; i < 5; ++i) network.AdvanceTime(200);
 
     // Capture peer_id and verify not misbehaving
     auto& pm = victim.GetNetworkManager().peer_manager();
@@ -122,7 +123,7 @@ TEST_CASE("DuplicateHeaders - Resending same valid header does not penalize or d
 
     // Re-send the exact same header
     network.SendMessage(attacker.GetId(), victim.GetId(), full);
-    for (int i = 0; i < 5; ++i) network.AdvanceTime(network.GetCurrentTime() + 200);
+    for (int i = 0; i < 5; ++i) network.AdvanceTime(200);
 
     // Assert still connected and not misbehaving (duplicate valid header is harmless)
     CHECK(victim.GetPeerCount() == 1);
@@ -130,3 +131,102 @@ TEST_CASE("DuplicateHeaders - Resending same valid header does not penalize or d
     CHECK_FALSE(misbehaving_after);
     CHECK_FALSE(victim.IsBanned(attacker.GetAddress()));
 }
+
+// Custom ChainParams with achievable nMinimumChainWork for testing already_validated_work
+class AlreadyValidatedWorkParams : public chain::ChainParams {
+public:
+    AlreadyValidatedWorkParams() {
+        chainType = chain::ChainType::REGTEST;
+        consensus.powLimit = uint256S("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        consensus.nPowTargetSpacing = 2 * 60;
+        consensus.nRandomXEpochDuration = 365ULL * 24 * 60 * 60 * 100;
+        consensus.nASERTHalfLife = 60 * 60;
+        consensus.nASERTAnchorHeight = 1;
+        // Set minimum work equivalent to ~5 blocks at easiest difficulty
+        // This is achievable, so we can build a chain that exceeds it,
+        // then test that re-requesting early headers doesn't trigger penalty
+        consensus.nMinimumChainWork = uint256S("0x0000000000000000000000000000000000000000000000000000000000000010");
+        consensus.nNetworkExpirationInterval = 0;
+        consensus.nNetworkExpirationGracePeriod = 0;
+        consensus.nSuspiciousReorgDepth = 100;
+        nDefaultPort = 29591;
+        genesis = chain::CreateGenesisBlock(1296688602, 2, 0x207fffff, 1);
+        consensus.hashGenesisBlock = genesis.GetHash();
+    }
+};
+
+TEST_CASE("AlreadyValidatedWork - Re-requesting headers on active chain skips low-work check", "[misbehaviortest][network][already_validated_work]") {
+    // This test verifies the "already_validated_work" logic (Bitcoin Core parity).
+    //
+    // Setup:
+    // - Use custom ChainParams with non-zero nMinimumChainWork
+    // - Build victim's chain to height 20 (exceeds minimum work)
+    // - Re-send headers from height 1-2 (which ALONE would fail low-work check)
+    // - Because they END on active chain, already_validated_work=true
+    // - Low-work check is SKIPPED, peer is NOT penalized
+    //
+    // Without already_validated_work, this would disconnect the peer.
+
+    SimulatedNetwork network(12351); SetZeroLatency(network);
+
+    // Create victim with custom params that have non-zero nMinimumChainWork
+    auto params = std::make_unique<AlreadyValidatedWorkParams>();
+    SimulatedNode victim(100, &network, params.get());
+    victim.SetBypassPOWValidation(true);
+
+    // Build victim's chain to height 20 (well above minimum work)
+    std::vector<uint256> block_hashes;
+    for (int i = 0; i < 20; ++i) {
+        block_hashes.push_back(victim.MineBlock());
+    }
+    REQUIRE(victim.GetTipHeight() == 20);
+
+    // Connect attacker -> victim
+    NodeSimulator attacker(101, &network);
+    attacker.SetBypassPOWValidation(true);
+    attacker.ConnectTo(100);
+    TestOrchestrator orch(&network);
+    REQUIRE(orch.WaitForConnection(victim, attacker));
+
+    // Get headers from early in victim's chain (blocks 1-2)
+    // These headers ALONE have work < nMinimumChainWork
+    // But they END on active chain, so already_validated_work=true
+    std::vector<CBlockHeader> headers_to_resend;
+    for (int i = 0; i < 2; ++i) {
+        const chain::CBlockIndex* pindex = victim.GetChainstate().LookupBlockIndex(block_hashes[i]);
+        REQUIRE(pindex != nullptr);
+        headers_to_resend.push_back(pindex->GetBlockHeader());
+    }
+
+    // Manually construct and send HEADERS message
+    message::HeadersMessage msg;
+    msg.headers = headers_to_resend;
+    auto payload = msg.serialize();
+    protocol::MessageHeader mhdr(protocol::magic::REGTEST, protocol::commands::HEADERS, static_cast<uint32_t>(payload.size()));
+    uint256 hash = Hash(payload);
+    std::memcpy(mhdr.checksum.data(), hash.begin(), 4);
+    auto mhdr_bytes = message::serialize_header(mhdr);
+    std::vector<uint8_t> full;
+    full.reserve(mhdr_bytes.size() + payload.size());
+    full.insert(full.end(), mhdr_bytes.begin(), mhdr_bytes.end());
+    full.insert(full.end(), payload.begin(), payload.end());
+
+    // Record peer_id before sending
+    auto& pm = victim.GetNetworkManager().peer_manager();
+    int peer_id = orch.GetPeerId(victim, attacker);
+    REQUIRE(peer_id >= 0);
+    CHECK_FALSE(pm.IsMisbehaving(peer_id));
+
+    // Send headers that are already on active chain
+    INFO("Sending 2 headers from height 1-2 (low work, but on active chain)");
+    network.SendMessage(attacker.GetId(), victim.GetId(), full);
+    for (int i = 0; i < 20; ++i) network.AdvanceTime(100);
+
+    // Verify: peer should NOT be penalized
+    // Because headers end on active chain, already_validated_work=true,
+    // and the low-work check is skipped
+    CHECK(victim.GetPeerCount() == 1);
+    CHECK_FALSE(pm.IsMisbehaving(peer_id));
+    CHECK_FALSE(victim.IsBanned(attacker.GetAddress()));
+}
+

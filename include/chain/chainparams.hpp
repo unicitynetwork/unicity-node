@@ -52,14 +52,8 @@ struct ConsensusParams {
   int32_t nNetworkExpirationInterval;     // Block height where network expires
   int32_t nNetworkExpirationGracePeriod;  // Grace period for warnings (in blocks)
 
-  // Orphan header management
-  int64_t nOrphanHeaderExpireTime;  // Time in seconds before orphan headers expire
-
   // Reorg protection
   int32_t nSuspiciousReorgDepth;  // Reorg depth that triggers warnings/halts
-
-  // DoS protection
-  int32_t nAntiDosWorkBufferBlocks;  // Work buffer for accepting chains behind tip
 };
 
 /**

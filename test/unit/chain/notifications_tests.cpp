@@ -612,3 +612,142 @@ TEST_CASE("Notifications - BlockConnected with empty callbacks", "[notifications
     Notifications().NotifyBlockConnected(event);
 }
 
+// =============================================================================
+// Section: IBD State Consistency
+// =============================================================================
+
+TEST_CASE("Notifications - IBD state consistent across batch", "[notifications][ibd]") {
+    // Test that all blocks connected in a single ActivateBestChain() batch
+    // receive the same is_initial_download value, even if IBD would end mid-batch.
+    //
+    // This tests the fix for an edge case where:
+    // - Node is in IBD (tip is stale)
+    // - Multiple blocks are connected in one batch
+    // - Mid-batch, the tip becomes non-stale (IBD would end)
+    //
+    // Without the fix: blocks before IBD ends get is_initial_download=true,
+    //                  blocks after get is_initial_download=false
+    // With the fix: ALL blocks get the same value (captured at batch start)
+
+    // IBD_STALE_TIP_SECONDS = 5 days = 432000 seconds
+    constexpr int64_t IBD_STALE_TIP_SECONDS = 5 * 24 * 3600;
+
+    auto params = ChainParams::CreateRegTest();
+    TestChainstateManager chainstate(*params);
+    chainstate.Initialize(params->GenesisBlock());
+
+    const auto& genesis = params->GenesisBlock();
+    validation::ValidationState state;
+
+    // Set mock time to a known value
+    const int64_t mock_time = 1700000000;  // Some arbitrary timestamp
+    util::SetMockTime(mock_time);
+
+    // Track all BlockConnectedEvent notifications
+    std::vector<bool> ibd_values;
+    std::vector<int> heights;
+
+    auto sub = Notifications().SubscribeBlockConnected(
+        [&](const BlockConnectedEvent& event) {
+            ibd_values.push_back(event.is_initial_download);
+            heights.push_back(event.height);
+        });
+
+    // Phase 1: Build initial chain with STALE timestamps (IBD=true)
+    // These blocks have timestamps older than mock_time - 5 days
+    const uint32_t stale_time = static_cast<uint32_t>(mock_time - IBD_STALE_TIP_SECONDS - 3600);  // 5 days + 1 hour ago
+
+    auto staleChain = BuildChain(genesis.GetHash(), stale_time, 3);
+    chain::CBlockIndex* staleTip = nullptr;
+
+    for (const auto& header : staleChain) {
+        staleTip = chainstate.AcceptBlockHeader(header, state);
+        chainstate.TryAddBlockIndexCandidate(staleTip);
+        REQUIRE(staleTip != nullptr);
+    }
+
+    chainstate.ActivateBestChain();
+    REQUIRE(chainstate.GetTip() == staleTip);
+    REQUIRE(chainstate.GetTip()->nHeight == 3);
+
+    // Verify we're in IBD (tip is stale)
+    REQUIRE(chainstate.IsInitialBlockDownload() == true);
+
+    // Clear recorded events from phase 1
+    ibd_values.clear();
+    heights.clear();
+
+    // Phase 2: Build continuation chain where IBD would end mid-batch
+    // - Blocks 4-6: stale timestamps (IBD would still be true if checked per-block)
+    // - Blocks 7-10: recent timestamps (IBD would become false if checked per-block)
+    //
+    // Key: We add ALL blocks before calling ActivateBestChain(), so they're
+    // connected in a single batch. The fix captures IBD state once at batch start.
+
+    std::vector<CBlockHeader> batchChain;
+    uint256 prev_hash = staleTip->GetBlockHash();
+
+    // Blocks 4-6: still stale (IBD=true if checked here)
+    for (int i = 0; i < 3; i++) {
+        auto header = CreateTestHeader(prev_hash, stale_time + (i + 1) * 120);
+        batchChain.push_back(header);
+        prev_hash = header.GetHash();
+    }
+
+    // Blocks 7-10: recent timestamps (IBD=false if checked here)
+    // These are within 5 days of mock_time
+    const uint32_t recent_time = static_cast<uint32_t>(mock_time - 3600);  // 1 hour ago
+
+    for (int i = 0; i < 4; i++) {
+        auto header = CreateTestHeader(prev_hash, recent_time + i * 120);
+        batchChain.push_back(header);
+        prev_hash = header.GetHash();
+    }
+
+    // Add ALL headers before activating (to form a single batch)
+    chain::CBlockIndex* batchTip = nullptr;
+    for (const auto& header : batchChain) {
+        batchTip = chainstate.AcceptBlockHeader(header, state);
+        chainstate.TryAddBlockIndexCandidate(batchTip);
+        REQUIRE(batchTip != nullptr);
+    }
+
+    // At this point: tip is still block 3 (stale), IBD=true
+    // The batch will connect blocks 4-10
+    REQUIRE(chainstate.IsInitialBlockDownload() == true);
+
+    // Connect all blocks in ONE ActivateBestChain() call
+    chainstate.ActivateBestChain();
+
+    // Verify final state
+    REQUIRE(chainstate.GetTip() == batchTip);
+    REQUIRE(chainstate.GetTip()->nHeight == 10);
+
+    // After batch: tip is block 10 (recent timestamp), IBD=false
+    REQUIRE(chainstate.IsInitialBlockDownload() == false);
+
+    // THE CRITICAL CHECK: All events should have the SAME is_initial_download value
+    // (captured at batch start when tip was block 3, which was stale → IBD=true)
+    REQUIRE(ibd_values.size() == 7);  // Blocks 4-10
+    REQUIRE(heights.size() == 7);
+
+    // Verify heights are correct
+    for (size_t i = 0; i < heights.size(); i++) {
+        REQUIRE(heights[i] == static_cast<int>(4 + i));
+    }
+
+    // THE FIX: All blocks in batch get the SAME is_initial_download value
+    // Without the fix, blocks 7-10 would have is_initial_download=false
+    bool first_value = ibd_values[0];
+    for (size_t i = 0; i < ibd_values.size(); i++) {
+        INFO("Block " << heights[i] << " is_initial_download=" << ibd_values[i]);
+        REQUIRE(ibd_values[i] == first_value);
+    }
+
+    // The value should be true (IBD at batch start)
+    REQUIRE(first_value == true);
+
+    // Cleanup mock time
+    util::SetMockTime(0);
+}
+

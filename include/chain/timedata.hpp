@@ -4,6 +4,29 @@
 
 #pragma once
 
+// =============================================================================
+// Time Data Module - Peer Clock Skew Detection (Diagnostic Only)
+// =============================================================================
+//
+// PURPOSE: Detects if the local system clock is significantly different from
+// network peers. Used ONLY for user warnings, NOT for consensus.
+//
+// BACKGROUND: Bitcoin historically used "network-adjusted time" where the node
+// would adjust its clock based on peer reports. This was removed in Bitcoin
+// Core 27.0 (PR #28956) because it created an attack surface - malicious peers
+// could manipulate a node's perception of time.
+//
+// CURRENT BEHAVIOR:
+// - AddTimeData() collects time offsets from outbound peers during handshake
+// - GetTimeOffset() returns the median offset (for diagnostics only)
+// - Consensus uses raw system time (util::GetTime()), not the peer offset
+// - RPC getnetworkinfo uses GetTimeOffset() to warn users about clock skew
+//
+// This module is NOT dead code - it provides useful clock skew warnings without
+// affecting consensus. If peers consistently report your clock is wrong, you
+// should check your NTP configuration.
+// =============================================================================
+
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -47,7 +70,7 @@ public:
   }
 
   T median() const {
-    int vSortedSize = vSorted.size();
+    size_t vSortedSize = vSorted.size();
     assert(vSortedSize > 0);
     if (vSortedSize & 1)  // Odd number of elements
     {
@@ -60,9 +83,7 @@ public:
     }
   }
 
-  int size() const { return vValues.size(); }
-
-  const std::vector<T>& sorted() const { return vSorted; }
+  size_t size() const { return vValues.size(); }
 };
 
 int64_t GetTimeOffset();

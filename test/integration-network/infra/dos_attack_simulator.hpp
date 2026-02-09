@@ -3,7 +3,7 @@
 //
 // Provides high-level attack primitives for testing denial-of-service defenses:
 // - Message flooding (buffer overflow, oversized messages)
-// - Validation attacks (invalid PoW, low-work headers, orphans)
+// - Validation attacks (invalid PoW, low-work headers, unconnecting headers)
 // - Connection attacks (rapid reconnect, stalling)
 //
 // Usage:
@@ -25,7 +25,7 @@
 #include "../test_orchestrator.hpp"
 #include "network/message.hpp"
 #include "network/protocol.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 #include "chain/chainparams.hpp"
 #include "util/hash.hpp"
 
@@ -223,7 +223,7 @@ public:
             attacker.SendOversizedHeaders(victim_->GetId(), count);
             result.messages_sent = 1;
         }
-        // Note: SendOversizedAddr and SendOversizedInv not implemented in NodeSimulator
+        // Note: SendOversizedAddr not implemented in NodeSimulator
         // Use raw message injection via SimulatedNetwork if needed
 
         orchestrator_.AdvanceTime(std::chrono::seconds(2));
@@ -571,7 +571,7 @@ public:
             orchestrator_.AdvanceTime(std::chrono::seconds(1));
 
             // Trigger stall detection timer processing
-            victim_->GetNetworkManager().test_hook_header_sync_process_timers();
+            victim_->ProcessHeaderSyncTimers();
 
             // Check if victim detected stall and disconnected
             if (attacker.GetPeerCount() == 0) {
@@ -597,59 +597,6 @@ public:
     // Protocol Message Attacks
     // =========================================================================
 
-    /**
-     * Send oversized INV message (exceeds MAX_INV_SIZE = 50,000)
-     *
-     * @param attacker SimulatedNode sending the message
-     * @param count Number of inventory items to declare (> 50,000 for attack)
-     * @return Attack result
-     */
-    AttackResult SendOversizedInv(
-            SimulatedNode& attacker,
-            size_t count) {
-
-        AttackResult result;
-        result.attack_type = "OVERSIZED_INV";
-        result.attack_description = "INV with " + std::to_string(count) +
-            " items (MAX=" + std::to_string(protocol::MAX_INV_SIZE) + ")";
-
-        auto start = std::chrono::steady_clock::now();
-
-        // Build payload: just the count (parser rejects by count alone)
-        message::MessageSerializer s;
-        s.write_varint(count);
-        auto payload = s.data();
-
-        // Create header with correct checksum
-        protocol::MessageHeader header(protocol::magic::REGTEST,
-            protocol::commands::INV, static_cast<uint32_t>(payload.size()));
-        uint256 hash = Hash(payload);
-        std::memcpy(header.checksum.data(), hash.begin(), 4);
-        auto header_bytes = message::serialize_header(header);
-
-        std::vector<uint8_t> full;
-        full.reserve(header_bytes.size() + payload.size());
-        full.insert(full.end(), header_bytes.begin(), header_bytes.end());
-        full.insert(full.end(), payload.begin(), payload.end());
-
-        network_->SendMessage(attacker.GetId(), victim_->GetId(), full);
-        result.messages_sent = 1;
-        result.bytes_sent = full.size();
-
-        orchestrator_.AdvanceTime(std::chrono::seconds(2));
-
-        result.triggered_disconnect = (attacker.GetPeerCount() == 0);
-        if (result.triggered_disconnect) {
-            result.defense_triggered = "oversized_inv_rejected";
-        }
-
-        auto end = std::chrono::steady_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-
-        RecordSnapshot(after_);
-        last_result_ = result;
-        return result;
-    }
 
     /**
      * Send oversized ADDR message (exceeds MAX_ADDR_SIZE = 1,000)
@@ -735,8 +682,7 @@ public:
 
         // Determine command
         std::string command = protocol::commands::HEADERS;
-        if (message_type == "inv") command = protocol::commands::INV;
-        else if (message_type == "addr") command = protocol::commands::ADDR;
+        if (message_type == "addr") command = protocol::commands::ADDR;
 
         // Create header with correct checksum
         protocol::MessageHeader header(protocol::magic::REGTEST,
@@ -792,7 +738,7 @@ public:
         auto start = std::chrono::steady_clock::now();
 
         // Get initial address count
-        auto& discovery_mgr = victim_->GetNetworkManager().discovery_manager_for_test();
+        auto& discovery_mgr = victim_->GetDiscoveryManager();
         size_t initial_addr_count = discovery_mgr.Size();
 
         for (size_t msg_idx = 0; msg_idx < num_messages; msg_idx++) {
@@ -848,80 +794,6 @@ public:
         return result;
     }
 
-    /**
-     * Send INV flood to test GETHEADERS rate limiting
-     *
-     * @param attacker SimulatedNode sending INV messages
-     * @param num_blocks Number of fake block hashes to announce
-     * @return Attack result
-     */
-    AttackResult SendInvFlood(
-            SimulatedNode& attacker,
-            size_t num_blocks) {
-
-        AttackResult result;
-        result.attack_type = "INV_FLOOD";
-        result.attack_description = "INV flood with " + std::to_string(num_blocks) +
-            " fake block announcements";
-
-        auto start = std::chrono::steady_clock::now();
-
-        // Enable command tracking
-        network_->EnableCommandTracking(true);
-        int gh_before = network_->CountCommandSent(victim_->GetId(), attacker.GetId(),
-            protocol::commands::GETHEADERS);
-
-        // Send INV messages with fake block hashes
-        for (size_t i = 0; i < num_blocks; i++) {
-            message::InvMessage inv_msg;
-            protocol::InventoryVector item;
-            item.type = protocol::InventoryType::MSG_BLOCK;
-            std::memset(item.hash.data(), static_cast<int>(i + 1), 32);
-            inv_msg.inventory.push_back(item);
-
-            auto payload = inv_msg.serialize();
-            protocol::MessageHeader header(protocol::magic::REGTEST,
-                protocol::commands::INV, static_cast<uint32_t>(payload.size()));
-            uint256 hash = Hash(payload);
-            std::memcpy(header.checksum.data(), hash.begin(), 4);
-            auto header_bytes = message::serialize_header(header);
-
-            std::vector<uint8_t> full;
-            full.reserve(header_bytes.size() + payload.size());
-            full.insert(full.end(), header_bytes.begin(), header_bytes.end());
-            full.insert(full.end(), payload.begin(), payload.end());
-
-            network_->SendMessage(attacker.GetId(), victim_->GetId(), full);
-            result.messages_sent++;
-            result.bytes_sent += full.size();
-
-            orchestrator_.AdvanceTime(std::chrono::milliseconds(10));
-        }
-
-        orchestrator_.AdvanceTime(std::chrono::seconds(1));
-
-        // Count GETHEADERS responses
-        int gh_after = network_->CountCommandSent(victim_->GetId(), attacker.GetId(),
-            protocol::commands::GETHEADERS);
-        int gh_delta = gh_after - gh_before;
-
-        result.messages_accepted = static_cast<size_t>(gh_delta);
-        result.messages_rejected = num_blocks - result.messages_accepted;
-
-        // Rate limiting kicks in if GETHEADERS < INV count
-        if (static_cast<size_t>(gh_delta) < num_blocks) {
-            result.defense_triggered = "inv_rate_limiting";
-        }
-
-        result.triggered_disconnect = (attacker.GetPeerCount() == 0);
-
-        auto end = std::chrono::steady_clock::now();
-        result.duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-
-        RecordSnapshot(after_);
-        last_result_ = result;
-        return result;
-    }
 
     /**
      * Send oversized GETHEADERS locator attack

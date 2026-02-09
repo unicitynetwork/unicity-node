@@ -100,7 +100,6 @@ public:
     std::string remote_address() const override;
     uint16_t remote_port() const override { return protocol::ports::REGTEST + peer_node_id_; }
     bool is_inbound() const override { return is_inbound_; }
-    uint64_t connection_id() const override { return id_; }
     void set_receive_callback(network::ReceiveCallback callback) override;
     void set_disconnect_callback(network::DisconnectCallback callback) override;
 

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 The Unicity Foundation
+// Distributed under the MIT software license
+
 #ifndef UNICITY_NETWORK_MESSAGE_DISPATCHER_HPP
 #define UNICITY_NETWORK_MESSAGE_DISPATCHER_HPP
 
@@ -61,7 +64,7 @@ public:
   MessageDispatcher(const MessageDispatcher&) = delete;
   MessageDispatcher& operator=(const MessageDispatcher&) = delete;
 
-  // Register handler for a message command (e.g., "verack", "inv"). Thread-safe.
+  // Register handler for a message command (e.g., "verack", "headers"). Thread-safe.
   // Note: Empty handlers are rejected to prevent std::bad_function_call.
   void RegisterHandler(const std::string& command, MessageHandler handler);
 

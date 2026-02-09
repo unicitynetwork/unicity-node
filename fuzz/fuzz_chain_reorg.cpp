@@ -321,34 +321,6 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         __builtin_trap();
     }
 
-    // Orphan count should be non-negative
-    int orphan_count = chainstate.GetOrphanHeaderCount();
-    if (orphan_count < 0) {
-        // GetOrphanHeaderCount() returned negative - BUG!
-        __builtin_trap();
-    }
-
-    // Cleanup orphans and verify count changes
-    int evicted = chainstate.EvictOrphanHeaders();
-
-    // Evicted count should be non-negative and <= previous orphan count
-    if (evicted < 0) {
-        // EvictOrphanHeaders() returned negative - BUG!
-        __builtin_trap();
-    }
-
-    if (evicted > orphan_count) {
-        // EvictOrphanHeaders() evicted more than existed - BUG!
-        __builtin_trap();
-    }
-
-    // After eviction, orphan count should be reduced
-    int orphan_count_after = chainstate.GetOrphanHeaderCount();
-    if (orphan_count_after != orphan_count - evicted) {
-        // Orphan count inconsistent after eviction - BUG!
-        __builtin_trap();
-    }
-
     return 0;
 }
 

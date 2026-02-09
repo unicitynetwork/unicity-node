@@ -33,8 +33,8 @@ TEST_CASE("IBD Gating - Reject large HEADERS from non-sync peer", "[network][ibd
     p1.ConnectTo(miner.GetId());
     p2.ConnectTo(miner.GetId());
     uint64_t t = 1000; net.AdvanceTime(t);
-    p1.GetNetworkManager().test_hook_check_initial_sync();
-    p2.GetNetworkManager().test_hook_check_initial_sync();
+    p1.CheckInitialSync();
+    p2.CheckInitialSync();
     for (int i = 0; i < 20 && (p1.GetTipHeight() < CHAIN_LEN || p2.GetTipHeight() < CHAIN_LEN); ++i) {
         t += 500; net.AdvanceTime(t);
     }
@@ -47,7 +47,7 @@ TEST_CASE("IBD Gating - Reject large HEADERS from non-sync peer", "[network][ibd
     t += 1000; net.AdvanceTime(t);
 
     // Select p1 as sync peer explicitly
-    sync.GetNetworkManager().test_hook_check_initial_sync();
+    sync.CheckInitialSync();
     t += 1000; net.AdvanceTime(t);
 
     // Sync should start from p1
@@ -99,7 +99,7 @@ TEST_CASE("IBD Gating - Accept large HEADERS from sync peer", "[network][ibd][ga
     uint64_t t = 1000; net.AdvanceTime(t);
 
     // Select miner as sync peer
-    sync.GetNetworkManager().test_hook_check_initial_sync();
+    sync.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Verify in IBD
@@ -129,7 +129,7 @@ TEST_CASE("IBD Gating - Accept large HEADERS after IBD completes", "[network][ib
     sync.ConnectTo(miner.GetId());
     uint64_t t = 1000; net.AdvanceTime(t);
 
-    sync.GetNetworkManager().test_hook_check_initial_sync();
+    sync.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Allow sync to complete the small chain
@@ -172,7 +172,7 @@ TEST_CASE("IBD Gating - Accept small announcements from any peer", "[network][ib
     // p1 syncs from miner
     p1.ConnectTo(miner.GetId());
     uint64_t t = 1000; net.AdvanceTime(t);
-    p1.GetNetworkManager().test_hook_check_initial_sync();
+    p1.CheckInitialSync();
     for (int i = 0; i < 10 && p1.GetTipHeight() < 10; ++i) {
         t += 1000; net.AdvanceTime(t);
     }
@@ -183,7 +183,7 @@ TEST_CASE("IBD Gating - Accept small announcements from any peer", "[network][ib
     t += 1000; net.AdvanceTime(t);
 
     // Start sync with p1
-    sync.GetNetworkManager().test_hook_check_initial_sync();
+    sync.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Even though in IBD, small batches (normal announcements) are accepted
@@ -212,7 +212,7 @@ TEST_CASE("IBD Gating - No sync peer means reject all large batches", "[network]
     // p1 syncs from miner
     p1.ConnectTo(miner.GetId());
     uint64_t t = 1000; net.AdvanceTime(t);
-    p1.GetNetworkManager().test_hook_check_initial_sync();
+    p1.CheckInitialSync();
     for (int i = 0; i < 15 && p1.GetTipHeight() < 60; ++i) {
         t += 2000; net.AdvanceTime(t);
     }
@@ -239,7 +239,7 @@ TEST_CASE("IBD Gating - No sync peer means reject all large batches", "[network]
     CHECK(sync.GetTipHeight() <= 60);
 
     // Now select sync peer
-    sync.GetNetworkManager().test_hook_check_initial_sync();
+    sync.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Sync should now proceed

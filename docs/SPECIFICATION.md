@@ -69,12 +69,7 @@ All integers use little-endian byte order except where noted.
 | timestamp | 4 | uint32_t | Unix timestamp (LE) |
 | address | 26 | NetworkAddress | Network address |
 
-### Inventory Vector (36 bytes)
 
-| Field | Size | Type | Description |
-|-------|------|------|-------------|
-| type | 4 | uint32_t | Inventory type (2 = MSG_BLOCK) |
-| hash | 32 | uint8_t[] | Block hash |
 
 ### Block Header (100 bytes)
 
@@ -138,14 +133,7 @@ Share peer addresses.
 
 Request peer addresses. Empty payload.
 
-### INV
 
-Announce available blocks.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| count | VarInt | Number of items (max 50000) |
-| inventory | InventoryVector[] | Inventory items |
 
 ### GETHEADERS
 
@@ -198,9 +186,7 @@ Syncing Node           Synced Node
 ```
 Node A                  Node B
   |                        |
-  |<----- INV -------------|
-  |---- GETHEADERS ------->|
-  |<---- HEADERS ----------|
+  |<----- HEADERS ---------|
   |                        |
 ```
 
@@ -236,7 +222,7 @@ Node A                  Node B
 |-------|-------|
 | Max Protocol Message | 8 MB |
 | Max Block Locator Size | 101 |
-| Max Inventory Items | 50000 |
+
 | Max Headers per Message | 80000 |
 | Max Addresses per Message | 1000 |
 | Max User Agent Length | 256 bytes |

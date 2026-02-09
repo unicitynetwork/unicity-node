@@ -34,9 +34,9 @@ TEST_CASE("sync_started reset on sync peer disconnect", "[network][sync_peer][fl
 
     uint64_t t = 1000; net.AdvanceTime(t);
 
-    p1.GetNetworkManager().test_hook_check_initial_sync();
-    p2.GetNetworkManager().test_hook_check_initial_sync();
-    p3.GetNetworkManager().test_hook_check_initial_sync();
+    p1.CheckInitialSync();
+    p2.CheckInitialSync();
+    p3.CheckInitialSync();
 
     for (int i = 0; i < 20 && (p1.GetTipHeight() < 50 || p2.GetTipHeight() < 50 || p3.GetTipHeight() < 50); ++i) {
         t += 1000; net.AdvanceTime(t);
@@ -55,7 +55,7 @@ TEST_CASE("sync_started reset on sync peer disconnect", "[network][sync_peer][fl
     t += 1000; net.AdvanceTime(t);
 
     // Select p1 as sync peer
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Start some sync progress
@@ -73,7 +73,7 @@ TEST_CASE("sync_started reset on sync peer disconnect", "[network][sync_peer][fl
     // Key test: p2 and p3 should have sync_started reset to false
     // We verify this by selecting a new sync peer and checking sync continues
 
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Sync should continue with p2 or p3
@@ -104,8 +104,8 @@ TEST_CASE("sync_started reset allows immediate retry with remaining peer", "[net
 
     uint64_t t = 1000; net.AdvanceTime(t);
 
-    p1.GetNetworkManager().test_hook_check_initial_sync();
-    p2.GetNetworkManager().test_hook_check_initial_sync();
+    p1.CheckInitialSync();
+    p2.CheckInitialSync();
 
     for (int i = 0; i < 15 && (p1.GetTipHeight() < 40 || p2.GetTipHeight() < 40); ++i) {
         t += 1000; net.AdvanceTime(t);
@@ -122,7 +122,7 @@ TEST_CASE("sync_started reset allows immediate retry with remaining peer", "[net
     t += 1000; net.AdvanceTime(t);
 
     // Select p1 first
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Make some progress
@@ -140,7 +140,7 @@ TEST_CASE("sync_started reset allows immediate retry with remaining peer", "[net
     t += 2000; net.AdvanceTime(t);
 
     // The fix: p2's sync_started should be reset to false, allowing selection
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Verify p2 was selected and sync continues
@@ -171,9 +171,9 @@ TEST_CASE("sync_started NOT reset when non-sync peer disconnects", "[network][sy
 
     uint64_t t = 1000; net.AdvanceTime(t);
 
-    p1.GetNetworkManager().test_hook_check_initial_sync();
-    p2.GetNetworkManager().test_hook_check_initial_sync();
-    p3.GetNetworkManager().test_hook_check_initial_sync();
+    p1.CheckInitialSync();
+    p2.CheckInitialSync();
+    p3.CheckInitialSync();
 
     for (int i = 0; i < 15 && (p1.GetTipHeight() < 30 || p2.GetTipHeight() < 30 || p3.GetTipHeight() < 30); ++i) {
         t += 1000; net.AdvanceTime(t);
@@ -191,7 +191,7 @@ TEST_CASE("sync_started NOT reset when non-sync peer disconnects", "[network][sy
     t += 1000; net.AdvanceTime(t);
 
     // Select p1 as sync peer
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Make progress
@@ -236,9 +236,9 @@ TEST_CASE("Multiple successive stalls reset flag each time", "[network][sync_pee
 
     uint64_t t = 1000; net.AdvanceTime(t);
 
-    p1.GetNetworkManager().test_hook_check_initial_sync();
-    p2.GetNetworkManager().test_hook_check_initial_sync();
-    p3.GetNetworkManager().test_hook_check_initial_sync();
+    p1.CheckInitialSync();
+    p2.CheckInitialSync();
+    p3.CheckInitialSync();
 
     for (int i = 0; i < 20 && (p1.GetTipHeight() < 60 || p2.GetTipHeight() < 60 || p3.GetTipHeight() < 60); ++i) {
         t += 2000; net.AdvanceTime(t);
@@ -256,7 +256,7 @@ TEST_CASE("Multiple successive stalls reset flag each time", "[network][sync_pee
     t += 1000; net.AdvanceTime(t);
 
     // Try p1 first
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     for (int i = 0; i < 3 && victim.GetTipHeight() < 15; ++i) {
@@ -271,7 +271,7 @@ TEST_CASE("Multiple successive stalls reset flag each time", "[network][sync_pee
     t += 2000; net.AdvanceTime(t);
 
     // p2 becomes sync peer (flag reset allows this)
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     for (int i = 0; i < 5 && victim.GetTipHeight() < 30; ++i) {
@@ -288,7 +288,7 @@ TEST_CASE("Multiple successive stalls reset flag each time", "[network][sync_pee
     t += 2000; net.AdvanceTime(t);
 
     // p3 should be available (flag reset again)
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Complete sync with p3

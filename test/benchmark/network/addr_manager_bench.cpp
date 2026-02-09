@@ -167,32 +167,8 @@ TEST_CASE("AddressManager good/failed operations", "[benchmark][network][addr]")
         };
     }
 
-    SECTION("Mark addresses failed") {
-        std::vector<protocol::NetworkAddress> addrs;
-        for (int i = 0; i < 100; i++) {
-            // Diverse netgroups
-            std::string ip = std::to_string((i % 200) + 1) + ".0." + std::to_string(i) + ".1";
-            addrs.push_back(MakeNetworkAddress(ip, 18444));
-        }
-
-        BENCHMARK("Mark addresses failed repeatedly") {
-            AddressManager mgr;
-
-            for (const auto& addr : addrs) {
-                mgr.add(addr);
-                mgr.good(addr);  // Move to TRIED
-            }
-
-            // Fail each address 5 times
-            for (int round = 0; round < 5; round++) {
-                for (const auto& addr : addrs) {
-                    mgr.failed(addr);
-                }
-            }
-
-            return mgr.tried_count();
-        };
-    }
+    // Note: No "mark addresses failed" benchmark - Bitcoin Core has no Failed() function
+    // Terrible addresses are filtered via GetChance() and cleaned by cleanup_stale()
 }
 
 TEST_CASE("AddressManager cleanup performance", "[benchmark][network][addr]") {

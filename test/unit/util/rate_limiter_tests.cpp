@@ -13,24 +13,24 @@ TEST_CASE("RateLimiter: Basic token bucket", "[rate_limiter]") {
     RateLimiter limiter;
 
     SECTION("First N messages allowed (burst capacity)") {
-        // Token bucket: 10 tokens, refill 1 per 60 seconds
-        for (int i = 0; i < 10; ++i) {
-            REQUIRE(limiter.should_log("test:1", 10, 60));
+        // Token bucket: 200 tokens, refill over 3600 seconds (1 hour)
+        for (int i = 0; i < 200; ++i) {
+            REQUIRE(limiter.should_log("test:1", 200, 3600));
         }
 
-        // 11th message should be rate-limited
-        REQUIRE_FALSE(limiter.should_log("test:1", 10, 60));
+        // 201st message should be rate-limited
+        REQUIRE_FALSE(limiter.should_log("test:1", 200, 3600));
     }
 
     SECTION("Different callsites have independent buckets") {
         // Exhaust tokens for first callsite
-        for (int i = 0; i < 10; ++i) {
-            limiter.should_log("test:1", 10, 60);
+        for (int i = 0; i < 200; ++i) {
+            limiter.should_log("test:1", 200, 3600);
         }
-        REQUIRE_FALSE(limiter.should_log("test:1", 10, 60));
+        REQUIRE_FALSE(limiter.should_log("test:1", 200, 3600));
 
         // Second callsite should have full bucket
-        REQUIRE(limiter.should_log("test:2", 10, 60));
+        REQUIRE(limiter.should_log("test:2", 200, 3600));
     }
 }
 
@@ -77,21 +77,21 @@ TEST_CASE("RateLimiter: Realistic attack scenario", "[rate_limiter][security]") 
     RateLimiter limiter;
 
     SECTION("Malicious peer spam attack") {
-        // Simulate attacker sending 100 malformed messages
-        // With rate limiting: only first 10 logged, rest blocked
+        // Simulate attacker sending 1000 malformed messages
+        // With rate limiting (200/hour): only first 200 logged, rest blocked
 
         int logged_count = 0;
-        for (int i = 0; i < 100; ++i) {
-            if (limiter.should_log("peer_error:attack", 10, 60)) {
+        for (int i = 0; i < 1000; ++i) {
+            if (limiter.should_log("peer_error:attack", 200, 3600)) {
                 logged_count++;
             }
         }
 
-        // Only 10 messages logged (burst capacity)
-        REQUIRE(logged_count == 10);
+        // Only 200 messages logged (burst capacity)
+        REQUIRE(logged_count == 200);
 
-        // 90% reduction in disk writes
-        REQUIRE((100 - logged_count) == 90);
+        // 80% reduction in disk writes
+        REQUIRE((1000 - logged_count) == 800);
     }
 }
 
@@ -100,14 +100,14 @@ TEST_CASE("RateLimiter: Thread safety", "[rate_limiter][threading]") {
 
     SECTION("Concurrent access from multiple threads") {
         const int num_threads = 4;
-        const int attempts_per_thread = 10;
+        const int attempts_per_thread = 100;
         std::atomic<int> logged_count{0};
 
         std::vector<std::thread> threads;
         for (int t = 0; t < num_threads; ++t) {
             threads.emplace_back([&limiter, &logged_count, attempts_per_thread]() {
                 for (int i = 0; i < attempts_per_thread; ++i) {
-                    if (limiter.should_log("thread_test", 10, 60)) {
+                    if (limiter.should_log("thread_test", 200, 3600)) {
                         logged_count++;
                     }
                 }
@@ -118,34 +118,24 @@ TEST_CASE("RateLimiter: Thread safety", "[rate_limiter][threading]") {
             thread.join();
         }
 
-        // Total attempts: 4 threads × 10 attempts = 40
-        // Burst capacity: 10 tokens
-        // So at most 10 should be logged
-        REQUIRE(logged_count <= 10);
+        // Total attempts: 4 threads × 100 attempts = 400
+        // Burst capacity: 200 tokens
+        // So at most 200 should be logged
+        REQUIRE(logged_count <= 200);
         REQUIRE(logged_count > 0); // At least some got through
     }
 }
 
-TEST_CASE("RateLimiter: Different rate limits", "[rate_limiter]") {
+TEST_CASE("RateLimiter: Production rate limit", "[rate_limiter]") {
     RateLimiter limiter;
 
-    SECTION("ERROR rate: 10 burst, 1/min") {
+    SECTION("200/hour rate limit") {
         int logged = 0;
-        for (int i = 0; i < 20; ++i) {
-            if (limiter.should_log("error_test", 10, 60)) {
+        for (int i = 0; i < 300; ++i) {
+            if (limiter.should_log("production_test", 200, 3600)) {
                 logged++;
             }
         }
-        REQUIRE(logged == 10);
-    }
-
-    SECTION("WARN rate: 30 burst, 1.5/min") {
-        int logged = 0;
-        for (int i = 0; i < 50; ++i) {
-            if (limiter.should_log("warn_test", 30, 20)) {
-                logged++;
-            }
-        }
-        REQUIRE(logged == 30);
+        REQUIRE(logged == 200);
     }
 }

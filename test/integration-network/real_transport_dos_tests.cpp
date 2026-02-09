@@ -108,7 +108,7 @@ std::vector<uint8_t> build_compactsize_overflow_payload() {
 // OVERSIZED MESSAGE ATTACKS
 // =============================================================================
 
-TEST_CASE("RealTransport DoS: Oversized INV triggers disconnect", "[network][transport][real][dos]") {
+TEST_CASE("RealTransport DoS: Oversized INV delivered without crash", "[network][transport][real][dos]") {
     TestIoContext io;
     RealTransport server(io.get());
     RealTransport client(io.get());
@@ -155,9 +155,9 @@ TEST_CASE("RealTransport DoS: Oversized INV triggers disconnect", "[network][tra
     REQUIRE(accepted);
     REQUIRE(connected);
 
-    // Send oversized INV (100,000 items, MAX = 50,000)
+    // Send oversized message (100,000 declared items)
     auto payload = build_oversized_count_payload(100000);
-    auto msg = build_raw_message(protocol::commands::INV, payload);
+    auto msg = build_raw_message(protocol::commands::ADDR, payload);
     (void)client_conn->send(msg);
 
     // Note: The server receives raw bytes. In a real node, Peer::on_transport_receive
@@ -177,7 +177,7 @@ TEST_CASE("RealTransport DoS: Oversized INV triggers disconnect", "[network][tra
     // Actual DoS rejection (disconnect) is handled by Peer layer.
 }
 
-TEST_CASE("RealTransport DoS: Oversized ADDR triggers disconnect", "[network][transport][real][dos]") {
+TEST_CASE("RealTransport DoS: Oversized ADDR delivered without crash", "[network][transport][real][dos]") {
     TestIoContext io;
     RealTransport server(io.get());
     RealTransport client(io.get());

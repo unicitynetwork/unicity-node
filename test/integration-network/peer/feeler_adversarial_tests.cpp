@@ -15,18 +15,21 @@
  */
 
 #include "catch_amalgamated.hpp"
-#include "network/peer_lifecycle_manager.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/connection_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 #include "network/protocol.hpp"
 #include "network/message.hpp"
 #include "util/hash.hpp"
 #include "infra/mock_transport.hpp"
+#include "infra/test_access.hpp"
 #include <asio.hpp>
 #include <memory>
 
 using namespace unicity;
+using unicity::test::AddrRelayManagerTestAccess;
 using namespace unicity::network;
 using namespace unicity::protocol;
+using unicity::test::PeerTestAccess;
 
 namespace {
 
@@ -67,7 +70,6 @@ public:
 
         auto conn = std::make_shared<MockTransportConnection>(address, port);
         conn->set_inbound(false);
-        conn->set_id(++next_id_);
         last_connection_ = conn;
 
         if (async_callback_) {
@@ -91,7 +93,6 @@ private:
     asio::io_context& io_;
     bool next_success_{true};
     bool async_callback_{false};
-    uint64_t next_id_{0};
     std::shared_ptr<MockTransportConnection> last_connection_;
 };
 
@@ -103,13 +104,13 @@ static protocol::NetworkAddress MakeAddr(const std::string& ip, uint16_t port) {
 
 TEST_CASE("Feeler should not mark address Good on TCP connect (before VERACK)", "[network][feeler][adversarial]") {
     asio::io_context io;
-    PeerLifecycleManager::Config cfg;
-    PeerLifecycleManager plm(io, cfg);
-    PeerDiscoveryManager pdm(&plm);
+    ConnectionManager::Config cfg;
+    ConnectionManager plm(io, cfg);
+    AddrRelayManager pdm(&plm);
 
     // Seed address into NEW table
     auto addr = MakeAddr("93.184.216.34", protocol::ports::REGTEST);
-    REQUIRE(pdm.addr_manager_for_test().add(addr));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(pdm).add(addr));
 
     // Verify address is in NEW table (not tried)
     size_t new_before = pdm.NewCount();
@@ -120,13 +121,10 @@ TEST_CASE("Feeler should not mark address Good on TCP connect (before VERACK)", 
     auto transport = std::make_shared<AdversarialTransport>(io);
     transport->SetNextConnectResult(true);  // TCP will succeed
 
-    auto is_running = [](){ return true; };
-    auto get_transport = [transport](){ return std::static_pointer_cast<Transport>(transport); };
-    auto setup_handler = [](Peer*){};
+    plm.Init(transport, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/12345);
 
     // Attempt feeler - TCP connects but VERACK never happens
-    plm.AttemptFeelerConnection(is_running, get_transport, setup_handler,
-                                protocol::magic::REGTEST, /*height=*/0, /*nonce=*/12345);
+    plm.AttemptFeelerConnection(/*current_height=*/0);
     io.poll();
     io.restart();
 
@@ -154,27 +152,24 @@ TEST_CASE("Feeler should not mark address Good on TCP connect (before VERACK)", 
 
 TEST_CASE("Feeler TCP failure should call Failed() not Attempt()", "[network][feeler][adversarial]") {
     asio::io_context io;
-    PeerLifecycleManager::Config cfg;
-    PeerLifecycleManager plm(io, cfg);
-    PeerDiscoveryManager pdm(&plm);
+    ConnectionManager::Config cfg;
+    ConnectionManager plm(io, cfg);
+    AddrRelayManager pdm(&plm);
 
     // Seed address into NEW table
     auto addr = MakeAddr("93.184.216.35", protocol::ports::REGTEST);
-    REQUIRE(pdm.addr_manager_for_test().add(addr));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(pdm).add(addr));
 
     auto transport = std::make_shared<AdversarialTransport>(io);
     transport->SetNextConnectResult(false);  // TCP will fail
 
-    auto is_running = [](){ return true; };
-    auto get_transport = [transport](){ return std::static_pointer_cast<Transport>(transport); };
-    auto setup_handler = [](Peer*){};
+    plm.Init(transport, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/12345);
 
     // Record metrics before
     uint64_t failures_before = plm.GetFeelerFailures();
 
     // Attempt feeler - TCP fails
-    plm.AttemptFeelerConnection(is_running, get_transport, setup_handler,
-                                protocol::magic::REGTEST, /*height=*/0, /*nonce=*/12345);
+    plm.AttemptFeelerConnection(/*current_height=*/0);
     io.poll();
     io.restart();
 
@@ -201,25 +196,22 @@ TEST_CASE("Feeler to peer that accepts TCP but never completes handshake", "[net
     // Current buggy behavior: Address IS promoted on TCP connect
 
     asio::io_context io;
-    PeerLifecycleManager::Config cfg;
-    PeerLifecycleManager plm(io, cfg);
-    PeerDiscoveryManager pdm(&plm);
+    ConnectionManager::Config cfg;
+    ConnectionManager plm(io, cfg);
+    AddrRelayManager pdm(&plm);
 
     // Seed address - use routable IP (93.184.216.x = example.com range)
     auto addr = MakeAddr("93.184.216.100", protocol::ports::REGTEST);
-    REQUIRE(pdm.addr_manager_for_test().add(addr));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(pdm).add(addr));
 
     size_t tried_before = pdm.TriedCount();
 
     auto transport = std::make_shared<AdversarialTransport>(io);
     transport->SetNextConnectResult(true);
 
-    auto is_running = [](){ return true; };
-    auto get_transport = [transport](){ return std::static_pointer_cast<Transport>(transport); };
-    auto setup_handler = [](Peer*){};
+    plm.Init(transport, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/12345);
 
-    plm.AttemptFeelerConnection(is_running, get_transport, setup_handler,
-                                protocol::magic::REGTEST, /*height=*/0, /*nonce=*/12345);
+    plm.AttemptFeelerConnection(/*current_height=*/0);
     io.poll();
 
     // Feeler peer exists but handshake never completes
@@ -242,25 +234,22 @@ TEST_CASE("Multiple failed feelers should trigger address backoff", "[network][f
     // it should be marked as bad and get exponential backoff
 
     asio::io_context io;
-    PeerLifecycleManager::Config cfg;
-    PeerLifecycleManager plm(io, cfg);
-    PeerDiscoveryManager pdm(&plm);
+    ConnectionManager::Config cfg;
+    ConnectionManager plm(io, cfg);
+    AddrRelayManager pdm(&plm);
 
     // Seed addresses - use routable IPs (93.184.216.x = example.com range)
     auto transport = std::make_shared<AdversarialTransport>(io);
     transport->SetNextConnectResult(false);  // All attempts will fail
 
-    auto is_running = [](){ return true; };
-    auto get_transport = [transport](){ return std::static_pointer_cast<Transport>(transport); };
-    auto setup_handler = [](Peer*){};
+    plm.Init(transport, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/12345);
 
     // Attempt multiple feelers - use different addresses to avoid dedup
     // Each one fails, testing that failures are properly tracked
     for (int i = 0; i < 5; i++) {
         auto addr_i = MakeAddr("93.184.216." + std::to_string(200 + i), protocol::ports::REGTEST);
-        pdm.addr_manager_for_test().add(addr_i);
-        plm.AttemptFeelerConnection(is_running, get_transport, setup_handler,
-                                    protocol::magic::REGTEST, /*height=*/0, /*nonce=*/12345 + i);
+        AddrRelayManagerTestAccess::GetAddrManager(pdm).add(addr_i);
+        plm.AttemptFeelerConnection(/*current_height=*/0);
         io.poll();
         io.restart();
     }
@@ -280,31 +269,28 @@ TEST_CASE("Feeler timeout without VERACK should not mark address good", "[networ
     // The address should NOT be promoted to tried table.
 
     asio::io_context io;
-    PeerLifecycleManager::Config cfg;
-    PeerLifecycleManager plm(io, cfg);
-    PeerDiscoveryManager pdm(&plm);
+    ConnectionManager::Config cfg;
+    ConnectionManager plm(io, cfg);
+    AddrRelayManager pdm(&plm);
 
     // Use short timeouts for test
     using unicity::network::Peer;
-    Peer::SetTimeoutsForTest(std::chrono::milliseconds(50), std::chrono::milliseconds(100));
-    struct ResetTimeoutsGuard { ~ResetTimeoutsGuard() { Peer::ResetTimeoutsForTest(); } } _guard;
+    PeerTestAccess::SetTimeouts(std::chrono::milliseconds(50), std::chrono::milliseconds(100));
+    struct ResetTimeoutsGuard { ~ResetTimeoutsGuard() { PeerTestAccess::ResetTimeouts(); } } _guard;
 
     // Seed address
     auto addr = MakeAddr("93.184.216.150", protocol::ports::REGTEST);
-    REQUIRE(pdm.addr_manager_for_test().add(addr));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(pdm).add(addr));
 
     size_t tried_before = pdm.TriedCount();
 
     auto transport = std::make_shared<AdversarialTransport>(io);
     transport->SetNextConnectResult(true);  // TCP succeeds
 
-    auto is_running = [](){ return true; };
-    auto get_transport = [transport](){ return std::static_pointer_cast<Transport>(transport); };
-    auto setup_handler = [](Peer*){};
+    plm.Init(transport, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/12345);
 
     // Start feeler
-    plm.AttemptFeelerConnection(is_running, get_transport, setup_handler,
-                                protocol::magic::REGTEST, /*height=*/0, /*nonce=*/12345);
+    plm.AttemptFeelerConnection(/*current_height=*/0);
     io.poll();
 
     // Feeler peer should be created
@@ -337,25 +323,22 @@ TEST_CASE("Feeler success increments metrics only after VERACK", "[network][feel
     // not on TCP connect
 
     asio::io_context io;
-    PeerLifecycleManager::Config cfg;
-    PeerLifecycleManager plm(io, cfg);
-    PeerDiscoveryManager pdm(&plm);
+    ConnectionManager::Config cfg;
+    ConnectionManager plm(io, cfg);
+    AddrRelayManager pdm(&plm);
 
     // Seed address
     auto addr = MakeAddr("93.184.216.160", protocol::ports::REGTEST);
-    REQUIRE(pdm.addr_manager_for_test().add(addr));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(pdm).add(addr));
 
     uint64_t successes_before = plm.GetFeelerSuccesses();
 
     auto transport = std::make_shared<AdversarialTransport>(io);
     transport->SetNextConnectResult(true);
 
-    auto is_running = [](){ return true; };
-    auto get_transport = [transport](){ return std::static_pointer_cast<Transport>(transport); };
-    auto setup_handler = [](Peer*){};
+    plm.Init(transport, [](Peer*){}, [](){ return true; }, protocol::magic::REGTEST, /*local_nonce=*/12345);
 
-    plm.AttemptFeelerConnection(is_running, get_transport, setup_handler,
-                                protocol::magic::REGTEST, /*height=*/0, /*nonce=*/12345);
+    plm.AttemptFeelerConnection(/*current_height=*/0);
     io.poll();
 
     // Peer created but VERACK not received
@@ -375,13 +358,13 @@ TEST_CASE("Feeler with VERSION received SHOULD promote address to tried", "[netw
     // This complements the negative tests that verify no promotion without VERSION.
 
     asio::io_context io;
-    PeerLifecycleManager::Config cfg;
-    PeerLifecycleManager plm(io, cfg);
-    PeerDiscoveryManager pdm(&plm);
+    ConnectionManager::Config cfg;
+    ConnectionManager plm(io, cfg);
+    AddrRelayManager pdm(&plm);
 
     // Seed address into NEW table
     auto addr = MakeAddr("93.184.216.200", protocol::ports::REGTEST);
-    REQUIRE(pdm.addr_manager_for_test().add(addr));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(pdm).add(addr));
 
     size_t new_before = pdm.NewCount();
     size_t tried_before = pdm.TriedCount();
@@ -391,18 +374,13 @@ TEST_CASE("Feeler with VERSION received SHOULD promote address to tried", "[netw
     auto transport = std::make_shared<AdversarialTransport>(io);
     transport->SetNextConnectResult(true);
 
-    auto is_running = []() { return true; };
-    auto get_transport = [transport]() { return std::static_pointer_cast<Transport>(transport); };
-
     // Track which peer was created so we can inject messages
     PeerPtr feeler_peer;
-    auto setup_handler = [&feeler_peer](Peer* p) {
-        feeler_peer = p->shared_from_this();
-    };
+    plm.Init(transport, [&feeler_peer](Peer* p) { feeler_peer = p->shared_from_this(); },
+             []() { return true; }, protocol::magic::REGTEST, /*local_nonce=*/12345);
 
     // Start feeler connection
-    plm.AttemptFeelerConnection(is_running, get_transport, setup_handler,
-                                protocol::magic::REGTEST, /*height=*/0, /*nonce=*/12345);
+    plm.AttemptFeelerConnection(/*current_height=*/0);
     io.poll();
 
     REQUIRE(plm.peer_count() == 1);

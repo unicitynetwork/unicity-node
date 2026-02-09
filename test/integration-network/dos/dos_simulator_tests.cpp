@@ -50,7 +50,8 @@ TEST_CASE("DoSAttackSimulator - Message flood triggers buffer overflow", "[dos][
 TEST_CASE("DoSAttackSimulator - Invalid PoW triggers discourage", "[dos][simulator]") {
     SimulatedNetwork network(43);
     SimulatedNode victim(1, &network);
-    NodeSimulator attacker(2, &network);
+    // Use non-localhost address so attacker can be discouraged (localhost is exempt)
+    NodeSimulator attacker(2, &network, "10.0.0.2");
 
     DoSAttackSimulator sim(&network, &victim);
 
@@ -151,7 +152,8 @@ TEST_CASE("DoSAttackSimulator - Pre-built profiles", "[dos][simulator]") {
     }
 
     SECTION("Invalid PoW profile") {
-        NodeSimulator attacker(2, &network);
+        // Use non-localhost address so attacker can be discouraged (localhost is exempt)
+        NodeSimulator attacker(2, &network, "10.0.0.2");
         DoSAttackSimulator sim(&network, &victim);
 
         sim.BuildVictimChain(10);

@@ -48,13 +48,14 @@ public:
     }
 
     ~RPCTestFixture() {
-        // Reset log levels to "off" BEFORE stopping components
-        // (RPC logging tests modify global LogManager state)
-        util::LogManager::SetLogLevel("off");
-
+        // Stop server first so no in-flight RPC calls can emit logs
         if (server_ && server_->IsRunning()) {
             server_->Stop();
         }
+
+        // Reset log levels to "off" after server is stopped
+        // (RPC logging tests modify global LogManager state)
+        util::LogManager::SetLogLevel("off");
         delete server_;
         delete network_;
         delete chainstate_;
@@ -479,6 +480,9 @@ TEST_CASE("RPC Commands: logging", "[rpc][integration][commands]") {
         REQUIRE_FALSE(client2.Connect().has_value());
         std::string check = client2.ExecuteCommand("logging", {});
         REQUIRE(check.find("\"network\": \"debug\"") != std::string::npos);
+
+        // Reset so subsequent RPC calls in teardown don't emit debug logs
+        util::LogManager::SetLogLevel("off");
     }
 
     SECTION("Set all categories log level") {
@@ -834,14 +838,14 @@ TEST_CASE("RPC Commands: addnode", "[rpc][integration][network]") {
     SECTION("Invalid command returns error") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        std::string response = client.ExecuteCommand("addnode", {"127.0.0.1:8333", "invalid"});
+        std::string response = client.ExecuteCommand("addnode", {"127.0.0.1:9590", "invalid"});
         REQUIRE(response.find("error") != std::string::npos);
     }
 
     SECTION("Add command with valid IP") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        std::string response = client.ExecuteCommand("addnode", {"127.0.0.1:8333", "add"});
+        std::string response = client.ExecuteCommand("addnode", {"127.0.0.1:9590", "add"});
         // Should succeed or report connection error (not crash)
         REQUIRE_FALSE(response.empty());
     }
@@ -849,7 +853,7 @@ TEST_CASE("RPC Commands: addnode", "[rpc][integration][network]") {
     SECTION("Remove command with valid IP") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        std::string response = client.ExecuteCommand("addnode", {"127.0.0.1:8333", "remove"});
+        std::string response = client.ExecuteCommand("addnode", {"127.0.0.1:9590", "remove"});
         REQUIRE_FALSE(response.empty());
     }
 }
@@ -972,7 +976,7 @@ TEST_CASE("RPC Commands: disconnectnode", "[rpc][integration][network]") {
     SECTION("Non-existent peer returns error") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        std::string response = client.ExecuteCommand("disconnectnode", {"192.168.1.1:8333"});
+        std::string response = client.ExecuteCommand("disconnectnode", {"192.168.1.1:9590"});
         REQUIRE(response.find("error") != std::string::npos);
     }
 
@@ -1010,9 +1014,9 @@ TEST_CASE("RPC Commands: addpeeraddress", "[rpc][integration][network]") {
     SECTION("Add address with port") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        std::string response = client.ExecuteCommand("addpeeraddress", {"10.0.0.50", "8333"});
+        std::string response = client.ExecuteCommand("addpeeraddress", {"10.0.0.50", "9590"});
         REQUIRE(response.find("\"success\"") != std::string::npos);
-        REQUIRE(response.find("\"port\": 8333") != std::string::npos);
+        REQUIRE(response.find("\"port\": 9590") != std::string::npos);
     }
 }
 
@@ -1127,21 +1131,6 @@ TEST_CASE("RPC Commands: submitheader", "[rpc][integration][debug]") {
     }
 }
 
-TEST_CASE("RPC Commands: getorphanstats", "[rpc][integration][debug]") {
-    RPCTestFixture fixture;
-    REQUIRE(fixture.StartServer());
-    std::this_thread::sleep_for(100ms);
-
-    rpc::RPCClient client(fixture.GetSocketPath());
-    REQUIRE_FALSE(client.Connect().has_value());
-
-    SECTION("Returns orphan statistics") {
-        std::string response = client.ExecuteCommand("getorphanstats", {});
-        REQUIRE_FALSE(response.empty());
-        REQUIRE(response.find("error") == std::string::npos);
-    }
-}
-
 TEST_CASE("RPC Commands: getnextworkrequired", "[rpc][integration][debug]") {
     RPCTestFixture fixture;
     REQUIRE(fixture.StartServer());
@@ -1156,4 +1145,100 @@ TEST_CASE("RPC Commands: getnextworkrequired", "[rpc][integration][debug]") {
         // Should return hex bits value
         REQUIRE(response.find("error") == std::string::npos);
     }
+}
+
+// ============================================================================
+// Network Reporting RPC Commands
+// ============================================================================
+
+TEST_CASE("RPC Commands: getnettotals", "[rpc][integration][network]") {
+    RPCTestFixture fixture;
+    REQUIRE(fixture.StartServer());
+    std::this_thread::sleep_for(100ms);
+
+    rpc::RPCClient client(fixture.GetSocketPath());
+    REQUIRE_FALSE(client.Connect().has_value());
+
+    SECTION("Returns valid JSON with required fields") {
+        std::string response = client.ExecuteCommand("getnettotals", {});
+        REQUIRE_FALSE(response.empty());
+        REQUIRE(response.find("error") == std::string::npos);
+
+        // Check required fields
+        REQUIRE(response.find("\"totalbytesrecv\"") != std::string::npos);
+        REQUIRE(response.find("\"totalbytessent\"") != std::string::npos);
+    }
+
+    SECTION("Returns non-negative byte counts") {
+        std::string response = client.ExecuteCommand("getnettotals", {});
+        // With no peers, should be 0 bytes
+        REQUIRE(response.find("\"totalbytesrecv\": 0") != std::string::npos);
+        REQUIRE(response.find("\"totalbytessent\": 0") != std::string::npos);
+    }
+}
+
+TEST_CASE("RPC Commands: getnetworkinfo", "[rpc][integration][network]") {
+    RPCTestFixture fixture;
+    REQUIRE(fixture.StartServer());
+    std::this_thread::sleep_for(100ms);
+
+    rpc::RPCClient client(fixture.GetSocketPath());
+    REQUIRE_FALSE(client.Connect().has_value());
+
+    SECTION("Returns valid JSON with required fields") {
+        std::string response = client.ExecuteCommand("getnetworkinfo", {});
+        REQUIRE_FALSE(response.empty());
+        REQUIRE(response.find("error") == std::string::npos);
+
+        // Check required fields
+        REQUIRE(response.find("\"version\"") != std::string::npos);
+        REQUIRE(response.find("\"subversion\"") != std::string::npos);
+        REQUIRE(response.find("\"protocolversion\"") != std::string::npos);
+        REQUIRE(response.find("\"connections\"") != std::string::npos);
+        REQUIRE(response.find("\"connections_in\"") != std::string::npos);
+        REQUIRE(response.find("\"connections_out\"") != std::string::npos);
+        REQUIRE(response.find("\"networkactive\"") != std::string::npos);
+        REQUIRE(response.find("\"localaddresses\"") != std::string::npos);
+    }
+
+    SECTION("Returns zero connections when no peers") {
+        std::string response = client.ExecuteCommand("getnetworkinfo", {});
+        REQUIRE(response.find("\"connections\": 0") != std::string::npos);
+        REQUIRE(response.find("\"connections_in\": 0") != std::string::npos);
+        REQUIRE(response.find("\"connections_out\": 0") != std::string::npos);
+    }
+
+    SECTION("Shows network is active") {
+        std::string response = client.ExecuteCommand("getnetworkinfo", {});
+        // networkactive defaults to true (can be toggled via setnetworkactive RPC)
+        REQUIRE(response.find("\"networkactive\": true") != std::string::npos);
+    }
+
+    SECTION("Contains version string") {
+        std::string response = client.ExecuteCommand("getnetworkinfo", {});
+        // Should contain Unicity in subversion
+        REQUIRE(response.find("/Unicity:") != std::string::npos);
+    }
+}
+
+TEST_CASE("RPC Commands: getpeerinfo extended fields", "[rpc][integration][network]") {
+    RPCTestFixture fixture;
+    REQUIRE(fixture.StartServer());
+    std::this_thread::sleep_for(100ms);
+
+    rpc::RPCClient client(fixture.GetSocketPath());
+    REQUIRE_FALSE(client.Connect().has_value());
+
+    SECTION("Returns empty array when no peers") {
+        std::string response = client.ExecuteCommand("getpeerinfo", {});
+        REQUIRE_FALSE(response.empty());
+        REQUIRE(response.find("error") == std::string::npos);
+        // Should be an empty JSON array
+        REQUIRE(response.find("[") != std::string::npos);
+        REQUIRE(response.find("]") != std::string::npos);
+    }
+
+    // Note: Testing lastsend/lastrecv with actual peers would require
+    // setting up peer connections, which is done in dedicated peer tests.
+    // Here we just verify the RPC command executes without errors.
 }

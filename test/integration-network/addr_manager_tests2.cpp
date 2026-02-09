@@ -1,14 +1,16 @@
 #include "catch_amalgamated.hpp"
 #include "infra/simulated_network.hpp"
 #include "infra/simulated_node.hpp"
+#include "infra/test_access.hpp"
 #include "test_orchestrator.hpp"
 #include "network/protocol.hpp"
 #include "network/message.hpp"
 #include "util/hash.hpp"
 #include "network/addr_manager.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 
 using namespace unicity;
+using unicity::test::AddrRelayManagerTestAccess;
 using namespace unicity::test;
 using namespace unicity::network;
 using namespace unicity::protocol;
@@ -77,7 +79,7 @@ TEST_CASE("ADDR response is capped at MAX_ADDR_SIZE", "[network][addr]") {
         // 127.0.1.x IPv4-mapped
         for (int j = 0; j < 10; ++j) addr.ip[j] = 0; addr.ip[10] = 0xFF; addr.ip[11] = 0xFF;
         addr.ip[12] = 127; addr.ip[13] = 0; addr.ip[14] = 1; addr.ip[15] = static_cast<uint8_t>(i % 255);
-        discovery.addr_manager_for_test().add(addr);
+        AddrRelayManagerTestAccess::GetAddrManager(discovery).add(addr);
     }
 
     net.EnableCommandTracking(true);
@@ -113,7 +115,7 @@ TEST_CASE("good() is called on outbound after VERACK (moves to tried)", "[networ
     // Instead, we manually test the good() behavior with a routable address.
 
     auto routable_addr = protocol::NetworkAddress::from_string("93.184.216.34", protocol::ports::REGTEST, NODE_NETWORK);
-    discovery.addr_manager_for_test().add(routable_addr);
+    AddrRelayManagerTestAccess::GetAddrManager(discovery).add(routable_addr);
     REQUIRE(discovery.NewCount() == 1);
 
     // Manually call good() to simulate what would happen during handshake with a routable peer
@@ -124,7 +126,7 @@ TEST_CASE("good() is called on outbound after VERACK (moves to tried)", "[networ
     REQUIRE(discovery.NewCount() == 0);
 }
 
-TEST_CASE("cleanup_stale removes terrible entries (too many failures)", "[network][addr]") {
+TEST_CASE("cleanup_stale behavior with NEW addresses", "[network][addr]") {
     AddressManager am;
 
     // Use routable IPs: 93.184.216.34 and 8.8.8.8
@@ -135,12 +137,14 @@ TEST_CASE("cleanup_stale removes terrible entries (too many failures)", "[networ
     REQUIRE(am.add(a2));
     REQUIRE(am.size() == 2);
 
-    // Make a1 terrible by repeated failures
-    for (int i = 0; i < 20; ++i) am.failed(a1);
+    // Note: No failed() function - matches Bitcoin Core behavior
+    // Terrible addresses determined by is_terrible() (timestamp-based)
+    // and cleaned by cleanup_stale() periodically
 
     am.cleanup_stale();
 
-    REQUIRE(am.size() == 1);
+    // Both addresses remain (fresh addresses are never terrible due to 60-second grace period)
+    REQUIRE(am.size() == 2);
 }
 
 TEST_CASE("GETADDR empty address manager sends zero addresses", "[network][addr]") {

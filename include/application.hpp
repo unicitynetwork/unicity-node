@@ -1,3 +1,6 @@
+// Copyright (c) 2025 The Unicity Foundation
+// Distributed under the MIT software license
+
 #pragma once
 
 #include "chain/block_manager.hpp"
@@ -77,7 +80,7 @@ public:
 
   // Signal handling
   static void signal_handler(int signal);
-  static Application *instance();
+  static Application* instance();
 
 private:
   AppConfig config_;
@@ -95,8 +98,6 @@ private:
   std::unique_ptr<std::thread> save_thread_;
 
   // Notification subscriptions
-  // IMPORTANT: Must be declared AFTER components so they are destroyed BEFORE
-  ChainNotifications::Subscription block_sub_;
   ChainNotifications::Subscription fatal_error_sub_;
   ChainNotifications::Subscription tip_sub_;
 
@@ -118,7 +119,7 @@ private:
   void shutdown();
 
   // Signal handling
-  static Application *instance_;
+  static std::atomic<Application*> instance_;
   void setup_signal_handlers();
 };
 

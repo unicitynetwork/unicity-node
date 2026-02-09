@@ -1,6 +1,6 @@
 #include "catch_amalgamated.hpp"
 #include "network/anchor_manager.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/connection_manager.hpp"
 #include "network/protocol.hpp"
 #include <asio.hpp>
 #include <filesystem>
@@ -15,7 +15,7 @@ static std::string tmpfile(const char* name) { return std::string("/tmp/") + nam
 
 TEST_CASE("AnchorManager::SaveAnchors - no peers -> early return, no file", "[unit][anchor]") {
     asio::io_context io;
-    PeerLifecycleManager peermgr(io);
+    ConnectionManager peermgr(io);
 
     // Phase 2: No callbacks - AnchorManager is passive
     AnchorManager am(peermgr);
@@ -29,7 +29,7 @@ TEST_CASE("AnchorManager::SaveAnchors - no peers -> early return, no file", "[un
 
 TEST_CASE("AnchorManager::LoadAnchors - returns capped at 2 addresses and deletes file", "[unit][anchor]") {
     asio::io_context io;
-    PeerLifecycleManager peermgr(io);
+    ConnectionManager peermgr(io);
 
     // Phase 2: No callbacks - LoadAnchors returns vector of addresses
     AnchorManager am(peermgr);
@@ -60,7 +60,7 @@ TEST_CASE("AnchorManager::LoadAnchors - returns capped at 2 addresses and delete
 
 TEST_CASE("AnchorManager::LoadAnchors - invalid IP array -> reject and delete", "[unit][anchor]") {
     asio::io_context io;
-    PeerLifecycleManager peermgr(io);
+    ConnectionManager peermgr(io);
 
     // Phase 2: No callbacks
     AnchorManager am(peermgr);

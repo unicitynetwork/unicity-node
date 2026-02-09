@@ -138,7 +138,11 @@ TEST_CASE("Echo suppression is per-peer: addresses from C are served to other pe
     REQUIRE_FALSE(payloads_AB.empty());
 }
 
-TEST_CASE("Echo suppression TTL expiry allows address to be served back after 10m", "[network][addr][echo][ttl]") {
+TEST_CASE("Echo suppression: reconnection clears per-peer bloom filter", "[network][addr][echo][reconnect]") {
+    // Bitcoin Core uses a rolling bloom filter (m_addr_known) for echo suppression.
+    // The filter is per-peer and cleared on disconnection/reconnection.
+    // This test verifies that addresses ARE served after reconnection.
+
     SimulatedNetwork net(88003);
     TestOrchestrator orch(&net);
     net.EnableCommandTracking(true);
@@ -148,7 +152,6 @@ TEST_CASE("Echo suppression TTL expiry allows address to be served back after 10
 
     REQUIRE(B.ConnectTo(A.GetId()));
     REQUIRE(orch.WaitForConnection(A, B));
-    // Ensure handshake completes
     for (int i = 0; i < 12; ++i) orch.AdvanceTime(std::chrono::milliseconds(100));
 
     // B announces Y to A
@@ -159,7 +162,7 @@ TEST_CASE("Echo suppression TTL expiry allows address to be served back after 10
     net.SendMessage(B.GetId(), A.GetId(), MakeWire(commands::ADDR, payload2));
     orch.AdvanceTime(std::chrono::milliseconds(200));
 
-    // Immediate GETADDR from B: Y must be suppressed
+    // Immediate GETADDR from B: Y must be suppressed (in bloom filter)
     net.SendMessage(B.GetId(), A.GetId(), MakeWire(commands::GETADDR, {}));
     orch.AdvanceTime(std::chrono::milliseconds(400));
     auto payloads_AB1 = net.GetCommandPayloads(A.GetId(), B.GetId(), commands::ADDR);
@@ -177,17 +180,15 @@ TEST_CASE("Echo suppression TTL expiry allows address to be served back after 10
     }
     REQUIRE_FALSE(found_y_early);
 
-    // Advance time beyond 10 minutes (TTL)
-    orch.AdvanceTime(std::chrono::seconds(601));
-
-    // Core parity: only one GETADDR response per connection.
-    // Reconnect before issuing another GETADDR.
+    // Reconnect - this clears the per-peer bloom filter
+    // (Core parity: only one GETADDR response per connection anyway)
     B.DisconnectFrom(A.GetId());
     REQUIRE(orch.WaitForDisconnect(A, B));
     REQUIRE(B.ConnectTo(A.GetId()));
     REQUIRE(orch.WaitForConnection(A, B));
     for (int i = 0; i < 12; ++i) orch.AdvanceTime(std::chrono::milliseconds(100));
 
+    // After reconnection, bloom filter is cleared - new GETADDR should work
     net.SendMessage(B.GetId(), A.GetId(), MakeWire(commands::GETADDR, {}));
     orch.AdvanceTime(std::chrono::milliseconds(400));
     auto payloads_AB2 = net.GetCommandPayloads(A.GetId(), B.GetId(), commands::ADDR);

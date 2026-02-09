@@ -188,10 +188,5 @@ TimestampedAddress::TimestampedAddress() noexcept : timestamp(0) {}
 TimestampedAddress::TimestampedAddress(uint32_t ts, const NetworkAddress& addr) noexcept
     : timestamp(ts), address(addr) {}
 
-// InventoryVector implementation
-InventoryVector::InventoryVector() noexcept : type(InventoryType::ERROR), hash() {}
-
-InventoryVector::InventoryVector(InventoryType t, const uint256& h) noexcept : type(t), hash(h) {}
-
 }  // namespace protocol
 }  // namespace unicity

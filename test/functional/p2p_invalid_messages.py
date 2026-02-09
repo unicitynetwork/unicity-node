@@ -3,12 +3,13 @@
 
 Tests node behavior when receiving invalid/malformed P2P messages:
 1. Wrong magic bytes -> disconnect
-2. Bad checksum -> disconnect  
+2. Bad checksum -> disconnect
 3. Oversized message -> disconnect
 4. Unknown command -> ignored (not disconnect)
 5. Empty payload for messages that require data -> disconnect
 6. Non-empty payload for messages that must be empty -> disconnect
-7. Sending non-VERSION as first message -> disconnect
+7. Sending non-VERSION as first message -> ignored (matches Bitcoin Core net_processing.cpp:3657-3660)
+8. Sending HEADERS before VERACK -> ignored (peer stays connected, message not processed)
 
 Adapted from Bitcoin Core's p2p_invalid_messages.py for Unicity.
 """
@@ -362,8 +363,12 @@ def test_ping_without_payload(host, port):
 
 
 def test_non_version_first_message(host, port):
-    """Test that sending non-VERSION as first message causes disconnect."""
-    print("  Test: Non-VERSION as first message")
+    """Test that sending non-VERSION as first message is ignored (not disconnect).
+
+    Bitcoin Core behavior: net_processing.cpp:3657-3660 - logs and returns without disconnecting.
+    The message is silently ignored and peer stays connected waiting for VERSION.
+    """
+    print("  Test: Non-VERSION as first message (should be ignored)")
 
     conn = P2PConnection(host, port)
     conn.connect()
@@ -372,20 +377,42 @@ def test_non_version_first_message(host, port):
     ping_payload = build_ping_message(nonce=67890)
     conn.send_message(REGTEST_MAGIC, "ping", ping_payload)
 
-    # Should be disconnected
-    if conn.wait_for_disconnect(timeout=5):
-        print("    ✓ Disconnected after non-VERSION first message")
+    # Node should NOT disconnect - message is silently ignored
+    # Wait briefly to verify no PONG comes back and connection stays open
+    time.sleep(1.0)
+
+    if conn.is_connected():
+        # Verify no PONG response (message was ignored)
+        try:
+            conn.sock.settimeout(0.5)
+            data = conn.sock.recv(1024)
+            if data:
+                print("    ✗ FAILED: Received unexpected response (should be ignored)")
+                conn.close()
+                return False
+        except socket.timeout:
+            pass  # Expected - no response
+        except (ConnectionResetError, BrokenPipeError):
+            print("    ✗ FAILED: Connection was reset")
+            conn.close()
+            return False
+
+        print("    ✓ Message ignored, connection stayed open (matches Bitcoin Core)")
         conn.close()
         return True
     else:
-        print("    ✗ FAILED: Not disconnected after non-VERSION first message")
+        print("    ✗ FAILED: Disconnected (should stay connected and ignore message)")
         conn.close()
         return False
 
 
 def test_headers_before_verack(host, port):
-    """Test that sending HEADERS before VERACK causes disconnect."""
-    print("  Test: HEADERS before VERACK")
+    """Test that sending HEADERS before VERACK is ignored (not disconnect).
+
+    After VERSION exchange but before VERACK, protocol messages are silently
+    ignored. The peer stays connected and can complete handshake normally.
+    """
+    print("  Test: HEADERS before VERACK (should be ignored)")
 
     conn = P2PConnection(host, port)
     conn.connect()
@@ -405,30 +432,32 @@ def test_headers_before_verack(host, port):
             return False
     except (socket.timeout, ConnectionResetError, BrokenPipeError):
         if not conn.is_connected():
-            print("    ✓ Disconnected during handshake (early detection)")
+            print("    ✗ FAILED: Disconnected during handshake")
             conn.close()
-            return True
+            return False
         print("    ✗ FAILED: Connection issue during handshake")
         conn.close()
         return False
 
-    # DO NOT send VERACK - instead send HEADERS (protocol violation)
+    # DO NOT send VERACK - instead send HEADERS (should be ignored)
     # Empty headers message (just the count = 0)
     headers_payload = b'\x00'  # CompactSize = 0 headers
     try:
         conn.send_message(REGTEST_MAGIC, "headers", headers_payload)
     except (BrokenPipeError, ConnectionResetError):
-        print("    ✓ Disconnected when sending HEADERS before VERACK")
+        print("    ✗ FAILED: Disconnected when sending HEADERS")
         conn.close()
-        return True
+        return False
 
-    # Should be disconnected
-    if conn.wait_for_disconnect(timeout=5):
-        print("    ✓ Disconnected after HEADERS before VERACK")
+    # Node should NOT disconnect - message is silently ignored
+    time.sleep(1.0)
+
+    if conn.is_connected():
+        print("    ✓ HEADERS ignored, connection stayed open (can complete handshake)")
         conn.close()
         return True
     else:
-        print("    ✗ FAILED: Not disconnected after HEADERS before VERACK")
+        print("    ✗ FAILED: Disconnected (should stay connected and ignore message)")
         conn.close()
         return False
 

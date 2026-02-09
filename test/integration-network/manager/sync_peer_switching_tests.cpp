@@ -30,8 +30,8 @@ TEST_CASE("Sync peer banned for misbehavior switches to healthy peer", "[network
 
     uint64_t t = 1000; net.AdvanceTime(t);
 
-    p1.GetNetworkManager().test_hook_check_initial_sync();
-    p2.GetNetworkManager().test_hook_check_initial_sync();
+    p1.CheckInitialSync();
+    p2.CheckInitialSync();
 
     for (int i = 0; i < 20 && (p1.GetTipHeight() < 50 || p2.GetTipHeight() < 50); ++i) {
         t += 1000; net.AdvanceTime(t);
@@ -48,7 +48,7 @@ TEST_CASE("Sync peer banned for misbehavior switches to healthy peer", "[network
     t += 1000; net.AdvanceTime(t);
 
     // Select p1 as sync peer
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Make some progress
@@ -66,7 +66,7 @@ TEST_CASE("Sync peer banned for misbehavior switches to healthy peer", "[network
     t += 2000; net.AdvanceTime(t);
 
     // sync_started flags should be reset, allowing p2 to be selected
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Sync should complete with p2
@@ -93,7 +93,7 @@ TEST_CASE("All peers exhausted then new peer connects and is selected", "[networ
     p1.ConnectTo(miner.GetId());
 
     uint64_t t = 1000; net.AdvanceTime(t);
-    p1.GetNetworkManager().test_hook_check_initial_sync();
+    p1.CheckInitialSync();
 
     for (int i = 0; i < 20 && p1.GetTipHeight() < 60; ++i) {
         t += 2000; net.AdvanceTime(t);
@@ -108,7 +108,7 @@ TEST_CASE("All peers exhausted then new peer connects and is selected", "[networ
     t += 1000; net.AdvanceTime(t);
 
     // Select p1 as sync peer and make some progress
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     for (int i = 0; i < 5 && victim.GetTipHeight() < 25; ++i) {
@@ -128,7 +128,7 @@ TEST_CASE("All peers exhausted then new peer connects and is selected", "[networ
     SimulatedNode p2(4, &net);
     p2.ConnectTo(miner.GetId());
     t += 1000; net.AdvanceTime(t);
-    p2.GetNetworkManager().test_hook_check_initial_sync();
+    p2.CheckInitialSync();
 
     for (int i = 0; i < 20 && p2.GetTipHeight() < 60; ++i) {
         t += 2000; net.AdvanceTime(t);
@@ -141,7 +141,7 @@ TEST_CASE("All peers exhausted then new peer connects and is selected", "[networ
     t += 2000; net.AdvanceTime(t);
 
     // New peer should be selected (sync_started=false for fresh peer)
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Complete sync with new peer
@@ -152,9 +152,9 @@ TEST_CASE("All peers exhausted then new peer connects and is selected", "[networ
     CHECK(victim.GetTipHeight() == 60);
 }
 
-TEST_CASE("Only inbound peers available - no sync peer selected", "[network][sync_peer][switching][inbound]") {
-    // Bitcoin Core single sync peer policy: only outbound peers eligible for sync
-    // When only inbound connections exist, no sync peer should be selected
+TEST_CASE("Inbound peers used as fallback when no outbound available", "[network][sync_peer][switching][inbound]") {
+    // Bitcoin Core behavior: PREFER outbound peers, but FALL BACK to inbound
+    // when no outbound peers are available (m_num_preferred_download_peers == 0)
 
     SimulatedNetwork net(52003);
 
@@ -170,36 +170,21 @@ TEST_CASE("Only inbound peers available - no sync peer selected", "[network][syn
 
     uint64_t t = 1000; net.AdvanceTime(t);
 
-    // Try to select sync peer
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    // Verify victim has only inbound connection
+    CHECK(victim.GetInboundPeerCount() == 1);
+    CHECK(victim.GetOutboundPeerCount() == 0);
+
+    // Try to select sync peer - should fall back to inbound
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
-    // With only inbound peers, victim should remain at genesis
-    int initial_height = victim.GetTipHeight();
-
-    for (int i = 0; i < 10; ++i) {
+    // Sync should proceed via inbound fallback
+    for (int i = 0; i < 30 && victim.GetTipHeight() < 30; ++i) {
         t += 1000; net.AdvanceTime(t);
     }
 
-    // No sync progress should occur
-    CHECK(victim.GetTipHeight() == initial_height);
-
-    // Now victim makes an outbound connection
-    victim.ConnectTo(miner.GetId());
-    t += 3000; net.AdvanceTime(t);
-
-    // Select sync peer again
-    victim.GetNetworkManager().test_hook_check_initial_sync();
-    t += 3000; net.AdvanceTime(t);
-
-    // Now sync should proceed - allow more time
-    for (int i = 0; i < 30 && victim.GetTipHeight() < 30; ++i) {
-        t += 3000; net.AdvanceTime(t);
-    }
-
-    // Main assertion: with only inbound, no progress; test validates the pattern
-    // (Actual sync timing varies in test environment)
-    CHECK(victim.GetTipHeight() >= initial_height);
+    // Victim should have synced from inbound peer
+    CHECK(victim.GetTipHeight() == 30);
 }
 
 TEST_CASE("HandleInv opportunistic sync peer adoption during stall window", "[network][sync_peer][switching][inv]") {
@@ -219,7 +204,7 @@ TEST_CASE("HandleInv opportunistic sync peer adoption during stall window", "[ne
     p1.ConnectTo(miner.GetId());
 
     uint64_t t = 1000; net.AdvanceTime(t);
-    p1.GetNetworkManager().test_hook_check_initial_sync();
+    p1.CheckInitialSync();
 
     // Allow p1 to get only partial chain
     for (int i = 0; i < 5 && p1.GetTipHeight() < 20; ++i) {
@@ -235,7 +220,7 @@ TEST_CASE("HandleInv opportunistic sync peer adoption during stall window", "[ne
     SimulatedNode p2(3, &net);
     p2.ConnectTo(miner.GetId());
     t += 1000; net.AdvanceTime(t);
-    p2.GetNetworkManager().test_hook_check_initial_sync();
+    p2.CheckInitialSync();
 
     for (int i = 0; i < 15 && p2.GetTipHeight() < 40; ++i) {
         t += 1000; net.AdvanceTime(t);
@@ -251,7 +236,7 @@ TEST_CASE("HandleInv opportunistic sync peer adoption during stall window", "[ne
     t += 1000; net.AdvanceTime(t);
 
     // Select p1 as initial sync peer
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Sync from p1
@@ -268,7 +253,7 @@ TEST_CASE("HandleInv opportunistic sync peer adoption during stall window", "[ne
 
     // p2's INV messages should trigger opportunistic switch
     // (In practice, normal sync reselection will pick p2)
-    victim.GetNetworkManager().test_hook_check_initial_sync();
+    victim.CheckInitialSync();
     t += 2000; net.AdvanceTime(t);
 
     // Complete sync with p2

@@ -15,6 +15,7 @@
 #include "network/message.hpp"
 #include "util/hash.hpp"
 #include "chain/chainparams.hpp"
+#include "infra/test_access.hpp"
 
 #include <asio/executor_work_guard.hpp>
 #include <atomic>
@@ -25,6 +26,7 @@
 
 using namespace unicity;
 using namespace unicity::network;
+using unicity::test::PeerTestAccess;
 
 namespace {
 
@@ -35,9 +37,9 @@ static struct TestSetup {
 // RAII guard for timeout overrides
 struct TimeoutGuard {
     TimeoutGuard(std::chrono::milliseconds hs, std::chrono::milliseconds idle) {
-        Peer::SetTimeoutsForTest(hs, idle);
+        PeerTestAccess::SetTimeouts(hs, idle);
     }
-    ~TimeoutGuard() { Peer::ResetTimeoutsForTest(); }
+    ~TimeoutGuard() { PeerTestAccess::ResetTimeouts(); }
 };
 
 class TestIoContext {
@@ -353,75 +355,5 @@ TEST_CASE("DoS: Inactivity timeout - activity prevents disconnect", "[dos][netwo
     attacker_transport.stop();
 }
 
-// =============================================================================
-// UNKNOWN COMMAND RATE LIMIT TESTS (Real TCP)
-// =============================================================================
-
-TEST_CASE("DoS: Unknown command rate limit - real TCP", "[dos][network][timeout][unknown-cmd]") {
-    TestIoContext io;
-    RealTransport transport(io.get());
-
-    std::mutex m;
-    std::condition_variable cv;
-    std::atomic<bool> peer_created{false};
-    PeerPtr victim_peer;
-
-    auto accept_cb = [&](TransportConnectionPtr conn) {
-        victim_peer = Peer::create_inbound(io.get(), conn, protocol::magic::REGTEST, 1);
-        victim_peer->start();
-        peer_created = true;
-        cv.notify_all();
-    };
-
-    uint16_t port = pick_listen_port(transport, accept_cb);
-    if (port == 0) {
-        WARN("Skipping: unable to bind listening port");
-        return;
-    }
-
-    RealTransport attacker_transport(io.get());
-    std::atomic<bool> connected{false};
-    auto attacker_conn = attacker_transport.connect("127.0.0.1", port, [&](bool ok) {
-        connected = ok;
-        cv.notify_all();
-    });
-    REQUIRE(attacker_conn);
-
-    {
-        std::unique_lock<std::mutex> lk(m);
-        cv.wait_for(lk, std::chrono::seconds(2), [&] { return peer_created && connected; });
-    }
-    REQUIRE(peer_created);
-    REQUIRE(connected);
-
-    // Complete handshake first
-    message::VersionMessage ver;
-    ver.version = protocol::PROTOCOL_VERSION;
-    ver.services = protocol::NODE_NETWORK;
-    ver.timestamp = 12345;
-    ver.nonce = 67890;
-    ver.user_agent = "/test/";
-    ver.start_height = 0;
-    (void)attacker_conn->send(build_raw_message(protocol::commands::VERSION, ver.serialize()));
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    (void)attacker_conn->send(build_raw_message(protocol::commands::VERACK, {}));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    // Send 25 unknown commands (threshold is 20)
-    for (int i = 0; i < 25; i++) {
-        std::string cmd = "unknwn" + std::to_string(i % 10);
-        cmd.resize(12, '\0');  // Pad to 12 bytes
-        auto msg = build_raw_message(cmd, {});
-        (void)attacker_conn->send(msg);
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-    // Peer should be disconnected due to unknown command spam
-    CHECK(victim_peer->state() == PeerConnectionState::DISCONNECTED);
-
-    attacker_conn->close();
-    transport.stop();
-    attacker_transport.stop();
-}
+// Note: Unknown command rate limit test moved to unknown_command_rate_limit_tests.cpp
+// to consolidate all unknown command tests in one file.

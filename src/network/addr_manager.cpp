@@ -33,16 +33,11 @@ static constexpr uint32_t ADDRMAN_MAX_FAILURES = 10;
 // In at least this duration
 static constexpr uint32_t ADDRMAN_MIN_FAIL_DAYS = 7;
 
-// After this many consecutive failures, demote a TRIED address back to NEW table
-//   - ADDRMAN_MAX_FAILURES: marks address as "terrible" (for filtering)
-//   - TRIED_DEMOTION_THRESHOLD: triggers table movement (tried→new)
-static constexpr uint32_t TRIED_DEMOTION_THRESHOLD = 10;
-
 // An address in the NEW table is considered "stale" if we haven't heard about it for this many days.
-// Stale NEW entries are removed by cleanup_stale(); TRIED entries are retained even if old (they worked before).
+// Stale NEW entries are filtered lazily at select time and by cleanup_stale().
 static constexpr uint32_t STALE_AFTER_DAYS = 30;
 
-static constexpr uint32_t SECONDS_PER_DAY = 86400;  // Seconds in one day (utility for time math)
+static constexpr uint32_t SECONDS_PER_DAY = 86400;  
 
 // Selection tuning constants:
 // - SELECT_TRIED_BIAS_PERCENT: initial probability (0..100) to draw from TRIED vs NEW,
@@ -69,6 +64,10 @@ static constexpr uint32_t TERRIBLE_FUTURE_TIMESTAMP_SEC = 600;  // 10 minutes
 static constexpr size_t MAX_PER_NETGROUP_NEW = 32;   // Max addresses from same /16 in NEW table
 static constexpr size_t MAX_PER_NETGROUP_TRIED = 8;  // Max addresses from same /16 in TRIED table
 
+// - ADDRMAN_REPLACEMENT_SEC: Don't evict TRIED addresses that succeeded within this window.
+//   Protects recently-verified addresses from being evicted by unproven NEW addresses.
+static constexpr uint32_t ADDRMAN_REPLACEMENT_SEC = 4 * 60 * 60;  // 4 hours
+
 // AddrInfo implementation
 bool AddrInfo::is_stale(uint32_t now) const {
   if (timestamp == 0 || timestamp > now)
@@ -77,7 +76,8 @@ bool AddrInfo::is_stale(uint32_t now) const {
 }
 
 bool AddrInfo::is_terrible(uint32_t now) const {
-  if (last_try > 0 && now > last_try && (now - last_try) < TERRIBLE_GRACE_PERIOD_SEC) {
+  // Never remove things tried in the grace period 
+  if (now - last_try <= TERRIBLE_GRACE_PERIOD_SEC) {
     return false;
   }
 
@@ -103,9 +103,8 @@ bool AddrInfo::is_terrible(uint32_t now) const {
   // N SUCCESSIVE FAILURES IN THE LAST WEEK:
   // Applies to addresses that have succeeded before (last_success > 0)
   // terrible after ADDRMAN_MAX_FAILURES (10) attempts over ADDRMAN_MIN_FAIL_DAYS (7 days)
-  // Compare in seconds to avoid integer division truncation
   if (last_success > 0 && now > last_success && attempts >= ADDRMAN_MAX_FAILURES) {
-    if ((now - last_success) >= (ADDRMAN_MIN_FAIL_DAYS * SECONDS_PER_DAY)) {
+    if ((now - last_success) > (ADDRMAN_MIN_FAIL_DAYS * SECONDS_PER_DAY)) {
       return true;
     }
   }
@@ -115,19 +114,18 @@ bool AddrInfo::is_terrible(uint32_t now) const {
 
 double AddrInfo::GetChance(uint32_t now) const {
   // Probabilistic address selection
-  double fChance = 1.0;
+  double chance = 1.0;
 
   // Deprioritize very recent attempts
-  if (last_try > 0 && now > last_try && (now - last_try) < GETCHANCE_RECENT_ATTEMPT_SEC) {
-    fChance *= 0.01;  // 1% chance if tried in last 10 minutes
+  if (now - last_try < GETCHANCE_RECENT_ATTEMPT_SEC) {
+    chance *= 0.01;
   }
 
   // Deprioritize after each failed attempt: 0.66^attempts
-  // Core caps at 8 attempts: pow(0.66, std::min(nAttempts, 8))
   // This gives: 1 fail=66%, 2=44%, 3=29%, 4=19%, 5=13%, 6=8%, 7=5%, 8+=3.6%
-  fChance *= std::pow(0.66, std::min(attempts, 8));
+  chance *= std::pow(0.66, std::min(attempts, 8));
 
-  return fChance;
+  return chance;
 }
 
 namespace {
@@ -293,11 +291,9 @@ bool AddressManager::add_internal(const protocol::NetworkAddress& addr,
   }
 
   const uint32_t now_s = now();
-  // Clamp future or absurdly old timestamps to now
-  const uint32_t TEN_YEARS = 10u * 365u * 24u * 60u * 60u;
+  // If timestamp is 0, use current time 
+  // Future timestamps are also handled by is_terrible() 
   uint32_t eff_ts = (timestamp == 0 ? now_s : timestamp);
-  if (eff_ts > now_s || now_s - eff_ts > TEN_YEARS)
-    eff_ts = now_s;
 
   AddrInfo info(normalized, eff_ts);
   info.source = source;  
@@ -329,9 +325,10 @@ bool AddressManager::add_internal(const protocol::NetworkAddress& addr,
   // Check per-netgroup limit to prevent single /16 from dominating NEW table
   std::string netgroup = normalized.get_netgroup();
   if (!netgroup.empty()) {
-    size_t netgroup_count = new_netgroup_counts_[netgroup];  // defaults to 0 if not present
+    auto it = new_netgroup_counts_.find(netgroup);
+    size_t netgroup_count = (it != new_netgroup_counts_.end()) ? it->second : 0;
     if (netgroup_count >= MAX_PER_NETGROUP_NEW) {
-      LOG_NET_TRACE("Rejecting address from netgroup {} (limit {} reached)", netgroup, MAX_PER_NETGROUP_NEW);
+      LOG_NET_TRACE("rejecting address from netgroup {} (limit {} reached)", netgroup, MAX_PER_NETGROUP_NEW);
       return false;
     }
   }
@@ -341,9 +338,10 @@ bool AddressManager::add_internal(const protocol::NetworkAddress& addr,
   if (info.has_source()) {
     std::string source_group = source.get_netgroup();
     if (!source_group.empty()) {
-      size_t source_count = source_counts_[source_group];  // defaults to 0 if not present
+      auto it = source_counts_.find(source_group);
+      size_t source_count = (it != source_counts_.end()) ? it->second : 0;
       if (source_count >= MAX_ADDRESSES_PER_SOURCE) {
-        LOG_NET_TRACE("Rejecting address from source {} (per-source limit {} reached)", source_group,
+        LOG_NET_TRACE("rejecting address from source {} (per-source limit {} reached)", source_group,
                       MAX_ADDRESSES_PER_SOURCE);
         return false;
       }
@@ -376,11 +374,30 @@ bool AddressManager::add_internal(const protocol::NetworkAddress& addr,
 }
 
 size_t AddressManager::add_multiple(const std::vector<protocol::TimestampedAddress>& addresses,
-                                    const protocol::NetworkAddress& source) {
+                                    const protocol::NetworkAddress& source,
+                                    uint32_t time_penalty_seconds) {
   std::lock_guard<std::mutex> lock(mutex_);
   size_t added = 0;
   for (const auto& ts_addr : addresses) {
-    if (add_internal(ts_addr.address, source, ts_addr.timestamp)) {
+    // Apply time penalty 
+    // Self-announcements (addr == source) are exempt from penalty
+    uint32_t penalty = time_penalty_seconds;
+    if (ts_addr.address == source) {
+      penalty = 0;  // No penalty for self-announcement
+    }
+
+    // Subtract penalty from timestamp to prevent malicious peers from displacing
+    // legitimate addresses by broadcasting "fake fresh" timestamps.
+    // By penalizing gossiped addresses, we ensure they must compete with older,
+    // verified information and cannot immediately overwrite our table.
+    uint32_t adjusted_ts = ts_addr.timestamp;
+    if (penalty > 0 && adjusted_ts > penalty) {
+      adjusted_ts -= penalty;
+    } else if (penalty > 0) {
+      adjusted_ts = 0;  // Clamp to 0 if penalty exceeds timestamp
+    }
+
+    if (add_internal(ts_addr.address, source, adjusted_ts)) {
       added++;
     }
   }
@@ -388,7 +405,7 @@ size_t AddressManager::add_multiple(const std::vector<protocol::TimestampedAddre
   return added;
 }
 
-void AddressManager::attempt(const protocol::NetworkAddress& addr, bool fCountFailure) {
+void AddressManager::attempt(const protocol::NetworkAddress& addr, bool count_failure) {
   std::lock_guard<std::mutex> lock(mutex_);
   protocol::NetworkAddress normalized = NormalizeAddress(addr);
   AddrKey key(normalized);
@@ -398,7 +415,7 @@ void AddressManager::attempt(const protocol::NetworkAddress& addr, bool fCountFa
   if (auto it = new_.find(key); it != new_.end()) {
     it->second.last_try = t;
 
-    if (fCountFailure && it->second.last_count_attempt < m_last_good_) {
+    if (count_failure && it->second.last_count_attempt < m_last_good_) {
       it->second.last_count_attempt = t;
       it->second.attempts++;
     }
@@ -410,7 +427,7 @@ void AddressManager::attempt(const protocol::NetworkAddress& addr, bool fCountFa
     it->second.last_try = t;
 
     // Same logic for tried addresses
-    if (fCountFailure && it->second.last_count_attempt < m_last_good_) {
+    if (count_failure && it->second.last_count_attempt < m_last_good_) {
       it->second.last_count_attempt = t;
       it->second.attempts++;
     }
@@ -437,13 +454,14 @@ void AddressManager::good(const protocol::NetworkAddress& addr) {
     std::string netgroup = normalized.get_netgroup();
     if (!netgroup.empty()) {
       // O(1) lookup using cached netgroup counts
-      size_t netgroup_count = tried_netgroup_counts_[netgroup];  // defaults to 0 if not present
+      auto it = tried_netgroup_counts_.find(netgroup);
+      size_t netgroup_count = (it != tried_netgroup_counts_.end()) ? it->second : 0;
       if (netgroup_count >= MAX_PER_NETGROUP_TRIED) {
         // Don't move to tried, but still update success info in NEW table
         new_it->second.last_success = current_time;
         new_it->second.last_try = current_time;
         new_it->second.attempts = 0;
-        LOG_NET_TRACE("Address kept in NEW (netgroup {} has {} in TRIED, limit {})", netgroup, netgroup_count,
+        LOG_NET_TRACE("address kept in NEW (netgroup {} has {} in TRIED, limit {})", netgroup, netgroup_count,
                       MAX_PER_NETGROUP_TRIED);
         return;
       }
@@ -452,6 +470,14 @@ void AddressManager::good(const protocol::NetworkAddress& addr) {
     // Check tried table capacity and evict if needed
     if (tried_.size() >= MAX_TRIED_ADDRESSES) {
       evict_worst_tried_address();
+      // If eviction failed (all addresses protected by grace period), keep in NEW
+      if (tried_.size() >= MAX_TRIED_ADDRESSES) {
+        new_it->second.last_success = current_time;
+        new_it->second.last_try = current_time;
+        new_it->second.attempts = 0;
+        LOG_NET_TRACE("address kept in NEW (TRIED full, all protected by grace period)");
+        return;
+      }
     }
 
     // Move from new to tried
@@ -483,7 +509,7 @@ void AddressManager::good(const protocol::NetworkAddress& addr) {
       tried_netgroup_counts_[netgroup]++;
     }
 
-    LOG_NET_TRACE("Address moved from 'new' to 'tried'. New size: {}, Tried size: {}", new_.size(), tried_.size());
+    LOG_NET_TRACE("address moved from 'new' to 'tried'. New size: {}, Tried size: {}", new_.size(), tried_.size());
     return;
   }
 
@@ -499,67 +525,36 @@ void AddressManager::good(const protocol::NetworkAddress& addr) {
   LOG_NET_WARN("AddressManager::good() called for unknown address");
 }
 
-void AddressManager::failed(const protocol::NetworkAddress& addr) {
+void AddressManager::connected(const protocol::NetworkAddress& addr) {
   std::lock_guard<std::mutex> lock(mutex_);
   protocol::NetworkAddress normalized = NormalizeAddress(addr);
   AddrKey key(normalized);
+  uint32_t current_time = now();
 
-  // Update in new table
-  auto new_it = new_.find(key);
-  if (new_it != new_.end()) {
-    new_it->second.attempts++;
+  // Called at peer disconnect to update timestamp.
+  // The 20-minute guard prevents redundant updates if called multiple times;
+  // in practice this is only called once per connection at disconnect.
+  static constexpr uint32_t CONNECTED_UPDATE_INTERVAL_SEC = 20 * 60;  // 20 minutes
 
-    // Remove if too many failures
-    if (new_it->second.is_terrible(now())) {
-      // Update netgroup count cache before removing
-      std::string netgroup = normalized.get_netgroup();
-      if (!netgroup.empty() && new_netgroup_counts_[netgroup] > 0) {
-        new_netgroup_counts_[netgroup]--;
-      }
-
-      // Decrement source count if this address had source tracking
-      if (new_it->second.has_source()) {
-        std::string source_group = new_it->second.source.get_netgroup();
-        if (!source_group.empty() && source_counts_[source_group] > 0) {
-          source_counts_[source_group]--;
-        }
-      }
-
-      new_.erase(new_it);
-      // Performance: Incremental vector update (O(n) removal)
-      new_keys_.erase(std::remove(new_keys_.begin(), new_keys_.end(), key), new_keys_.end());
+  // Check new table
+  if (auto it = new_.find(key); it != new_.end()) {
+    if (current_time > it->second.timestamp &&
+        (current_time - it->second.timestamp) > CONNECTED_UPDATE_INTERVAL_SEC) {
+      it->second.timestamp = current_time;
     }
     return;
   }
 
-  // Update in tried table
-  auto tried_it = tried_.find(key);
-  if (tried_it != tried_.end()) {
-    tried_it->second.attempts++;
-
-    // Move back to new table if too many failures
-    if (tried_it->second.attempts >= TRIED_DEMOTION_THRESHOLD) {
-      // Update netgroup count caches (move from tried to new)
-      std::string netgroup = normalized.get_netgroup();
-      if (!netgroup.empty()) {
-        if (tried_netgroup_counts_[netgroup] > 0) {
-          tried_netgroup_counts_[netgroup]--;
-        }
-        new_netgroup_counts_[netgroup]++;
-      }
-
-      tried_it->second.tried = false;
-      new_[key] = std::move(tried_it->second);
-      tried_.erase(tried_it);
-      // Performance: Incremental vector updates (O(n) removal, O(1) append)
-      tried_keys_.erase(std::remove(tried_keys_.begin(), tried_keys_.end(), key), tried_keys_.end());
-      new_keys_.push_back(key);
+  // Check tried table
+  if (auto it = tried_.find(key); it != tried_.end()) {
+    if (current_time > it->second.timestamp &&
+        (current_time - it->second.timestamp) > CONNECTED_UPDATE_INTERVAL_SEC) {
+      it->second.timestamp = current_time;
     }
     return;
   }
 
-  // Address not found - this is normal for manual connections, DNS seeds, anchors
-  LOG_NET_TRACE("AddressManager::failed() called for unknown address");
+  // Address not found - normal for manual connections, DNS seeds, etc.
 }
 
 std::optional<protocol::NetworkAddress> AddressManager::select() {
@@ -573,63 +568,61 @@ std::optional<protocol::NetworkAddress> AddressManager::select() {
 
   const uint32_t now_ts = now();
 
+  // Decide ONCE which table to search, then loop within it
+  // Use 50% chance to choose between tried and new (when both available)
+  std::uniform_int_distribution<int> bias_dist(0, 99);
+  bool search_tried;
+  if (tried_keys_.empty()) {
+    search_tried = false;
+  } else if (new_keys_.empty()) {
+    search_tried = true;
+  } else {
+    search_tried = bias_dist(local_rng) < SELECT_TRIED_BIAS_PERCENT;
+  }
+
+  // Get reference to the selected table's keys
+  const auto& keys = search_tried ? tried_keys_ : new_keys_;
+  const auto& table = search_tried ? tried_ : new_;
+
+  if (keys.empty()) {
+    return std::nullopt;
+  }
+
   // Escalating chance_factor for probabilistic selection
   // Start with chance_factor = 1.0, multiply by 1.2 after each failed selection
   // This ensures we eventually select something even if all addresses have low GetChance()
   double chance_factor = 1.0;
   std::uniform_real_distribution<double> chance_dist(0.0, 1.0);
-  std::uniform_int_distribution<int> bias_dist(0, 99);
+  std::uniform_int_distribution<size_t> idx_dist(0, keys.size() - 1);
 
-  // Escalating chance_factor, We'll use a reasonable iteration limit
-  // to prevent infinite loops in edge cases
+  // Escalating chance_factor guarantees selection - use iteration limit for safety
   const size_t max_iterations = 200;
 
   for (size_t iteration = 0; iteration < max_iterations; ++iteration) {
-    // Decide which table to search THIS iteration (allows alternation)
-    // Prefer tried addresses (SELECT_TRIED_BIAS_PERCENT% of the time)
-    bool use_tried = !tried_keys_.empty() && (new_keys_.empty() || bias_dist(local_rng) < SELECT_TRIED_BIAS_PERCENT);
-
     // Pick random entry from selected table (O(1) using key vectors)
-    if (use_tried) {
-      if (tried_keys_.empty())
-        continue;
-      std::uniform_int_distribution<size_t> idx_dist(0, tried_keys_.size() - 1);
-      size_t idx = idx_dist(local_rng);
-      const AddrKey& key = tried_keys_[idx];
-      auto it = tried_.find(key);
-      if (it == tried_.end())
-        continue;  // Key vector out of sync, skip
-      const AddrInfo& info = it->second;
+    size_t idx = idx_dist(local_rng);
+    const AddrKey& key = keys[idx];
+    auto it = table.find(key);
+    if (it == table.end())
+      continue;  // Key vector out of sync, skip
+    const AddrInfo& info = it->second;
 
-      // Core uses: if (randbits(30) < chance_factor * GetChance() * (1<<30))
-      // We use: if (rand(0,1) < chance_factor * GetChance())
-      double effective_chance = std::min(1.0, chance_factor * info.GetChance(now_ts));
-      if (chance_dist(local_rng) < effective_chance) {
-        return info.address;
-      }
-    } else {
-      if (new_keys_.empty())
-        continue;
-      std::uniform_int_distribution<size_t> idx_dist(0, new_keys_.size() - 1);
-      size_t idx = idx_dist(local_rng);
-      const AddrKey& key = new_keys_[idx];
-      auto it = new_.find(key);
-      if (it == new_.end())
-        continue;  // Key vector out of sync, skip
-      const AddrInfo& info = it->second;
+    // Skip terrible addresses 
+    if (info.is_terrible(now_ts))
+      continue;
 
-      double effective_chance = std::min(1.0, chance_factor * info.GetChance(now_ts));
-      if (chance_dist(local_rng) < effective_chance) {
-        return info.address;
-      }
+    // if (rand(0,1) < chance_factor * GetChance())
+    double effective_chance = std::min(1.0, chance_factor * info.GetChance(now_ts));
+    if (chance_dist(local_rng) < effective_chance) {
+      return info.address;
     }
 
     // Failed to select - increase chance_factor for next iteration
     chance_factor *= 1.2;
   }
 
-  // Escalating chance_factor guarantees selection before 200 iterations.
-  LOG_WARN("select() exhausted {} iterations - bug in key vector sync", max_iterations);
+  // All addresses may be terrible, or key vector out of sync
+  LOG_NET_TRACE("select() exhausted {} iterations", max_iterations);
   return std::nullopt;
 }
 
@@ -641,20 +634,21 @@ std::optional<protocol::NetworkAddress> AddressManager::select_new_for_feeler() 
     return std::nullopt;
   }
 
-  // Use per-request RNG to prevent seed prediction attacks
+  // Use per-request RNG 
   auto local_rng = make_request_rng();
 
-  // Prefer addresses not tried in the last 10 minutes
-  // This prevents wasting feeler connections on recently-probed peers
-  static constexpr uint32_t FEELER_MIN_RETRY_SECONDS = 600;  // 10 minutes
   const uint32_t now_ts = now();
 
-  // Try up to 50 random selections to find an address not recently tried
-  // If all addresses were recently tried, fall back to any address
-  for (int attempts = 0; attempts < 50; ++attempts) {
-    if (new_keys_.empty())
-      return std::nullopt;  // Defense-in-depth
-    std::uniform_int_distribution<size_t> idx_dist(0, new_keys_.size() - 1);
+  // Use GetChance() probabilistic selection
+  // This deprioritizes addresses with many failed attempts
+  double chance_factor = 1.0;
+  std::uniform_real_distribution<double> chance_dist(0.0, 1.0);
+  std::uniform_int_distribution<size_t> idx_dist(0, new_keys_.size() - 1);
+
+  // Escalating chance_factor guarantees selection
+  const size_t max_iterations = 200;
+
+  for (size_t iteration = 0; iteration < max_iterations; ++iteration) {
     size_t idx = idx_dist(local_rng);
     const AddrKey& key = new_keys_[idx];
     auto it = new_.find(key);
@@ -662,34 +656,44 @@ std::optional<protocol::NetworkAddress> AddressManager::select_new_for_feeler() 
       continue;  // Key vector out of sync, skip
     const AddrInfo& info = it->second;
 
-    // Prefer addresses never tried or tried more than 10 minutes ago
-    if (info.last_try == 0 || now_ts < info.last_try || (now_ts - info.last_try) >= FEELER_MIN_RETRY_SECONDS) {
+    // Skip terrible/stale addresses (Core's lazy filtering)
+    if (info.is_terrible(now_ts) || info.is_stale(now_ts))
+      continue;
+
+    // Probabilistic selection using GetChance()
+    double effective_chance = std::min(1.0, chance_factor * info.GetChance(now_ts));
+    if (chance_dist(local_rng) < effective_chance) {
       return info.address;
     }
+
+    // Failed to select - increase chance_factor for next iteration
+    chance_factor *= 1.2;
   }
 
-  // Fallback: all addresses were recently tried, return any address
-  if (new_keys_.empty())
-    return std::nullopt;
-  std::uniform_int_distribution<size_t> idx_dist(0, new_keys_.size() - 1);
-  size_t idx = idx_dist(local_rng);
-  const AddrKey& key = new_keys_[idx];
-  auto it = new_.find(key);
-  if (it == new_.end())
-    return std::nullopt;  // Key vector out of sync
-  return it->second.address;
+  return std::nullopt;
 }
 
-std::vector<protocol::TimestampedAddress> AddressManager::get_addresses(size_t max_count) {
+std::vector<protocol::TimestampedAddress> AddressManager::get_addresses(size_t max_count, size_t max_pct) {
   std::lock_guard<std::mutex> lock(mutex_);
+
+  // Limit by both absolute count and percentage
+  // max_count=0 means "no limit", max_pct=0 means "no percentage limit"
+  // This prevents peers from extracting the entire address table via repeated GETADDR
+  size_t total_size = tried_.size() + new_.size();
+  size_t limit = (max_count == 0) ? total_size : max_count;
+  if (max_pct > 0 && max_pct <= 100) {
+    size_t pct_limit = total_size * max_pct / 100;
+    limit = std::min(limit, pct_limit);
+  }
+
   std::vector<protocol::TimestampedAddress> result;
-  result.reserve(std::min(max_count, tried_.size() + new_.size()));
+  result.reserve(std::min(limit, total_size));
 
   const uint32_t now_s = now();
 
   // Add tried addresses first (filter invalid/terrible defensively)
   for (const auto& [key, info] : tried_) {
-    if (result.size() >= max_count)
+    if (result.size() >= limit)
       break;
     if (!info.address.is_routable())
       continue;
@@ -700,7 +704,7 @@ std::vector<protocol::TimestampedAddress> AddressManager::get_addresses(size_t m
 
   // Add new addresses (skip invalid/terrible)
   for (const auto& [key, info] : new_) {
-    if (result.size() >= max_count)
+    if (result.size() >= limit)
       break;
     if (!info.address.is_routable())
       continue;
@@ -878,7 +882,7 @@ bool AddressManager::Load(const std::string& filepath) {
 
     // Calculate total size without calling size() to avoid recursive lock
     size_t total_size = tried_.size() + new_.size();
-    LOG_NET_INFO("Successfully loaded {} addresses ({} tried, {} new)", total_size, tried_.size(), new_.size());
+    LOG_NET_INFO("successfully loaded {} addresses ({} tried, {} new)", total_size, tried_.size(), new_.size());
     return true;
 
   } catch (const std::exception& e) {
@@ -953,7 +957,7 @@ void AddressManager::evict_worst_new_address() {
   new_.erase(*worst_key);
   new_keys_.erase(std::remove(new_keys_.begin(), new_keys_.end(), *worst_key), new_keys_.end());
 
-  LOG_NET_TRACE("Evicted address from new table (capacity limit). New size: {}", new_.size());
+  LOG_NET_TRACE("evicted address from new table (capacity limit). New size: {}", new_.size());
 }
 
 // Evict the worst address from the TRIED table to make room for a newly-proven address.
@@ -962,26 +966,29 @@ void AddressManager::evict_worst_new_address() {
 // When at capacity (MAX_TRIED_ADDRESSES) and we need to promote an address from NEW,
 // we must evict before adding.
 //
-// Eviction priority (different from NEW table):
-//   1. Most failed connection attempts - indicates the address may no longer be valid
-//   2. Oldest last_success as tie-breaker among addresses with equal attempt counts
-//
-// Rationale: TRIED contains verified-good addresses. Addresses with many failed
-// reconnection attempts are likely offline/invalid, so evict those first to keep
-// the table populated with actually-reachable peers.
+// Rationale: Recently-verified addresses shouldn't be evicted by unproven NEW entries.
+// Demotion preserves address information so it can be re-tried via feelers.
 void AddressManager::evict_worst_tried_address() {
   if (tried_.empty()) {
     return;
   }
 
+  const uint32_t current_time = now();
   std::optional<AddrKey> worst_key;
   uint32_t worst_last_success = UINT32_MAX;
   int worst_attempts = -1;
 
   // Find the worst address to evict from tried table
-  // Priority: most failed attempts > oldest last_success (tie-breaker)
+  // Skip addresses protected by the  grace period 
   for (const auto& [key, info] : tried_) {
-    // Compare: higher attempts is worse, or same attempts with older last_success
+    // Grace period: don't evict addresses that succeeded recently
+    if (info.last_success > 0 && current_time > info.last_success &&
+        (current_time - info.last_success) < ADDRMAN_REPLACEMENT_SEC) {
+      continue;  // Protected by 4-hour grace period
+    }
+
+    // Among unprotected addresses, pick worst
+    // Priority: most failed attempts > oldest last_success (tie-breaker)
     bool is_worse = (info.attempts > worst_attempts) ||
                     (info.attempts == worst_attempts && info.last_success < worst_last_success);
     if (is_worse) {
@@ -992,24 +999,75 @@ void AddressManager::evict_worst_tried_address() {
   }
 
   if (!worst_key.has_value()) {
-    // Should never happen, but safety check
+    // All addresses protected by grace period - can't evict
+    LOG_NET_TRACE("evict_worst_tried_address: all addresses protected by grace period");
     return;
   }
 
-  // Update netgroup count cache before removing
   auto it = tried_.find(*worst_key);
-  if (it != tried_.end()) {
-    std::string netgroup = it->second.address.get_netgroup();
-    if (!netgroup.empty() && tried_netgroup_counts_[netgroup] > 0) {
-      tried_netgroup_counts_[netgroup]--;
+  if (it == tried_.end()) {
+    return;  // Should never happen
+  }
+
+  // Demote to NEW table instead of deleting
+  // This preserves address info so it can be re-verified via feeler connections
+  AddrInfo demoted = it->second;
+  demoted.tried = false;
+  demoted.attempts = 0;  // Reset failure count for fresh start in NEW
+
+  std::string netgroup = demoted.address.get_netgroup();
+
+  // Update TRIED netgroup count
+  if (!netgroup.empty() && tried_netgroup_counts_[netgroup] > 0) {
+    tried_netgroup_counts_[netgroup]--;
+  }
+
+  // Remove from TRIED table
+  tried_.erase(it);
+  tried_keys_.erase(std::remove(tried_keys_.begin(), tried_keys_.end(), *worst_key), tried_keys_.end());
+
+  // Try to add to NEW table (respecting per-netgroup limits)
+  // If NEW is full or netgroup limit reached, the address is lost
+  bool demoted_to_new = false;
+  if (new_.size() < MAX_NEW_ADDRESSES) {
+    auto it = netgroup.empty() ? new_netgroup_counts_.end() : new_netgroup_counts_.find(netgroup);
+    size_t netgroup_count = (it != new_netgroup_counts_.end()) ? it->second : 0;
+    if (netgroup_count < MAX_PER_NETGROUP_NEW) {
+      AddrKey new_key(demoted.address);
+      new_[new_key] = demoted;
+      new_keys_.push_back(new_key);
+      if (!netgroup.empty()) {
+        new_netgroup_counts_[netgroup]++;
+      }
+      // Restore source count for demoted address (mirrors add_internal behavior)
+      if (demoted.has_source()) {
+        std::string source_group = demoted.source.get_netgroup();
+        if (!source_group.empty()) {
+          source_counts_[source_group]++;
+        }
+      }
+      demoted_to_new = true;
+      LOG_NET_TRACE("demoted address from TRIED to NEW. Tried: {}, New: {}", tried_.size(), new_.size());
     }
   }
 
-  // Remove from tried table
-  tried_.erase(*worst_key);
-  tried_keys_.erase(std::remove(tried_keys_.begin(), tried_keys_.end(), *worst_key), tried_keys_.end());
+  if (!demoted_to_new) {
+    LOG_NET_TRACE("evicted address from TRIED (NEW full or netgroup limit). Tried: {}", tried_.size());
+  }
+}
 
-  LOG_NET_TRACE("Evicted address from tried table (capacity limit). Tried size: {}", tried_.size());
+std::vector<AddrInfo> AddressManager::GetEntries(bool from_tried) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  const auto& table = from_tried ? tried_ : new_;
+  std::vector<AddrInfo> result;
+  result.reserve(table.size());
+
+  for (const auto& [key, info] : table) {
+    result.push_back(info);
+  }
+
+  return result;
 }
 
 }  // namespace network

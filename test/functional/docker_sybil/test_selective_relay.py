@@ -58,10 +58,10 @@ def create_version_message() -> bytes:
     payload += struct.pack("<q", int(time.time()))
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += b"\x00" * 10 + b"\xff\xff" + socket.inet_aton("127.0.0.1")
-    payload += struct.pack(">H", 8333)
+    payload += struct.pack(">H", 9590)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += b"\x00" * 10 + b"\xff\xff" + socket.inet_aton("127.0.0.1")
-    payload += struct.pack(">H", 8333)
+    payload += struct.pack(">H", 9590)
     payload += struct.pack("<Q", nonce)
     user_agent = b"/SelectiveRelayTest:1.0/"
     payload += bytes([len(user_agent)]) + user_agent

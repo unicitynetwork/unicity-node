@@ -187,10 +187,10 @@ def create_version():
     payload += struct.pack("<q", int(time.time()))
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += b"\\x00" * 10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1")
-    payload += struct.pack(">H", 8333)
+    payload += struct.pack(">H", 9590)
     payload += struct.pack("<Q", NODE_NETWORK)
     payload += b"\\x00" * 10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1")
-    payload += struct.pack(">H", 8333)
+    payload += struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     ua = b"/BlockRelayTest/"
     payload += bytes([len(ua)]) + ua
@@ -399,8 +399,8 @@ def create_version():
     payload = struct.pack("<i", 70016)
     payload += struct.pack("<Q", 1)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x06/Test/"
     payload += struct.pack("<i", 0)
@@ -434,7 +434,7 @@ try:
         addr_payload += struct.pack("<Q", 1)   # services
         # IP: 99.X.Y.Z (unique per address)
         addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([99, i // 256, i % 256, 1])
-        addr_payload += struct.pack(">H", 8333)  # port
+        addr_payload += struct.pack(">H", 9590)  # port
 
     s.sendall(create_msg("addr", addr_payload))
     print("SENT:50")
@@ -530,8 +530,8 @@ def create_version():
     payload = struct.pack("<i", 70016)
     payload += struct.pack("<Q", 1)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x0c/Poisoner/"
     payload += struct.pack("<i", 0)
@@ -566,7 +566,7 @@ try:
             x = (batch * 100 + i) // 256
             y = (batch * 100 + i) % 256
             addr_payload += b"\\x00"*10 + b"\\xff\\xff" + bytes([88, x, y, 1])
-            addr_payload += struct.pack(">H", 8333)
+            addr_payload += struct.pack(">H", 9590)
 
         s.sendall(create_msg("addr", addr_payload))
         time.sleep(0.2)
@@ -681,8 +681,8 @@ def create_version():
     payload = struct.pack("<i", 70016)
     payload += struct.pack("<Q", 1)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x09/Attacker/"
     payload += struct.pack("<i", 0)
@@ -803,8 +803,8 @@ def create_version():
     payload = struct.pack("<i", 70016)
     payload += struct.pack("<Q", 1)
     payload += struct.pack("<q", int(time.time()))
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
-    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 8333)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
+    payload += struct.pack("<Q", 1) + b"\\x00"*10 + b"\\xff\\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", 9590)
     payload += struct.pack("<Q", random.getrandbits(64))
     payload += b"\\x0b/Enumerator/"
     payload += struct.pack("<i", 0)

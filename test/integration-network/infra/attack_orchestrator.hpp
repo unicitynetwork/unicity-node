@@ -282,7 +282,7 @@ public:
         }
 
         // Wait for connections to establish
-        network_->AdvanceTime(network_->GetCurrentTime() + 2000);
+        network_->AdvanceTime(2000);
 
         // Count successful connections
         for (const auto& attacker : attackers) {
@@ -327,7 +327,7 @@ public:
      */
     void WaitForProtectionExpiry(int seconds = 61) {
         for (int i = 0; i < seconds; i++) {
-            network_->AdvanceTime(network_->GetCurrentTime() + 1000);
+            network_->AdvanceTime(1000);
         }
     }
 

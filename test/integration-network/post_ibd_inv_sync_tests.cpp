@@ -16,10 +16,9 @@ static void SetZeroLatency(SimulatedNetwork& network) {
     network.SetNetworkConditions(c);
 }
 
-TEST_CASE("Post-IBD INV triggers header sync", "[network][post-ibd][inv]") {
+TEST_CASE("Post-IBD block announcement triggers sync", "[network][post-ibd]") {
     SimulatedNetwork net(924242);
     SetZeroLatency(net);
-    net.EnableCommandTracking(true);
 
     // Two nodes: A (miner), B (follower)
     SimulatedNode A(1, &net);
@@ -37,14 +36,9 @@ TEST_CASE("Post-IBD INV triggers header sync", "[network][post-ibd][inv]") {
     REQUIRE(A.GetTipHeight() == 20);
     REQUIRE(B.GetTipHeight() == 20);
 
-    // Baseline GETHEADERS count from B->A
-    int pre = net.CountCommandSent(B.GetId(), A.GetId(), protocol::commands::GETHEADERS);
-
-    // Mine one more block on A; B should GETHEADERS on INV even post-IBD and catch up
+    // Mine one more block on A; B receives direct HEADERS announcement and syncs
     (void)A.MineBlock();
     for (int i = 0; i < 5; ++i) { t += 50; net.AdvanceTime(t); }
 
-    int post = net.CountCommandSent(B.GetId(), A.GetId(), protocol::commands::GETHEADERS);
-    REQUIRE(post > pre);
     REQUIRE(B.GetTipHeight() == A.GetTipHeight());
 }

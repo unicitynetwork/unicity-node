@@ -1,3 +1,6 @@
+// Copyright (c) 2025 The Unicity Foundation
+// Distributed under the MIT software license
+
 #pragma once
 
 /*
@@ -84,12 +87,12 @@ bool ParseIPPort(const std::string& address_port, std::string& out_ip, uint16_t&
 bool IsRoutable(const std::string& address);
 
 /**
- * Check if an address is internal (private network, loopback, etc.)
+ * Check if an address is private/non-public (RFC1918, ULA, CGNAT, link-local, etc.)
  *
  * @param address IP address string
- * @return true if internal
+ * @return true if private/non-public
  */
-bool IsInternal(const std::string& address);
+bool IsPrivate(const std::string& address);
 
 /**
  * Check if an address is local (loopback)
@@ -175,6 +178,18 @@ std::string GetIPv4Netgroup(uint8_t b0, uint8_t b1) noexcept;
  * @return Netgroup string like "2001:0db8"
  */
 std::string GetIPv6Netgroup(const uint8_t* bytes) noexcept;
+
+/**
+ * Check if a port is commonly used 
+ *
+ * This is a soft filter - after 50 failed attempts, bad ports are allowed
+ * to ensure we can still connect if no other addresses are available.
+ *
+ *
+ * @param port Port number to check
+ * @return true if the port is commonly used 
+ */
+bool IsBadPort(uint16_t port) noexcept;
 
 }  // namespace util
 }  // namespace unicity

@@ -221,19 +221,19 @@ The network layer manages P2P connections and blockchain synchronization:
 │  (Coordinator, io_context owner, message routing)           │
 └─────────────────────────────────────────────────────────────┘
                            │
-         ┌─────────────────┼─────────────────┐
-         ▼                 ▼                 ▼
-┌────────────────┐ ┌──────────────┐ ┌─────────────────┐
-│ PeerLifecycle  │ │   Peer       │ │  Blockchain     │
-│   Manager      │ │  Discovery   │ │    Sync         │
-│                │ │   Manager    │ │   Manager       │
-└────────────────┘ └──────────────┘ └─────────────────┘
-         │                 │                 │
-         ▼                 ▼                 ▼
-  ┌──────────┐    ┌──────────────┐  ┌──────────────┐
-  │Connection│    │AddressManager│  │HeaderSync    │
-  │  State   │    │AnchorManager │  │BlockRelay    │
-  └──────────┘    └──────────────┘  └──────────────┘
+         ┌─────────────────┼──────────────────────────────────┐
+         ▼                 ▼                                  ▼
+┌────────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────────┐
+│Connection      │ │   AddrRelay  │ │  HeaderSync  │ │    Helpers      │
+│   Manager      │ │    Manager   │ │   Manager    │ │ (Ban, Evict,    │
+│                │ │              │ │              │ │  Misbehavior)   │
+└────────────────┘ └──────────────┘ └──────────────┘ └─────────────────┘
+         │                 │                 │                 │
+         ▼                 ▼                 ▼                 ▼
+  ┌──────────┐    ┌──────────────┐  ┌──────────────┐    ┌───────────┐
+  │Peer State│    │AddressManager│  │Sync State    │    │Ban Tables │
+  │          │    │AnchorManager │  │              │    │           │
+  └──────────┘    └──────────────┘  └──────────────┘    └───────────┘
 ```
 
 ### Network Manager
@@ -251,7 +251,7 @@ The network layer manages P2P connections and blockchain synchronization:
 - No locks needed for network state
 - Application layer (validation, mining) runs on separate threads
 
-### Peer Lifecycle Manager
+### Connection Manager
 
 **Responsibilities**:
 - Connection state machine management
@@ -270,7 +270,7 @@ DISCONNECTED → CONNECTING → CONNECTED → VERSION_SENT → READY
               DISCONNECTED DISCONNECTED DISCONNECTED READY
 ```
 
-### Peer Discovery Manager
+### Address Relay Manager
 
 **Responsibilities**:
 - Address discovery and storage
@@ -288,17 +288,16 @@ DISCONNECTED → CONNECTING → CONNECTED → VERSION_SENT → READY
 - Collision-resistant selection algorithm
 - Exponential backoff on failures
 
-### Blockchain Sync Manager
+### Header Sync Manager
 
 **Responsibilities**:
 - Initial Block Download (IBD) coordination
-- Header synchronization
-- Block announcement and relay
+- Header synchronization via GETHEADERS/HEADERS
+- Block announcement via direct HEADERS (no INV/GETDATA needed for headers-only)
 - Sync peer selection and rotation
 
 **Components**:
 - **HeaderSyncManager**: GETHEADERS/HEADERS protocol
-- **BlockRelayManager**: INV/GETDATA for block announcements
 
 **Sync Strategy**:
 - Single sync peer during IBD (prevents resource exhaustion)
@@ -329,12 +328,11 @@ NetworkManager::handle_message()
 MessageDispatcher
       │
       └─► Route to appropriate manager:
-          ├─► VERACK      → PeerLifecycleManager
-          ├─► ADDR        → PeerDiscoveryManager
-          ├─► GETADDR     → PeerDiscoveryManager
-          ├─► HEADERS     → BlockchainSyncManager
-          ├─► INV         → BlockchainSyncManager
-          └─► PING/PONG   → PeerLifecycleManager
+          ├─► VERACK      → ConnectionManager
+          ├─► ADDR        → AddrRelayManager
+          ├─► GETADDR     → AddrRelayManager
+          ├─► HEADERS     → HeaderSyncManager
+          └─► PING/PONG   → ConnectionManager
 ```
 
 #### Outbound Messages
@@ -419,9 +417,7 @@ Syncing Node           Synced Node
 ```
 Mining Node            Peer Node
   |                        |
-  |<----- INV -------------|
-  |---- GETHEADERS ------->|
-  |<---- HEADERS ----------|
+  |<----- HEADERS ---------|
   |                        |
 ```
 
@@ -472,9 +468,9 @@ Block Arrives:
 - ChainstateManager: Coordinates validation
 
 **Network Layer**:
-- PeerLifecycleManager: Connection management
-- PeerDiscoveryManager: Address management
-- BlockchainSyncManager: Synchronization logic
+- ConnectionManager: Connection management & lifecycle
+- AddrRelayManager: Address discovery & storage
+- HeaderSyncManager: Synchronization logic
 
 
 ### Thread Safety

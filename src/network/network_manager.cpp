@@ -9,27 +9,24 @@
 #include "chain/validation.hpp"
 #include "network/addr_manager.hpp"
 #include "network/anchor_manager.hpp"
-#include "network/block_relay_manager.hpp"
 #include "network/connection_types.hpp"
 #include "network/header_sync_manager.hpp"
 #include "network/message.hpp"
 #include "network/message_dispatcher.hpp"
 #include "network/nat_manager.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 #include "network/real_transport.hpp"
 #include "util/logging.hpp"
 #include "util/netaddress.hpp"
 #include "util/time.hpp"
 
 #include <algorithm>
-#include <filesystem>
 #include <functional>
 #include <optional>
 #include <random>
 #include <utility>
 
 #include <asio/executor_work_guard.hpp>
-#include <asio/post.hpp>
 
 namespace unicity {
 namespace network {
@@ -42,28 +39,24 @@ static uint64_t generate_nonce(const NetworkManager::Config& config) {
     return *config.test_nonce;
   }
 
-  // Production: high-quality random nonce generated once
-  // static random_device prevents fd-exhaustion on OSes where random_device opens /dev/urandom each call
   static std::random_device rd;
   std::mt19937_64 gen(rd());
   std::uniform_int_distribution<uint64_t> dis;
   return dis(gen);
 }
 
-NetworkManager::NetworkManager(validation::ChainstateManager& chainstate_manager, const Config& config,
-                               std::shared_ptr<Transport> transport,
-                               std::shared_ptr<asio::io_context> external_io_context)
-    : config_(config), local_nonce_(generate_nonce(config)),
-      // Shared ownership of io_context ensures it outlives all async operations and timers
-      // IMPORTANT: Must be initialized before transport_ since RealTransport needs io_context
-      io_context_(external_io_context ? external_io_context : std::make_shared<asio::io_context>()),
-      external_io_context_(external_io_context != nullptr),  // Track if context was provided externally
-      // Initialize transport in member init list to avoid half-formed state
-      // If transport is null, create default RealTransport with our io_context
-      // This ensures transport_ is always valid if constructor succeeds
-      transport_(transport ? transport : std::make_shared<RealTransport>(*io_context_)),
-      chainstate_manager_(chainstate_manager) {
-  // SECURITY: Validate required config (fail fast on misconfiguration)
+NetworkManager::NetworkManager(
+    validation::ChainstateManager& chainstate_manager,
+    const Config& config,
+    std::shared_ptr<Transport> transport,
+    std::shared_ptr<asio::io_context> external_io_context)
+    : config_(config)
+    , local_nonce_(generate_nonce(config))
+    , io_context_(external_io_context ? external_io_context : std::make_shared<asio::io_context>())
+    , external_io_context_(external_io_context != nullptr)
+    , transport_(transport ? transport : std::make_shared<RealTransport>(*io_context_))
+    , chainstate_manager_(chainstate_manager)
+{
   if (config_.network_magic == 0) {
     throw std::invalid_argument(
         "NetworkManager::Config::network_magic must be set to chain-specific value (mainnet/testnet/regtest)");
@@ -71,35 +64,39 @@ NetworkManager::NetworkManager(validation::ChainstateManager& chainstate_manager
 
   feeler_rng_.seed(std::random_device{}());
 
-  // transport_ is now guaranteed to be non-null at this point
-  // If RealTransport construction threw, we never reach here and destructor won't call transport_->stop()
-
   LOG_NET_TRACE("NetworkManager initialized (local nonce: {}, external_io_context: {})", local_nonce_,
                 external_io_context_ ? "yes" : "no");
 
   // Set process-wide nonce for all peers (self-connection detection)
   // In test mode, each node gets unique nonce via set_local_nonce() calls
-  // In production, all peers share process-wide nonce for reliable self-connect detection
+  // In production, all peers share process-wide nonce 
   if (!config.test_nonce.has_value()) {
     Peer::set_process_nonce(local_nonce_);
   }
 
   // Create components in dependency order (3-manager architecture)
-  // PeerLifecycleManager
-  PeerLifecycleManager::Config peer_config;
+  // ConnectionManager
+  ConnectionManager::Config peer_config;
   peer_config.max_outbound_peers = config_.max_outbound_connections;
   peer_config.target_outbound_peers = config_.max_outbound_connections;
-  peer_manager_ = std::make_unique<PeerLifecycleManager>(*io_context_, peer_config, config_.datadir);
+  peer_config.max_inbound_peers = config_.max_inbound_connections;
+  peer_manager_ = std::make_unique<ConnectionManager>(*io_context_, peer_config, config_.datadir);
 
-  // PeerDiscoveryManager (owns AddressManager + AnchorManager, injects itself into PeerLifecycleManager)
-  discovery_manager_ = std::make_unique<PeerDiscoveryManager>(peer_manager_.get(), config_.datadir);
+  // AddrRelayManager (owns AddressManager + AnchorManager, injects itself into ConnectionManager)
+  addr_relay_mgr_ = std::make_unique<AddrRelayManager>(peer_manager_.get(), config_.datadir);
 
   // HeaderSyncManager (header synchronization)
   header_sync_manager_ = std::make_unique<HeaderSyncManager>(chainstate_manager, *peer_manager_);
   peer_manager_->SetHeaderSyncManager(header_sync_manager_.get());
 
-  // BlockRelayManager (block announcements and relay, needs HeaderSyncManager reference)
-  block_relay_manager_ = std::make_unique<BlockRelayManager>(chainstate_manager, *peer_manager_, *header_sync_manager_);
+  // Initialize stable connection parameters
+  peer_manager_->Init(
+      transport_,
+      [this](Peer* peer) { setup_peer_message_handler(peer); },
+      [this]() { return running_.load(std::memory_order_acquire) && network_active_.load(std::memory_order_acquire); },
+      config_.network_magic,
+      local_nonce_);
+
 
   // Create NAT manager if enabled
   if (config_.enable_nat) {
@@ -124,31 +121,12 @@ NetworkManager::NetworkManager(validation::ChainstateManager& chainstate_manager
       LOG_NET_ERROR("MessageDispatcher: bad payload type for ADDR from peer {}", peer ? peer->id() : -1);
       return false;
     }
-    return discovery_manager_->HandleAddr(peer, addr_msg);
+    return addr_relay_mgr_->HandleAddr(peer, addr_msg);
   });
 
   // GETADDR - Address discovery (no message payload)
   message_dispatcher_->RegisterHandler(protocol::commands::GETADDR, [this](PeerPtr peer, ::unicity::message::Message*) {
-    return discovery_manager_->HandleGetAddr(peer);
-  });
-
-  // INV - Block relay
-  message_dispatcher_->RegisterHandler(protocol::commands::INV, [this](PeerPtr peer, ::unicity::message::Message* msg) {
-    auto* inv_msg = dynamic_cast<message::InvMessage*>(msg);
-    if (!inv_msg) {
-      LOG_NET_ERROR("MessageDispatcher: bad payload type for INV from peer {}", peer ? peer->id() : -1);
-      return false;
-    }
-    // Gate INV on post-VERACK
-    // Sending protocol messages before handshake is a DoS vector - disconnect immediately
-    if (!peer || !peer->successfully_connected()) {
-      LOG_NET_WARN_RL("Peer {} sent INV before completing handshake, disconnecting", peer ? peer->id() : -1);
-      if (peer) {
-        peer->disconnect();
-      }
-      return false;  // Disconnect
-    }
-    return block_relay_manager_->HandleInvMessage(peer, inv_msg);
+    return addr_relay_mgr_->HandleGetAddr(peer);
   });
 
   // HEADERS - Header sync
@@ -162,7 +140,7 @@ NetworkManager::NetworkManager(validation::ChainstateManager& chainstate_manager
     // Gate HEADERS on post-VERACK
     // Sending protocol messages before handshake is a DoS vector - disconnect immediately
     if (!peer || !peer->successfully_connected()) {
-      LOG_NET_WARN_RL("Peer {} sent HEADERS before completing handshake, disconnecting", peer ? peer->id() : -1);
+      LOG_NET_WARN_RL("peer {} sent headers before completing handshake, disconnecting", peer ? peer->id() : -1);
       if (peer) {
         peer->disconnect();
       }
@@ -182,7 +160,7 @@ NetworkManager::NetworkManager(validation::ChainstateManager& chainstate_manager
     // Gate GETHEADERS on post-VERACK
     // Sending protocol messages before handshake is a DoS vector - disconnect immediately
     if (!peer || !peer->successfully_connected()) {
-      LOG_NET_WARN_RL("Peer {} sent GETHEADERS before completing handshake, disconnecting", peer ? peer->id() : -1);
+      LOG_NET_WARN_RL("peer {} sent getheaders before completing handshake, disconnecting", peer ? peer->id() : -1);
       if (peer) {
         peer->disconnect();
       }
@@ -191,7 +169,7 @@ NetworkManager::NetworkManager(validation::ChainstateManager& chainstate_manager
     return header_sync_manager_->HandleGetHeadersMessage(peer, getheaders_msg);
   });
 
-  LOG_NET_INFO("Registered {} message handlers with MessageDispatcher",
+  LOG_NET_INFO("registered {} message handlers with MessageDispatcher",
                message_dispatcher_->GetRegisteredCommands().size());
 }
 
@@ -202,12 +180,12 @@ NetworkManager::~NetworkManager() {
   }
 }
 
-PeerLifecycleManager& NetworkManager::peer_manager() {
+ConnectionManager& NetworkManager::peer_manager() {
   return *peer_manager_;
 }
 
-PeerDiscoveryManager& NetworkManager::discovery_manager() {
-  return *discovery_manager_;
+AddrRelayManager& NetworkManager::discovery_manager() {
+  return *addr_relay_mgr_;
 }
 
 bool NetworkManager::start() {
@@ -236,8 +214,6 @@ bool NetworkManager::start() {
 
   // Create work guard and timers only if we own the io_context
   // When using external io_context (tests), the external code controls event processing
-  // IMPORTANT: Check external_io_context_ flag to prevent spawning threads on external
-  // io_contexts (which would cause data races)
   if (config_.io_threads > 0 && !external_io_context_) {
     // Create work guard to keep io_context running (for timers)
     work_guard_ = std::make_unique<asio::executor_work_guard<asio::io_context::executor_type>>(
@@ -248,6 +224,7 @@ bool NetworkManager::start() {
     maintenance_timer_ = std::make_unique<asio::steady_timer>(*io_context_);
     feeler_timer_ = std::make_unique<asio::steady_timer>(*io_context_);
     sendmessages_timer_ = std::make_unique<asio::steady_timer>(*io_context_);
+    extra_block_relay_timer_ = std::make_unique<asio::steady_timer>(*io_context_);
 
     // Start IO threads (only for owned io_context)
     for (size_t i = 0; i < config_.io_threads; ++i) {
@@ -258,11 +235,9 @@ bool NetworkManager::start() {
   // Start listening if enabled (via transport)
   if (config_.listen_enabled && config_.listen_port > 0) {
     bool success = transport_->listen(config_.listen_port, [this](TransportConnectionPtr connection) {
-      // Delegate to PeerLifecycleManager
+      // Delegate to ConnectionManager
       peer_manager_->HandleInboundConnection(
-          connection, [this]() { return running_.load(std::memory_order_acquire); },
-          [this](Peer* peer) { setup_peer_message_handler(peer); }, config_.network_magic,
-          chainstate_manager_.GetChainHeight(), local_nonce_, default_inbound_permissions_);
+          connection, chainstate_manager_.GetChainHeight(), default_inbound_permissions_);
     });
 
     if (success) {
@@ -295,18 +270,17 @@ bool NetworkManager::start() {
       }
       io_threads_.clear();
 
+      // Restore fully_stopped_ so a subsequent start() won't deadlock
+      fully_stopped_ = true;
+      stop_cv_.notify_all();
+
       return false;
     }
   }
 
   // Start discovery services (loads anchors, bootstraps if needed)
-  discovery_manager_->Start([this](const std::vector<protocol::NetworkAddress>& anchors) {
-    peer_manager_->ConnectToAnchors(anchors,
-                                    [this](const protocol::NetworkAddress& addr, ConnectionType /*conn_type*/) {
-                                      // Anchor connections use NoBan permission; conn_type ignored since anchors are
-                                      // always full-relay
-                                      return connect_to(addr, NetPermissionFlags::NoBan);
-                                    });
+  addr_relay_mgr_->Start([this](const std::vector<protocol::NetworkAddress>& anchors) {
+    peer_manager_->ConnectToAnchors(anchors, chainstate_manager_.GetChainHeight());
   });
 
   // Schedule periodic tasks (only if we own the io_context threads)
@@ -352,23 +326,21 @@ void NetworkManager::stop() {
   if (sendmessages_timer_) {
     sendmessages_timer_->cancel();
   }
+  if (extra_block_relay_timer_) {
+    extra_block_relay_timer_->cancel();
+  }
 
   // Save anchors while peers are still connected (need their addresses)
-  // CRITICAL: Must not throw (stop() called from destructors)
-  // Don't log here - this is called from destructor, logger may be shut down
   if (!config_.datadir.empty()) {
     try {
       std::string anchors_path = config_.datadir + "/anchors.json";
       SaveAnchors(anchors_path);
     } catch (const std::exception& e) {
-      // Don't propagate exceptions from stop() - can be called from destructors
-      // Don't log either - logger may be shut down
     } catch (...) {
-      // Silently swallow exceptions during shutdown
     }
   }
 
-  // CRITICAL SHUTDOWN SEQUENCE
+  // HUTDOWN SEQUENCE
   // 1. Disconnect all peers BEFORE stopping io_context
   //    - Allows disconnect callbacks to run properly
   //    - Ensures clean TCP shutdown (FIN packets sent)
@@ -412,32 +384,57 @@ void NetworkManager::stop() {
   io_context_->restart();
 
   // Mark as fully stopped and signal any waiting start() calls
-  // This must be done while holding the lock to prevent TOCTOU races
   fully_stopped_ = true;
   stop_cv_.notify_all();
 }
 
-ConnectionResult NetworkManager::connect_to(const protocol::NetworkAddress& addr, NetPermissionFlags permissions,
-                                            ConnectionType conn_type) {
+ConnectionResult NetworkManager::connect_to(const protocol::NetworkAddress& addr,
+                                            NetPermissionFlags permissions,
+                                            ConnectionType conn_type,
+                                            bool bypass_slot_limit) {
   if (!running_.load(std::memory_order_acquire)) {
     return ConnectionResult::NotRunning;
   }
 
-  // Delegate to PeerLifecycleManager (handles all connection logic)
-  return peer_manager_->ConnectTo(
-      addr, permissions, transport_, [this](const protocol::NetworkAddress&) { /* defer Good() until post-VERACK */ },
-      [this](const protocol::NetworkAddress& a) { discovery_manager_->Attempt(a); },
-      [this](Peer* peer) { setup_peer_message_handler(peer); }, config_.network_magic,
-      chainstate_manager_.GetChainHeight(), local_nonce_, conn_type);
+  // Network activity disabled (setnetworkactive false)
+  if (!network_active_.load(std::memory_order_acquire)) {
+    return ConnectionResult::NotRunning;
+  }
+
+  // Delegate to ConnectionManager (handles all connection logic)
+  return peer_manager_->ConnectTo(addr, permissions, chainstate_manager_.GetChainHeight(), conn_type, bypass_slot_limit);
 }
 
 bool NetworkManager::disconnect_from(int peer_id) {
-  auto peer = peer_manager_->get_peer(peer_id);
-  if (!peer) {
+  if (!peer_manager_->get_peer(peer_id)) {
     return false;
   }
-  peer_manager_->remove_peer(peer_id);
+  asio::post(*io_context_, [this, peer_id]() {
+    peer_manager_->remove_peer(peer_id);
+  });
   return true;
+}
+
+void NetworkManager::SetNetworkActive(bool active) {
+  if (network_active_.load(std::memory_order_acquire) == active) {
+    return;  // No change
+  }
+
+  LOG_INFO("SetNetworkActive: {}", active ? "enabling" : "disabling");
+  network_active_.store(active, std::memory_order_release);
+
+  if (!active) {
+    auto peers = peer_manager_->get_all_peers();
+    for (const auto& peer : peers) {
+      if (peer) {
+        int id = peer->id();
+        LOG_DEBUG("SetNetworkActive: disconnecting peer {}", id);
+        asio::post(*io_context_, [this, id]() {
+          peer_manager_->remove_peer(id);
+        });
+      }
+    }
+  }
 }
 
 size_t NetworkManager::active_peer_count() const {
@@ -452,6 +449,11 @@ size_t NetworkManager::inbound_peer_count() const {
   return peer_manager_->inbound_count();
 }
 
+std::optional<protocol::NetworkAddress> NetworkManager::get_local_address() const {
+  std::lock_guard<std::mutex> lock(local_addr_mutex_);
+  return local_addr_;
+}
+
 void NetworkManager::schedule_next_connection_attempt() {
   if (!running_.load(std::memory_order_acquire)) {
     return;
@@ -460,15 +462,8 @@ void NetworkManager::schedule_next_connection_attempt() {
   connect_timer_->expires_after(config_.connect_interval);
   connect_timer_->async_wait([this](const asio::error_code& ec) {
     if (!ec && running_.load(std::memory_order_acquire)) {
-      // Skip automatic outbound connections if max_outbound_connections is 0
       if (config_.max_outbound_connections > 0) {
-        // Delegate to PeerLifecycleManager with callbacks for running check and connection
-        // The callback receives connection type (OUTBOUND_FULL_RELAY or BLOCK_RELAY) to use
-        peer_manager_->AttemptOutboundConnections([this]() { return running_.load(std::memory_order_acquire); },
-                                                  [this](const protocol::NetworkAddress& addr,
-                                                         ConnectionType conn_type) {
-                                                    return connect_to(addr, NetPermissionFlags::None, conn_type);
-                                                  });
+        peer_manager_->AttemptOutboundConnections(chainstate_manager_.GetChainHeight());
       }
       schedule_next_connection_attempt();
     }
@@ -480,24 +475,18 @@ void NetworkManager::run_maintenance() {
     return;
   }
 
-  // Run periodic cleanup
   peer_manager_->process_periodic();
-
-  // Headers sync timeouts and maintenance
   header_sync_manager_->ProcessTimers();
-
-  // Sweep expired bans and discouraged entries
   peer_manager_->SweepBanned();
   peer_manager_->SweepDiscouraged();
 
-  // Process pending ADDR relays 
-  discovery_manager_->ProcessPendingAddrRelays();
-
-  // Periodically announce our tip to peers
-  block_relay_manager_->AnnounceTipToAllPeers();
-
-  // Check if we need to start initial sync
   check_initial_sync();
+
+  // Enable extra block-relay peer rotation once IBD completes.
+  // Periodically verifies our chain tip from fresh block-relay-only peers.
+  if (!extra_block_relay_started_ && !chainstate_manager_.IsInitialBlockDownload()) {
+    StartExtraBlockRelayPeers();
+  }
 }
 
 void NetworkManager::schedule_next_maintenance() {
@@ -519,11 +508,8 @@ void NetworkManager::run_sendmessages() {
     return;
   }
 
-  // Check for initial sync opportunities
-  header_sync_manager_->CheckInitialSync();
-
-  // Flush queued block announcement
-  block_relay_manager_->FlushBlockAnnouncements();
+  check_initial_sync();
+  addr_relay_mgr_->ProcessPendingAddrRelays();
 
   // Self-advertisement: periodically send our address to peers
   // This allows other nodes to discover us and connect inbound
@@ -544,25 +530,6 @@ void NetworkManager::schedule_next_sendmessages() {
   });
 }
 
-// Test/diagnostic methods (accessible only via friend class SimulatedNode)
-void NetworkManager::test_hook_check_initial_sync() {
-  // Expose initial sync trigger for tests when io_threads==0
-  check_initial_sync();
-}
-
-void NetworkManager::test_hook_header_sync_process_timers() {
-  // Expose header sync stall/timeout processing for tests (io_threads==0)
-  header_sync_manager_->ProcessTimers();
-}
-
-void NetworkManager::attempt_feeler_connection() {
-  // Test-only wrapper: Delegate to PeerLifecycleManager
-  peer_manager_->AttemptFeelerConnection([this]() { return running_.load(std::memory_order_acquire); },
-                                         [this]() { return transport_; },
-                                         [this](Peer* peer) { setup_peer_message_handler(peer); },
-                                         config_.network_magic, chainstate_manager_.GetChainHeight(), local_nonce_);
-}
-
 void NetworkManager::schedule_next_feeler() {
   if (!running_.load(std::memory_order_acquire) || !feeler_timer_) {
     return;
@@ -581,7 +548,8 @@ void NetworkManager::schedule_next_feeler() {
   // Cap delay if configured (prevents pathological long delays in tests)
   // If feeler_max_delay_multiplier ≤ 0, no cap is applied
   if (config_.feeler_max_delay_multiplier > 0.0) {
-    double max_delay = config_.feeler_max_delay_multiplier * FEELER_INTERVAL.count();
+    double max_delay = config_.feeler_max_delay_multiplier *
+                       std::chrono::duration_cast<std::chrono::seconds>(FEELER_INTERVAL).count();
     delay_s = std::min(max_delay, delay_s);
   }
 
@@ -591,18 +559,78 @@ void NetworkManager::schedule_next_feeler() {
 
   feeler_timer_->async_wait([this](const asio::error_code& ec) {
     if (!ec && running_.load(std::memory_order_acquire)) {
-      // Delegate to PeerLifecycleManager with callbacks
-      peer_manager_->AttemptFeelerConnection([this]() { return running_.load(std::memory_order_acquire); },
-                                             [this]() { return transport_; },
-                                             [this](Peer* peer) { setup_peer_message_handler(peer); },
-                                             config_.network_magic, chainstate_manager_.GetChainHeight(), local_nonce_);
+      peer_manager_->AttemptFeelerConnection(chainstate_manager_.GetChainHeight());
       schedule_next_feeler();
     }
   });
 }
 
+void NetworkManager::schedule_next_extra_block_relay() {
+  if (!running_.load(std::memory_order_acquire) || !extra_block_relay_timer_) {
+    return;
+  }
+
+  if (!extra_block_relay_started_) {
+    return;
+  }
+
+  // Exponential distribution around 5 minute mean
+  double delay_s;
+  {
+    std::lock_guard<std::mutex> lock(feeler_rng_mutex_);
+    std::exponential_distribution<double> exp(
+        1.0 / std::chrono::duration_cast<std::chrono::seconds>(EXTRA_BLOCK_RELAY_ONLY_PEER_INTERVAL).count());
+    delay_s = exp(feeler_rng_);
+  }
+
+  // Cap at 3x interval to prevent pathological delays
+  double max_delay = 3.0 *
+                     std::chrono::duration_cast<std::chrono::seconds>(EXTRA_BLOCK_RELAY_ONLY_PEER_INTERVAL).count();
+  delay_s = std::min(max_delay, delay_s);
+
+  auto delay = std::chrono::seconds(std::max(1, static_cast<int>(delay_s)));
+
+  extra_block_relay_timer_->expires_after(delay);
+
+  extra_block_relay_timer_->async_wait([this](const asio::error_code& ec) {
+    if (!ec && running_.load(std::memory_order_acquire)) {
+      attempt_extra_block_relay_connection();
+      schedule_next_extra_block_relay();
+    }
+  });
+}
+
+void NetworkManager::attempt_extra_block_relay_connection() {
+  if (!running_.load(std::memory_order_acquire) || !network_active_.load(std::memory_order_acquire)) {
+    return;
+  }
+
+  // Get address from AddrMan for block-relay connection
+  auto addr_opt = addr_relay_mgr_->Select();
+  if (!addr_opt) {
+    LOG_NET_TRACE("extra block-relay: no address available");
+    return;
+  }
+
+  LOG_NET_DEBUG("attempting extra block-relay connection to {}", addr_opt->to_string().value_or("unknown"));
+
+  // Connect as block-relay-only (bypass slot limit for rotation)
+  auto result = connect_to(*addr_opt, NetPermissionFlags::None, ConnectionType::BLOCK_RELAY,
+                           /*bypass_slot_limit=*/true);
+
+  if (result != ConnectionResult::Success) {
+    LOG_NET_TRACE("extra block-relay connection failed: {}", static_cast<int>(result));
+  }
+  // Eviction decision happens after headers sync in HeaderSyncManager
+}
+
+void NetworkManager::StartExtraBlockRelayPeers() {
+  LOG_NET_DEBUG("enabling extra block-relay-only peers");
+  extra_block_relay_started_ = true;
+  schedule_next_extra_block_relay();
+}
+
 void NetworkManager::check_initial_sync() {
-  // Delegate to HeaderSyncManager
   header_sync_manager_->CheckInitialSync();
 }
 
@@ -610,17 +638,11 @@ void NetworkManager::setup_peer_message_handler(Peer* peer) {
   peer->set_message_handler(
       [this](PeerPtr peer, std::unique_ptr<message::Message> msg) { return handle_message(peer, std::move(msg)); });
 
-  // Set VERACK completion handler
-  // Announce our tip immediately when peer becomes READY
-  peer->set_verack_complete_handler([this](PeerPtr peer) { announce_tip_to_peer(peer.get()); });
-
-  // Set local address learned handler )
   // When inbound peers tell us what IP they see us as, use it for self-advertisement
   peer->set_local_addr_learned_handler([this](const std::string& ip) { set_local_addr_from_peer_feedback(ip); });
 }
 
 void NetworkManager::handle_message(PeerPtr peer, std::unique_ptr<message::Message> msg) {
-  // Early exit if shutting down (prevents processing messages during teardown)
   if (!running_.load(std::memory_order_acquire)) {
     return;
   }
@@ -634,10 +656,9 @@ void NetworkManager::handle_message(PeerPtr peer, std::unique_ptr<message::Messa
     }
 
     // Check if their nonce collides with our local nonce or any existing peer's remote nonce
-    // This detects: self-connections, duplicate connections, and accidental nonce collisions
-    if (!peer_manager_->CheckIncomingNonce(version_msg->nonce, local_nonce_)) {
+    if (!peer_manager_->CheckIncomingNonce(version_msg->nonce)) {
       // Nonce collision detected! Either self-connection or duplicate connection
-      LOG_NET_INFO("Nonce collision detected for peer {}, disconnecting", peer->address());
+      // (CheckIncomingNonce already logs the details)
       int peer_id = peer->id();
 
       // Re-check running_ before operations that interact with manager state
@@ -647,7 +668,7 @@ void NetworkManager::handle_message(PeerPtr peer, std::unique_ptr<message::Messa
 
       peer->disconnect();
       peer_manager_->remove_peer(peer_id);
-      return;  // Don't route the message
+      return; 
     }
   }
 
@@ -656,61 +677,62 @@ void NetworkManager::handle_message(PeerPtr peer, std::unique_ptr<message::Messa
     return;
   }
 
-  // Route via MessageDispatcher (handler registry pattern)
-  if (message_dispatcher_) {
-    message_dispatcher_->Dispatch(peer, msg->command(), msg.get());
-  }
+  message_dispatcher_->Dispatch(peer, msg->command(), msg.get());
 }
 
-// Anchors implementation for eclipse attack resistance (delegated to AnchorManager)
 std::vector<protocol::NetworkAddress> NetworkManager::GetAnchors() const {
-  return discovery_manager_->GetAnchors();
+  return addr_relay_mgr_->GetAnchors();
 }
 
 bool NetworkManager::SaveAnchors(const std::string& filepath) {
-  return discovery_manager_->SaveAnchors(filepath);
+  return addr_relay_mgr_->SaveAnchors(filepath);
 }
 
 bool NetworkManager::LoadAnchors(const std::string& filepath) {
-  // Load anchors and delegate connection logic to PeerLifecycleManager
-  // CRITICAL: Must not throw (called during startup)
+  // Load anchors and delegate connection logic to ConnectionManager
   try {
-    auto anchor_addrs = discovery_manager_->LoadAnchors(filepath);
+    auto anchor_addrs = addr_relay_mgr_->LoadAnchors(filepath);
     if (!anchor_addrs.empty()) {
-      peer_manager_->ConnectToAnchors(anchor_addrs,
-                                      [this](const protocol::NetworkAddress& addr, ConnectionType /*conn_type*/) {
-                                        // NoBan: anchors are trusted peers from previous session, don't disconnect for
-                                        // misbehavior. Note: conn_type (BLOCK_RELAY) is ignored; anchors connect as
-                                        // OUTBOUND_FULL_RELAY.
-                                        return connect_to(addr, NetPermissionFlags::NoBan);
-                                      });
+      peer_manager_->ConnectToAnchors(anchor_addrs, chainstate_manager_.GetChainHeight());
       return true;
     }
     return false;
   } catch (const std::exception& e) {
-    // TODO Don't propagate exceptions from LoadAnchors - corrupted file is not fatal
     LOG_NET_ERROR("Failed to load anchors from {}: {}", filepath, e.what());
-    return false;  // Continue with empty anchors
+    return false;  // Corrupted file is not fatal - continue with empty anchors
   } catch (...) {
     LOG_NET_ERROR("Unknown exception while loading anchors from {}", filepath);
     return false;  // Continue with empty anchors
   }
 }
 
-void NetworkManager::announce_tip_to_peers() {
-  block_relay_manager_->AnnounceTipToAllPeers();
-}
+void NetworkManager::announce_block(const uint256& block_hash) {
+  // Dispatch to io_context thread to avoid data races on Peer::connection_.
+  // This method may be called from the miner or RPC thread (via ChainTip notifications),
+  // but peer state must only be accessed from the io_context thread.
+  // asio::dispatch runs immediately if already on the io_context thread.
+  asio::dispatch(*io_context_, [this, block_hash]() {
+    const chain::CBlockIndex* pindex = chainstate_manager_.LookupBlockIndex(block_hash);
+    if (!pindex) {
+      LOG_NET_WARN("announce_block: block {} not found in index", block_hash.GetHex());
+      return;
+    }
 
-void NetworkManager::announce_tip_to_peer(const Peer* peer) {
-  block_relay_manager_->AnnounceTipToPeer(peer);
-}
+    CBlockHeader header = pindex->GetBlockHeader();
+    auto all_peers = peer_manager_->get_all_peers();
+    size_t sent_count = 0;
 
-void NetworkManager::flush_block_announcements() {
-  block_relay_manager_->FlushBlockAnnouncements();
-}
+    for (const auto& peer : all_peers) {
+      if (!peer || !peer->is_connected() || peer->state() != PeerConnectionState::READY)
+        continue;
+      auto msg = std::make_unique<message::HeadersMessage>();
+      msg->headers.push_back(header);
+      peer->send_message(std::move(msg));
+      sent_count++;
+    }
 
-void NetworkManager::relay_block(const uint256& block_hash) {
-  block_relay_manager_->RelayBlock(block_hash);
+    LOG_NET_DEBUG("announced block {} via HEADERS to {} peers", block_hash.GetHex(), sent_count);
+  });
 }
 
 // ============================================================================
@@ -729,14 +751,13 @@ void NetworkManager::update_local_addr_from_upnp() {
 
   std::lock_guard<std::mutex> lock(local_addr_mutex_);
 
-  // Only update if we don't have an address yet (UPnP is authoritative)
   if (local_addr_.has_value()) {
-    return;  // Already have an address, don't overwrite
+    return;  
   }
 
   try {
     local_addr_ = protocol::NetworkAddress::from_string(external_ip, config_.listen_port, protocol::NODE_NETWORK);
-    LOG_NET_INFO("Learned local address from UPnP: {}:{}", external_ip, config_.listen_port);
+    LOG_NET_INFO("learned local address from UPnP: {}:{}", external_ip, config_.listen_port);
   } catch (const std::exception& e) {
     LOG_NET_WARN("Failed to parse UPnP address {}: {}", external_ip, e.what());
   }
@@ -765,19 +786,18 @@ void NetworkManager::set_local_addr_from_peer_feedback(const std::string& ip) {
     }
 
     if (!util::IsRoutable(ip)) {
-      LOG_NET_TRACE("Ignoring non-routable peer feedback address: {}", ip);
+      LOG_NET_TRACE("ignoring non-routable peer feedback address: {}", ip);
       return;
     }
 
     local_addr_ = addr;
-    LOG_NET_INFO("Learned local address from peer feedback: {}:{}", ip, config_.listen_port);
+    LOG_NET_INFO("learned local address from peer feedback: {}:{}", ip, config_.listen_port);
   } catch (const std::exception& e) {
     LOG_NET_WARN("Failed to parse peer feedback address {}: {}", ip, e.what());
   }
 }
 
 void NetworkManager::maybe_send_local_addr() {
-  // Gate on listening enabled
   if (!config_.listen_enabled || config_.listen_port == 0) {
     LOG_NET_DEBUG("maybe_send_local_addr: skipping - listening not enabled");
     return;
@@ -805,20 +825,17 @@ void NetworkManager::maybe_send_local_addr() {
     return;
   }
 
-  // Check if enough time has passed since last advertisement
-  int64_t now = util::GetTime();
-  if (last_local_addr_send_ > 0) {
-    int64_t elapsed = now - last_local_addr_send_;
-    int64_t interval_sec = std::chrono::duration_cast<std::chrono::seconds>(LOCAL_ADDR_BROADCAST_INTERVAL).count();
-    if (elapsed < interval_sec) {
-      return;  // Not time yet
-    }
+  // Check if it's time to send (exponential distribution)
+  auto now_steady = util::GetSteadyTime();
+  if (next_local_addr_send_ != std::chrono::steady_clock::time_point{} &&
+      now_steady < next_local_addr_send_) {
+    return;  
   }
 
   // Build ADDR message with our address
   auto addr_msg = std::make_unique<message::AddrMessage>();
   protocol::TimestampedAddress ts_addr;
-  ts_addr.timestamp = static_cast<uint32_t>(now);
+  ts_addr.timestamp = static_cast<uint32_t>(util::GetTime());
   ts_addr.address = *addr_to_send;
   addr_msg->addresses.push_back(ts_addr);
 
@@ -842,9 +859,18 @@ void NetworkManager::maybe_send_local_addr() {
   }
 
   if (sent_count > 0) {
-    last_local_addr_send_ = now;
+    // Schedule next send using exponential distribution
+    int64_t delay_sec;
+    {
+      std::lock_guard<std::mutex> lock(feeler_rng_mutex_);
+      std::exponential_distribution<double> exp_dist(1.0 / AVG_LOCAL_ADDR_BROADCAST_INTERVAL_SEC);
+      delay_sec = static_cast<int64_t>(exp_dist(feeler_rng_));
+    }
+    next_local_addr_send_ = now_steady + std::chrono::seconds(delay_sec);
+
     auto addr_str = addr_to_send->to_string();
-    LOG_NET_INFO("Self-advertisement: sent local address {} to {} peers", addr_str.value_or("unknown"), sent_count);
+    LOG_NET_INFO("self-advertisement: sent local address {} to {} peers (next in {}h)",
+                 addr_str.value_or("unknown"), sent_count, delay_sec / 3600);
   }
 }
 

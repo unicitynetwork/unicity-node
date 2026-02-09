@@ -26,6 +26,9 @@ namespace network {
  * 8. Within that netgroup: evict youngest (most recently connected)
  *
  * This class is stateless - all state is passed via EvictionCandidate vector.
+ *
+ * NOTE: This manager handles INBOUND slot exhaustion. For OUTBOUND peer rotation
+ * (feeler logic), see HeaderSyncManager.
  */
 class EvictionManager {
 public:
@@ -39,6 +42,9 @@ public:
 
     // Header relay tracking - peers that do useful work get protected
     std::chrono::steady_clock::time_point last_headers_time;  // Last valid headers received
+
+    // Eviction priority - discouraged peers are evicted first (after protection phases)
+    bool prefer_evict{false};
   };
 
   // Select a peer to evict from the given candidates (all peers inbound and outbound).
@@ -46,7 +52,7 @@ public:
   // Returns peer_id to evict, or nullopt if no suitable candidate.
   static std::optional<int> SelectNodeToEvict(std::vector<EvictionCandidate> candidates);
 
-  // Configuration constants (matching Bitcoin Core)
+  // Configuration constants (adapted from Bitcoin Core for header-only chain)
   static constexpr size_t PROTECT_BY_NETGROUP = 4;
   static constexpr size_t PROTECT_BY_PING = 8;
   static constexpr size_t PROTECT_BY_HEADERS = 4;  // Peers that relay headers (useful work)

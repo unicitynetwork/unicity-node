@@ -1,5 +1,5 @@
 // Copyright (c) 2025 The Unicity Foundation
-// Unit tests for PeerDiscoveryManager
+// Unit tests for AddrRelayManager
 //
 // Tests cover:
 // - HandleAddr logic (rate limiting, block-relay filtering, learned address eviction)
@@ -7,13 +7,14 @@
 // - Learned address eviction (regression test for bug fix)
 
 #include "catch_amalgamated.hpp"
-#include "network/peer_discovery_manager.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/addr_relay_manager.hpp"
+#include "network/connection_manager.hpp"
 #include "network/peer.hpp"
 #include "network/protocol.hpp"
 #include "network/message.hpp"
 #include "network/connection_types.hpp"
 #include "infra/mock_transport.hpp"
+#include "infra/test_access.hpp"
 #include "chain/chainparams.hpp"
 #include "util/time.hpp"
 #include "util/netaddress.hpp"
@@ -22,14 +23,16 @@
 using namespace unicity;
 using namespace unicity::network;
 using namespace unicity::protocol;
+using unicity::test::PeerTestAccess;
+using unicity::test::AddrRelayManagerTestAccess;
 
-// Test fixture for PeerDiscoveryManager tests
+// Test fixture for AddrRelayManager tests
 class DiscoveryManagerTestFixture {
 public:
     asio::io_context io_context;
-    PeerLifecycleManager::Config pm_config;
-    std::unique_ptr<PeerLifecycleManager> peer_manager;
-    std::unique_ptr<PeerDiscoveryManager> discovery_manager;
+    ConnectionManager::Config pm_config;
+    std::unique_ptr<ConnectionManager> peer_manager;
+    std::unique_ptr<AddrRelayManager> discovery_manager;
 
     DiscoveryManagerTestFixture() {
         chain::GlobalChainParams::Select(chain::ChainType::REGTEST);
@@ -39,8 +42,8 @@ public:
         pm_config.target_full_relay_outbound = 8;
         pm_config.target_block_relay_outbound = 2;
 
-        peer_manager = std::make_unique<PeerLifecycleManager>(io_context, pm_config);
-        discovery_manager = std::make_unique<PeerDiscoveryManager>(peer_manager.get());
+        peer_manager = std::make_unique<ConnectionManager>(io_context, pm_config);
+        discovery_manager = std::make_unique<AddrRelayManager>(peer_manager.get());
     }
 
     // Create a peer with mock transport for testing
@@ -119,7 +122,7 @@ public:
 // Learned Address Eviction Tests (Regression tests for bug fix)
 // ============================================================================
 
-TEST_CASE("PeerDiscoveryManager - Learned address eviction keeps correct count", "[discovery][eviction][regression]") {
+TEST_CASE("AddrRelayManager - Learned address eviction keeps correct count", "[discovery][eviction][regression]") {
     // This is a regression test for the bug where eviction was deleting
     // target_keep entries instead of (size - target_keep) entries
 
@@ -132,7 +135,7 @@ TEST_CASE("PeerDiscoveryManager - Learned address eviction keeps correct count",
     auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "192.168.1.1", 9590);
     int peer_id = fixture.peer_manager->add_peer(peer);
     REQUIRE(peer_id >= 0);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // MAX_LEARNED_PER_PEER = 2000
     // Eviction triggers at 2200 (110% of 2000)
@@ -247,7 +250,7 @@ TEST_CASE("PeerDiscoveryManager - Learned address eviction keeps correct count",
     }
 }
 
-TEST_CASE("PeerDiscoveryManager - No eviction below threshold", "[discovery][eviction]") {
+TEST_CASE("AddrRelayManager - No eviction below threshold", "[discovery][eviction]") {
     // Ensure no leftover mock time from previous tests
     util::SetMockTime(0);
 
@@ -256,7 +259,7 @@ TEST_CASE("PeerDiscoveryManager - No eviction below threshold", "[discovery][evi
     auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "192.168.1.1", 9590);
     int peer_id = fixture.peer_manager->add_peer(peer);
     REQUIRE(peer_id >= 0);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // Add exactly 2000 entries (at capacity but not over threshold)
     const size_t count = 2000;
@@ -292,18 +295,18 @@ TEST_CASE("PeerDiscoveryManager - No eviction below threshold", "[discovery][evi
 // HandleAddr Tests
 // ============================================================================
 
-TEST_CASE("PeerDiscoveryManager - HandleAddr null message returns false", "[discovery][addr]") {
+TEST_CASE("AddrRelayManager - HandleAddr null message returns false", "[discovery][addr]") {
     DiscoveryManagerTestFixture fixture;
 
     auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "192.168.1.1", 9590);
     fixture.peer_manager->add_peer(peer);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     bool result = fixture.discovery_manager->HandleAddr(peer, nullptr);
     REQUIRE(result == false);
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleAddr pre-VERACK is ignored", "[discovery][addr]") {
+TEST_CASE("AddrRelayManager - HandleAddr pre-VERACK is ignored", "[discovery][addr]") {
     DiscoveryManagerTestFixture fixture;
 
     auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "192.168.1.1", 9590);
@@ -317,26 +320,26 @@ TEST_CASE("PeerDiscoveryManager - HandleAddr pre-VERACK is ignored", "[discovery
     REQUIRE(result == true);  // Returns true (handled, not error) but doesn't process
 
     // Verify nothing was added to AddrMan
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().size() == 0);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size() == 0);
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleAddr block-relay peer is ignored", "[discovery][addr][block_relay]") {
+TEST_CASE("AddrRelayManager - HandleAddr block-relay peer is ignored", "[discovery][addr][block_relay]") {
     DiscoveryManagerTestFixture fixture;
 
     auto peer = fixture.create_peer(ConnectionType::BLOCK_RELAY, "192.168.1.1", 9590);
     fixture.peer_manager->add_peer(peer);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     message::AddrMessage addr_msg;
     addr_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(1));
 
-    size_t initial_size = fixture.discovery_manager->addr_manager_for_test().size();
+    size_t initial_size = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
 
     bool result = fixture.discovery_manager->HandleAddr(peer, &addr_msg);
     REQUIRE(result == true);  // Handled successfully (not an error)
 
     // Verify nothing was added
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().size() == initial_size);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size() == initial_size);
 }
 
 // Note: Oversized ADDR messages are rejected at deserialization layer
@@ -347,7 +350,7 @@ TEST_CASE("PeerDiscoveryManager - HandleAddr block-relay peer is ignored", "[dis
 // HandleGetAddr Tests
 // ============================================================================
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr pre-VERACK is ignored", "[discovery][getaddr]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr pre-VERACK is ignored", "[discovery][getaddr]") {
     DiscoveryManagerTestFixture fixture;
 
     auto peer = fixture.create_peer(ConnectionType::INBOUND, "192.168.1.1", 9590);
@@ -358,28 +361,28 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr pre-VERACK is ignored", "[discov
     REQUIRE(result == true);  // Returns true but doesn't respond
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr block-relay peer is ignored", "[discovery][getaddr][block_relay]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr block-relay peer is ignored", "[discovery][getaddr][block_relay]") {
     DiscoveryManagerTestFixture fixture;
 
     auto peer = fixture.create_peer(ConnectionType::BLOCK_RELAY, "192.168.1.1", 9590);
     fixture.peer_manager->add_peer(peer);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     bool result = fixture.discovery_manager->HandleGetAddr(peer);
     REQUIRE(result == true);  // Handled but ignored
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr outbound peer is ignored (fingerprinting protection)", "[discovery][getaddr][security]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr outbound peer is ignored (fingerprinting protection)", "[discovery][getaddr][security]") {
     DiscoveryManagerTestFixture fixture;
 
     // Add some addresses to AddrMan
     for (int i = 0; i < 10; i++) {
-        fixture.discovery_manager->addr_manager_for_test().add(DiscoveryManagerTestFixture::MakeAddress(i));
+        AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(DiscoveryManagerTestFixture::MakeAddress(i));
     }
 
     auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "192.168.1.1", 9590);
     fixture.peer_manager->add_peer(peer);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     auto stats_before = fixture.discovery_manager->GetGetAddrDebugStats();
 
@@ -390,19 +393,19 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr outbound peer is ignored (finger
     REQUIRE(stats_after.ignored_outbound == stats_before.ignored_outbound + 1);
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr once per connection", "[discovery][getaddr][ratelimit]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr once per connection", "[discovery][getaddr][ratelimit]") {
     DiscoveryManagerTestFixture fixture;
 
     // Add some addresses to AddrMan so GETADDR has something to return
     for (int i = 0; i < 10; i++) {
-        fixture.discovery_manager->addr_manager_for_test().add(DiscoveryManagerTestFixture::MakeAddress(i));
+        AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(DiscoveryManagerTestFixture::MakeAddress(i));
     }
 
     // Create inbound peer with routable address via mock transport
     auto peer = fixture.create_peer(ConnectionType::INBOUND, "193.0.0.1", 9590);
     int peer_id = fixture.peer_manager->add_peer(peer);
     REQUIRE(peer_id >= 0);  // Verify add_peer succeeded
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     auto stats_before = fixture.discovery_manager->GetGetAddrDebugStats();
 
@@ -422,19 +425,19 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr once per connection", "[discover
     REQUIRE(stats_after2.ignored_repeat == stats_after1.ignored_repeat + 1);
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr respects 23% limit (Bitcoin Core parity)", "[discovery][getaddr][bitcoin_core]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr respects 23% limit (Bitcoin Core parity)", "[discovery][getaddr][bitcoin_core]") {
     DiscoveryManagerTestFixture fixture;
 
     // Add 100 addresses to AddrMan
     for (int i = 0; i < 100; i++) {
-        fixture.discovery_manager->addr_manager_for_test().add(DiscoveryManagerTestFixture::MakeAddress(i));
+        AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(DiscoveryManagerTestFixture::MakeAddress(i));
     }
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().size() == 100);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size() == 100);
 
     // Create inbound peer
     auto peer = fixture.create_peer(ConnectionType::INBOUND, "192.168.1.1", 9590);
     fixture.peer_manager->add_peer(peer);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // HandleGetAddr should return at most 23% of 100 = 23 addresses
     bool result = fixture.discovery_manager->HandleGetAddr(peer);
@@ -446,20 +449,20 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr respects 23% limit (Bitcoin Core
     INFO("Returned " << stats.last_from_addrman << " addresses (limit: 23)");
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr percentage limit prevents full enumeration", "[discovery][getaddr][bitcoin_core][security]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr percentage limit prevents full enumeration", "[discovery][getaddr][bitcoin_core][security]") {
     DiscoveryManagerTestFixture fixture;
 
     // Add 1000 addresses to AddrMan (max typical size)
     for (int i = 0; i < 1000; i++) {
-        fixture.discovery_manager->addr_manager_for_test().add(DiscoveryManagerTestFixture::MakeAddress(i));
+        AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(DiscoveryManagerTestFixture::MakeAddress(i));
     }
-    size_t addrman_size = fixture.discovery_manager->addr_manager_for_test().size();
+    size_t addrman_size = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
     INFO("AddrMan size: " << addrman_size);
 
     // Create inbound peer
     auto peer = fixture.create_peer(ConnectionType::INBOUND, "192.168.1.1", 9590);
     fixture.peer_manager->add_peer(peer);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     bool result = fixture.discovery_manager->HandleGetAddr(peer);
     REQUIRE(result == true);
@@ -475,7 +478,7 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr percentage limit prevents full e
     REQUIRE(stats.last_from_addrman < addrman_size);
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr echo suppression (addresses peer sent us)", "[discovery][getaddr][echo]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr echo suppression (addresses peer sent us)", "[discovery][getaddr][echo]") {
     // Ensure no leftover mock time from previous tests
     util::SetMockTime(0);
 
@@ -485,14 +488,14 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr echo suppression (addresses peer
     // Note: We add all addresses to the learned map below to ensure deterministic
     // suppression regardless of hash table ordering (which varies by compiler/platform)
     for (int i = 0; i < 50; i++) {
-        fixture.discovery_manager->addr_manager_for_test().add(DiscoveryManagerTestFixture::MakeAddress(i));
+        AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(DiscoveryManagerTestFixture::MakeAddress(i));
     }
 
     // Create inbound peer
     auto peer = fixture.create_peer(ConnectionType::INBOUND, "192.168.1.1", 9590);
     int peer_id = fixture.peer_manager->add_peer(peer);
     REQUIRE(peer_id >= 0);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // Simulate that peer sent us ALL addresses (add to learned map)
     // This ensures deterministic behavior across different hash table implementations
@@ -526,7 +529,7 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr echo suppression (addresses peer
     INFO("Suppressed " << stats.last_suppressed << " addresses that peer already knows");
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr self-address suppression", "[discovery][getaddr][echo]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr self-address suppression", "[discovery][getaddr][echo]") {
     // This test verifies that HandleGetAddr doesn't send the peer their own address
     // We test the suppression logic by adding the peer's address to the learned map
     // (which triggers the same is_suppressed check as self-address)
@@ -538,7 +541,7 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr self-address suppression", "[dis
 
     // Add addresses to AddrMan
     for (int i = 0; i < 50; i++) {
-        fixture.discovery_manager->addr_manager_for_test().add(DiscoveryManagerTestFixture::MakeAddress(i));
+        AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(DiscoveryManagerTestFixture::MakeAddress(i));
     }
 
     // Create inbound peer
@@ -547,7 +550,7 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr self-address suppression", "[dis
     auto peer = Peer::create_inbound(fixture.io_context, mock_conn, magic::REGTEST, 0);
     int peer_id = fixture.peer_manager->add_peer(peer);
     REQUIRE(peer_id >= 0);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // Verify peer's address is parsed correctly
     REQUIRE(peer->address() == "93.184.216.100");
@@ -571,7 +574,7 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr self-address suppression", "[dis
     });
 
     // Also add the peer's address to AddrMan so it could be returned
-    fixture.discovery_manager->addr_manager_for_test().add(self_addr);
+    AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(self_addr);
 
     // HandleGetAddr should suppress the peer's own address
     bool result = fixture.discovery_manager->HandleGetAddr(peer);
@@ -587,7 +590,7 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr self-address suppression", "[dis
     REQUIRE(mock_conn->sent_message_count() == 1);
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr echo suppression TTL expiry", "[discovery][getaddr][echo][time]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr echo suppression TTL expiry", "[discovery][getaddr][echo][time]") {
     // Use mock time for this test
     util::SetMockTime(0);
     constexpr int64_t TEST_TIME = 1700000000;
@@ -597,14 +600,14 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr echo suppression TTL expiry", "[
 
     // Add addresses to AddrMan
     for (int i = 0; i < 50; i++) {
-        fixture.discovery_manager->addr_manager_for_test().add(DiscoveryManagerTestFixture::MakeAddress(i));
+        AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(DiscoveryManagerTestFixture::MakeAddress(i));
     }
 
     // Create inbound peer
     auto peer = fixture.create_peer(ConnectionType::INBOUND, "192.168.1.1", 9590);
     int peer_id = fixture.peer_manager->add_peer(peer);
     REQUIRE(peer_id >= 0);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // Add learned addresses with OLD timestamps (beyond TTL)
     // ECHO_SUPPRESS_TTL_SEC is 600 (10 minutes)
@@ -635,12 +638,12 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr echo suppression TTL expiry", "[
     REQUIRE(stats.last_suppressed == 0);
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr TOCTOU protection (peer disconnected)", "[discovery][getaddr][toctou]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr TOCTOU protection (peer disconnected)", "[discovery][getaddr][toctou]") {
     DiscoveryManagerTestFixture fixture;
 
     // Add addresses to AddrMan
     for (int i = 0; i < 10; i++) {
-        fixture.discovery_manager->addr_manager_for_test().add(DiscoveryManagerTestFixture::MakeAddress(i));
+        AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(DiscoveryManagerTestFixture::MakeAddress(i));
     }
 
     // Create inbound peer
@@ -649,7 +652,7 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr TOCTOU protection (peer disconne
     auto peer = Peer::create_inbound(fixture.io_context, mock_conn, magic::REGTEST, 0);
     int peer_id = fixture.peer_manager->add_peer(peer);
     REQUIRE(peer_id >= 0);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // Disconnect the peer before HandleGetAddr sends the response
     // close() sets is_open() to false, which peer->is_connected() checks
@@ -663,21 +666,21 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr TOCTOU protection (peer disconne
     REQUIRE(mock_conn->sent_message_count() == 0);
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr with null addr_manager returns false", "[discovery][getaddr][edge]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr with null addr_manager returns false", "[discovery][getaddr][edge]") {
     // Create a discovery manager without an addr_manager
     asio::io_context io_context;
-    PeerLifecycleManager::Config pm_config;
-    auto peer_manager = std::make_unique<PeerLifecycleManager>(io_context, pm_config);
+    ConnectionManager::Config pm_config;
+    auto peer_manager = std::make_unique<ConnectionManager>(io_context, pm_config);
 
     // Create discovery manager and clear addr_manager
-    auto discovery_manager = std::make_unique<PeerDiscoveryManager>(peer_manager.get());
+    auto discovery_manager = std::make_unique<AddrRelayManager>(peer_manager.get());
 
     // Create a peer
     auto mock_conn = std::make_shared<MockTransportConnection>("192.168.1.1", 9590);
     mock_conn->set_inbound(true);
     auto peer = Peer::create_inbound(io_context, mock_conn, magic::REGTEST, 0);
     peer_manager->add_peer(peer);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // The addr_manager is always created in constructor, so this test verifies
     // normal operation. The null check is defensive.
@@ -686,7 +689,7 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr with null addr_manager returns f
     REQUIRE(result == true);
 }
 
-TEST_CASE("PeerDiscoveryManager - HandleGetAddr shuffles response for privacy", "[discovery][getaddr][privacy]") {
+TEST_CASE("AddrRelayManager - HandleGetAddr shuffles response for privacy", "[discovery][getaddr][privacy]") {
     // Test that GETADDR responses are shuffled to prevent recency leaks
     // Note: AddrMan's get_addresses() has its own randomness, so we can't test
     // determinism with seeds alone. Instead, verify that:
@@ -697,7 +700,7 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr shuffles response for privacy", 
 
     // Add addresses to AddrMan
     for (int i = 0; i < 20; i++) {
-        fixture.discovery_manager->addr_manager_for_test().add(
+        AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(
             DiscoveryManagerTestFixture::MakeAddress(i));
     }
 
@@ -706,7 +709,7 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr shuffles response for privacy", 
     mock_conn->set_inbound(true);
     auto peer = Peer::create_inbound(fixture.io_context, mock_conn, magic::REGTEST, 0);
     fixture.peer_manager->add_peer(peer);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // Call HandleGetAddr - should shuffle and send
     bool result = fixture.discovery_manager->HandleGetAddr(peer);
@@ -730,13 +733,13 @@ TEST_CASE("PeerDiscoveryManager - HandleGetAddr shuffles response for privacy", 
 // Rate Limiting Tests
 // ============================================================================
 
-TEST_CASE("PeerDiscoveryManager - ADDR rate limiting", "[discovery][addr][ratelimit]") {
+TEST_CASE("AddrRelayManager - ADDR rate limiting", "[discovery][addr][ratelimit]") {
     DiscoveryManagerTestFixture fixture;
 
     // Use routable public IP
     auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "193.0.0.2", 9590);
     fixture.peer_manager->add_peer(peer);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // First message: should be fully processed (token bucket starts at 1.0)
     message::AddrMessage addr_msg1;
@@ -756,10 +759,10 @@ TEST_CASE("PeerDiscoveryManager - ADDR rate limiting", "[discovery][addr][rateli
     // Not all addresses should have been processed due to rate limiting
     // Exact count depends on token bucket refill, but should be < 100
     // This is hard to test precisely without mocking time, but at least verify no crash
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().size() > 0);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size() > 0);
 }
 
-TEST_CASE("PeerDiscoveryManager - NotifyGetAddrSent boosts token bucket", "[discovery][addr][ratelimit]") {
+TEST_CASE("AddrRelayManager - NotifyGetAddrSent boosts token bucket", "[discovery][addr][ratelimit]") {
     DiscoveryManagerTestFixture fixture;
 
     // Create outbound peer with routable address via mock transport
@@ -767,7 +770,7 @@ TEST_CASE("PeerDiscoveryManager - NotifyGetAddrSent boosts token bucket", "[disc
     int peer_id = fixture.peer_manager->add_peer(peer);
     REQUIRE(peer_id >= 0);  // Verify add_peer succeeded
     REQUIRE(peer->id() == peer_id);  // Verify peer's ID matches
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     // Deplete token bucket with first address
     message::AddrMessage addr_msg1;
@@ -784,9 +787,9 @@ TEST_CASE("PeerDiscoveryManager - NotifyGetAddrSent boosts token bucket", "[disc
         addr_msg2.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(1000 + i));
     }
 
-    size_t before = fixture.discovery_manager->addr_manager_for_test().size();
+    size_t before = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
     fixture.discovery_manager->HandleAddr(peer, &addr_msg2);
-    size_t after = fixture.discovery_manager->addr_manager_for_test().size();
+    size_t after = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
 
     // Per-source limit caps addresses from any single peer to MAX_ADDRESSES_PER_SOURCE (64)
     // This is stricter than rate limiting and provides Sybil resistance
@@ -795,7 +798,7 @@ TEST_CASE("PeerDiscoveryManager - NotifyGetAddrSent boosts token bucket", "[disc
     REQUIRE(after - before >= 32);  // Some addresses should be added (allowing for netgroup limits)
 }
 
-TEST_CASE("PeerDiscoveryManager - ADDR rate limiting with mock time", "[discovery][addr][ratelimit][time]") {
+TEST_CASE("AddrRelayManager - ADDR rate limiting with mock time", "[discovery][addr][ratelimit][time]") {
     // Ensure mock time starts clean (no leftover from previous tests)
     util::SetMockTime(0);
 
@@ -806,7 +809,7 @@ TEST_CASE("PeerDiscoveryManager - ADDR rate limiting with mock time", "[discover
     DiscoveryManagerTestFixture fixture;
     auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "193.0.0.3", 9590);
     fixture.peer_manager->add_peer(peer);
-    peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
     SECTION("First ADDR message gets full bucket (1000 tokens)") {
         // Realistic scenario: we send GETADDR, peer responds with ADDR.
@@ -815,7 +818,7 @@ TEST_CASE("PeerDiscoveryManager - ADDR rate limiting with mock time", "[discover
         fixture.discovery_manager->NotifyGetAddrSent(peer->id());
 
         // Use 100 addresses to stay well under AddrManager's netgroup limits
-        size_t before = fixture.discovery_manager->addr_manager_for_test().size();
+        size_t before = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
 
         message::AddrMessage addr_msg;
         for (int i = 0; i < 100; i++) {
@@ -824,7 +827,7 @@ TEST_CASE("PeerDiscoveryManager - ADDR rate limiting with mock time", "[discover
 
         fixture.discovery_manager->HandleAddr(peer, &addr_msg);
 
-        size_t after = fixture.discovery_manager->addr_manager_for_test().size();
+        size_t after = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
         size_t added = after - before;
 
         // Debug: show what we got
@@ -847,7 +850,7 @@ TEST_CASE("PeerDiscoveryManager - ADDR rate limiting with mock time", "[discover
             addr_msg1.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(i, TEST_TIME));
         }
         fixture.discovery_manager->HandleAddr(peer, &addr_msg1);
-        size_t after_first = fixture.discovery_manager->addr_manager_for_test().size();
+        size_t after_first = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
 
         // Second message immediately after: bucket is empty, should be rate limited
         // No time advance, so no refill
@@ -856,7 +859,7 @@ TEST_CASE("PeerDiscoveryManager - ADDR rate limiting with mock time", "[discover
             addr_msg2.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(i, TEST_TIME));
         }
         fixture.discovery_manager->HandleAddr(peer, &addr_msg2);
-        size_t after_second = fixture.discovery_manager->addr_manager_for_test().size();
+        size_t after_second = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
 
         // Very few or none should be added (bucket refill is 0.1/sec, so ~0 in 0 seconds)
         REQUIRE(after_second - after_first < 10);
@@ -872,7 +875,7 @@ TEST_CASE("PeerDiscoveryManager - ADDR rate limiting with mock time", "[discover
             addr_msg1.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(i, TEST_TIME));
         }
         fixture.discovery_manager->HandleAddr(peer, &addr_msg1);
-        size_t after_first = fixture.discovery_manager->addr_manager_for_test().size();
+        size_t after_first = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
 
         // Per-source limit already reached (64 addresses from this peer)
         // So even with bucket refill, no more addresses can be added from this peer
@@ -886,7 +889,7 @@ TEST_CASE("PeerDiscoveryManager - ADDR rate limiting with mock time", "[discover
             addr_msg2.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(i, TEST_TIME + 100));
         }
         fixture.discovery_manager->HandleAddr(peer, &addr_msg2);
-        size_t after_second = fixture.discovery_manager->addr_manager_for_test().size();
+        size_t after_second = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
 
         // Per-source limit already reached, so no more addresses can be added from this peer
         // This is the expected Sybil resistance behavior
@@ -899,7 +902,7 @@ TEST_CASE("PeerDiscoveryManager - ADDR rate limiting with mock time", "[discover
 // Shuffle Fairness Tests
 // ============================================================================
 
-TEST_CASE("PeerDiscoveryManager - Rate limiting shuffle fairness", "[discovery][addr][ratelimit][shuffle]") {
+TEST_CASE("AddrRelayManager - Rate limiting shuffle fairness", "[discovery][addr][ratelimit][shuffle]") {
     // This test verifies that when rate limiting kicks in, the shuffle ensures
     // different addresses get accepted based on random order (not always the first N)
     //
@@ -917,11 +920,11 @@ TEST_CASE("PeerDiscoveryManager - Rate limiting shuffle fairness", "[discovery][
         // This test verifies the deterministic behavior within that constraint
         auto run_with_seed = [&](uint64_t seed) -> size_t {
             DiscoveryManagerTestFixture fixture;
-            fixture.discovery_manager->TestSeedRng(seed);
+            AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, seed);
 
             auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "193.0.0.1", 9590);
             fixture.peer_manager->add_peer(peer);
-            peer->set_successfully_connected_for_test(true);
+            PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
             // Boost bucket first (simulates GETADDR being sent)
             fixture.discovery_manager->NotifyGetAddrSent(peer->id());
@@ -933,7 +936,7 @@ TEST_CASE("PeerDiscoveryManager - Rate limiting shuffle fairness", "[discovery][
             }
             fixture.discovery_manager->HandleAddr(peer, &first_msg);
 
-            return fixture.discovery_manager->addr_manager_for_test().size();
+            return AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
         };
 
         // Same seed should produce same result
@@ -952,11 +955,11 @@ TEST_CASE("PeerDiscoveryManager - Rate limiting shuffle fairness", "[discovery][
         // Once 64 addresses from a peer are added, no more can be added
 
         DiscoveryManagerTestFixture fixture;
-        fixture.discovery_manager->TestSeedRng(99999);
+        AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 99999);
 
         auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "193.0.0.1", 9590);
         fixture.peer_manager->add_peer(peer);
-        peer->set_successfully_connected_for_test(true);
+        PeerTestAccess::SetSuccessfullyConnected(*peer, true);
 
         // Boost bucket first (simulates GETADDR being sent)
         fixture.discovery_manager->NotifyGetAddrSent(peer->id());
@@ -967,7 +970,7 @@ TEST_CASE("PeerDiscoveryManager - Rate limiting shuffle fairness", "[discovery][
             first_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(i, TEST_TIME));
         }
         fixture.discovery_manager->HandleAddr(peer, &first_msg);
-        size_t after_first = fixture.discovery_manager->addr_manager_for_test().size();
+        size_t after_first = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
 
         // Per-source limit should have capped at ~64
         INFO("After first message: " << after_first << " addresses");
@@ -983,7 +986,7 @@ TEST_CASE("PeerDiscoveryManager - Rate limiting shuffle fairness", "[discovery][
             second_msg.addresses.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(i, TEST_TIME));
         }
         fixture.discovery_manager->HandleAddr(peer, &second_msg);
-        size_t after_second = fixture.discovery_manager->addr_manager_for_test().size();
+        size_t after_second = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
 
         size_t accepted = after_second - after_first;
         INFO("Accepted " << accepted << " addresses in second message (per-source limit already hit)");
@@ -997,11 +1000,11 @@ TEST_CASE("PeerDiscoveryManager - Rate limiting shuffle fairness", "[discovery][
 // Bootstrap Tests
 // ============================================================================
 
-TEST_CASE("PeerDiscoveryManager - Bootstrap on Start", "[discovery][bootstrap]") {
+TEST_CASE("AddrRelayManager - Bootstrap on Start", "[discovery][bootstrap]") {
     DiscoveryManagerTestFixture fixture;
 
     // Ensure AddrMan is empty
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().size() == 0);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size() == 0);
 
     // Start() calls BootstrapFromFixedSeeds internally when AddrMan is empty
     fixture.discovery_manager->Start([](const std::vector<protocol::NetworkAddress>&) {
@@ -1010,14 +1013,14 @@ TEST_CASE("PeerDiscoveryManager - Bootstrap on Start", "[discovery][bootstrap]")
 
     // Should have added some addresses (exact count depends on chain params)
     // At minimum, verify the function doesn't crash
-    INFO("Addresses after bootstrap: " << fixture.discovery_manager->addr_manager_for_test().size());
+    INFO("Addresses after bootstrap: " << AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size());
 }
 
-TEST_CASE("PeerDiscoveryManager - Start() bootstraps from fixed seeds when empty", "[discovery][bootstrap]") {
+TEST_CASE("AddrRelayManager - Start() bootstraps from fixed seeds when empty", "[discovery][bootstrap]") {
     DiscoveryManagerTestFixture fixture;
 
     // Ensure AddrMan starts empty
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().size() == 0);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size() == 0);
 
     // Get REGTEST chain params to check how many seeds we have
     const auto& params = chain::GlobalChainParams::Get();
@@ -1032,14 +1035,14 @@ TEST_CASE("PeerDiscoveryManager - Start() bootstraps from fixed seeds when empty
 
     // If REGTEST has seeds, they should have been added
     if (!seeds.empty()) {
-        size_t addrman_size = fixture.discovery_manager->addr_manager_for_test().size();
+        size_t addrman_size = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
         INFO("AddrMan size after bootstrap: " << addrman_size);
         REQUIRE(addrman_size > 0);
         REQUIRE(addrman_size <= seeds.size());  // Can't add more than provided
     }
 }
 
-TEST_CASE("PeerDiscoveryManager - Fixed seeds have valid format", "[discovery][bootstrap]") {
+TEST_CASE("AddrRelayManager - Fixed seeds have valid format", "[discovery][bootstrap]") {
     // Verify all configured seeds have valid IP:port format
     const auto& params = chain::GlobalChainParams::Get();
     const auto& seeds = params.FixedSeeds();
@@ -1059,7 +1062,7 @@ TEST_CASE("PeerDiscoveryManager - Fixed seeds have valid format", "[discovery][b
     }
 }
 
-TEST_CASE("PeerDiscoveryManager - Start() skips bootstrap when AddrMan not empty", "[discovery][bootstrap][testnet]") {
+TEST_CASE("AddrRelayManager - Start() skips bootstrap when AddrMan not empty", "[discovery][bootstrap][testnet]") {
     // Switch to TESTNET which has fixed seeds (REGTEST has none)
     chain::GlobalChainParams::Select(chain::ChainType::TESTNET);
 
@@ -1068,13 +1071,13 @@ TEST_CASE("PeerDiscoveryManager - Start() skips bootstrap when AddrMan not empty
 
     // First Start() with empty AddrMan -> bootstraps
     fixture.discovery_manager->Start([](const std::vector<protocol::NetworkAddress>&) {});
-    size_t size_after_first = fixture.discovery_manager->addr_manager_for_test().size();
+    size_t size_after_first = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
     REQUIRE(size_after_first > 0);  // Should have bootstrapped
 
     // Second Start() - AddrMan not empty, should skip bootstrap
     // We can verify this by checking size doesn't change (no duplicates)
     fixture.discovery_manager->Start([](const std::vector<protocol::NetworkAddress>&) {});
-    size_t size_after_second = fixture.discovery_manager->addr_manager_for_test().size();
+    size_t size_after_second = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
 
     // Size should remain the same (bootstrap skipped because AddrMan wasn't empty)
     INFO("Size after first: " << size_after_first << ", after second: " << size_after_second);
@@ -1084,7 +1087,7 @@ TEST_CASE("PeerDiscoveryManager - Start() skips bootstrap when AddrMan not empty
     chain::GlobalChainParams::Select(chain::ChainType::REGTEST);
 }
 
-TEST_CASE("PeerDiscoveryManager - Bootstrap uses mockable time for timestamps", "[discovery][bootstrap][time][testnet]") {
+TEST_CASE("AddrRelayManager - Bootstrap uses mockable time for timestamps", "[discovery][bootstrap][time][testnet]") {
     // Switch to TESTNET which has fixed seeds (REGTEST has none)
     chain::GlobalChainParams::Select(chain::ChainType::TESTNET);
 
@@ -1099,7 +1102,7 @@ TEST_CASE("PeerDiscoveryManager - Bootstrap uses mockable time for timestamps", 
     fixture.discovery_manager->Start([](const std::vector<protocol::NetworkAddress>&) {});
 
     // Verify addresses were added with the mock timestamp
-    auto addrs = fixture.discovery_manager->addr_manager_for_test().get_addresses(100);
+    auto addrs = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).get_addresses(100);
     REQUIRE(!addrs.empty());  // Should have bootstrapped seeds
 
     // Timestamps should be close to TEST_TIME (within a few seconds)
@@ -1113,7 +1116,7 @@ TEST_CASE("PeerDiscoveryManager - Bootstrap uses mockable time for timestamps", 
     chain::GlobalChainParams::Select(chain::ChainType::REGTEST);
 }
 
-TEST_CASE("PeerDiscoveryManager - TESTNET seeds are routable and accepted by AddrMan", "[discovery][bootstrap][testnet]") {
+TEST_CASE("AddrRelayManager - TESTNET seeds are routable and accepted by AddrMan", "[discovery][bootstrap][testnet]") {
     // This test verifies that production seeds (TESTNET) will actually work:
     // 1. Seeds are parseable
     // 2. Seeds are routable (not private/reserved IPs)
@@ -1145,11 +1148,11 @@ TEST_CASE("PeerDiscoveryManager - TESTNET seeds are routable and accepted by Add
         DiscoveryManagerTestFixture fixture;
         chain::GlobalChainParams::Select(chain::ChainType::TESTNET);  // Re-select after fixture
 
-        REQUIRE(fixture.discovery_manager->addr_manager_for_test().size() == 0);
+        REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size() == 0);
 
         fixture.discovery_manager->Start([](const std::vector<protocol::NetworkAddress>&) {});
 
-        size_t added = fixture.discovery_manager->addr_manager_for_test().size();
+        size_t added = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size();
         INFO("AddrMan accepted " << added << " of " << seed_count << " seeds");
         REQUIRE(added > 0);
         REQUIRE(added == seed_count);  // All valid seeds should be accepted
@@ -1163,43 +1166,43 @@ TEST_CASE("PeerDiscoveryManager - TESTNET seeds are routable and accepted by Add
 // AddressManager Integration Tests
 // ============================================================================
 
-TEST_CASE("PeerDiscoveryManager - AddressManager integration", "[discovery][addrman]") {
+TEST_CASE("AddrRelayManager - AddressManager integration", "[discovery][addrman]") {
     DiscoveryManagerTestFixture fixture;
 
     // Test Add
     NetworkAddress addr1 = DiscoveryManagerTestFixture::MakeAddress(1);
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().add(addr1));
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().size() == 1);
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().new_count() == 1);
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().tried_count() == 0);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add(addr1));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size() == 1);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).new_count() == 1);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).tried_count() == 0);
 
     // Test Good (moves to tried)
     fixture.discovery_manager->Good(addr1);
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().new_count() == 0);
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().tried_count() == 1);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).new_count() == 0);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).tried_count() == 1);
 
     // Test Select
     auto selected = fixture.discovery_manager->Select();
     REQUIRE(selected.has_value());
 
     // Test GetAddresses
-    auto addrs = fixture.discovery_manager->addr_manager_for_test().get_addresses(10);
+    auto addrs = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).get_addresses(10);
     REQUIRE(addrs.size() == 1);
 
     // Test AddMultiple
     std::vector<TimestampedAddress> multi;
     multi.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(2));
     multi.push_back(DiscoveryManagerTestFixture::MakeTimestampedAddress(3));
-    size_t added = fixture.discovery_manager->addr_manager_for_test().add_multiple(multi);
+    size_t added = AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).add_multiple(multi);
     REQUIRE(added == 2);
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().size() == 3);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size() == 3);
 }
 
 // ============================================================================
 // Address Relay Tests
 // ============================================================================
 
-TEST_CASE("PeerDiscoveryManager - Address relay to other peers", "[discovery][relay]") {
+TEST_CASE("AddrRelayManager - Address relay to other peers", "[discovery][relay]") {
     // Set up mock time for trickle delay tests
     constexpr int64_t TEST_TIME = 1700000000;
     util::MockTimeScope mock_time(TEST_TIME);
@@ -1207,7 +1210,7 @@ TEST_CASE("PeerDiscoveryManager - Address relay to other peers", "[discovery][re
     DiscoveryManagerTestFixture fixture;
 
     // Seed deterministic random for predictable tests
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create sender peer (outbound full-relay)
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
@@ -1215,7 +1218,7 @@ TEST_CASE("PeerDiscoveryManager - Address relay to other peers", "[discovery][re
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     int sender_id = fixture.peer_manager->add_peer(sender);
     REQUIRE(sender_id >= 0);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     // Create two relay target peers (outbound full-relay)
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
@@ -1223,14 +1226,14 @@ TEST_CASE("PeerDiscoveryManager - Address relay to other peers", "[discovery][re
     auto target1 = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     int target1_id = fixture.peer_manager->add_peer(target1);
     REQUIRE(target1_id >= 0);
-    target1->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*target1, true);
 
     auto mock_conn3 = std::make_shared<MockTransportConnection>("193.0.0.3", 9590);
     mock_conn3->set_inbound(false);
     auto target2 = Peer::create_outbound(fixture.io_context, mock_conn3, magic::REGTEST, 0, "193.0.0.3", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     int target2_id = fixture.peer_manager->add_peer(target2);
     REQUIRE(target2_id >= 0);
-    target2->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*target2, true);
 
     // Clear any messages from peer setup
     mock_conn2->clear_sent_messages();
@@ -1276,11 +1279,11 @@ TEST_CASE("PeerDiscoveryManager - Address relay to other peers", "[discovery][re
     }
 }
 
-TEST_CASE("PeerDiscoveryManager - Address relay loop prevention", "[discovery][relay][loop]") {
+TEST_CASE("AddrRelayManager - Address relay loop prevention", "[discovery][relay][loop]") {
     DiscoveryManagerTestFixture fixture;
 
     // Seed deterministic random
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create two peers that will exchange addresses
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
@@ -1288,14 +1291,14 @@ TEST_CASE("PeerDiscoveryManager - Address relay loop prevention", "[discovery][r
     auto peer1 = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     int peer1_id = fixture.peer_manager->add_peer(peer1);
     REQUIRE(peer1_id >= 0);
-    peer1->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer1, true);
 
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
     mock_conn2->set_inbound(false);
     auto peer2 = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     int peer2_id = fixture.peer_manager->add_peer(peer2);
     REQUIRE(peer2_id >= 0);
-    peer2->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*peer2, true);
 
     SECTION("Known addresses are not relayed again") {
         // First, peer1 sends an address - it gets relayed to peer2
@@ -1356,24 +1359,24 @@ TEST_CASE("PeerDiscoveryManager - Address relay loop prevention", "[discovery][r
     }
 }
 
-TEST_CASE("PeerDiscoveryManager - Address relay skips block-relay-only peers", "[discovery][relay][block_relay]") {
+TEST_CASE("AddrRelayManager - Address relay skips block-relay-only peers", "[discovery][relay][block_relay]") {
     DiscoveryManagerTestFixture fixture;
 
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create sender (full-relay)
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     // Create target as BLOCK_RELAY (should NOT receive relay)
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
     mock_conn2->set_inbound(false);
     auto block_relay_peer = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::BLOCK_RELAY);
     fixture.peer_manager->add_peer(block_relay_peer);
-    block_relay_peer->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*block_relay_peer, true);
 
     mock_conn2->clear_sent_messages();
 
@@ -1386,24 +1389,24 @@ TEST_CASE("PeerDiscoveryManager - Address relay skips block-relay-only peers", "
     REQUIRE(mock_conn2->sent_message_count() == 0);
 }
 
-TEST_CASE("PeerDiscoveryManager - Address relay skips pre-handshake peers", "[discovery][relay]") {
+TEST_CASE("AddrRelayManager - Address relay skips pre-handshake peers", "[discovery][relay]") {
     DiscoveryManagerTestFixture fixture;
 
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create sender (full-relay, post-handshake)
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     // Create target but do NOT mark as successfully connected
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
     mock_conn2->set_inbound(false);
     auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(target);
-    // Note: NOT calling target->set_successfully_connected_for_test(true)
+    // Note: NOT calling PeerTestAccess::SetSuccessfullyConnected(*target, true)
 
     mock_conn2->clear_sent_messages();
 
@@ -1416,24 +1419,24 @@ TEST_CASE("PeerDiscoveryManager - Address relay skips pre-handshake peers", "[di
     REQUIRE(mock_conn2->sent_message_count() == 0);
 }
 
-TEST_CASE("PeerDiscoveryManager - Address relay marks addresses as known", "[discovery][relay][learned]") {
+TEST_CASE("AddrRelayManager - Address relay marks addresses as known", "[discovery][relay][learned]") {
     DiscoveryManagerTestFixture fixture;
 
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create sender and target
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
     mock_conn2->set_inbound(false);
     auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     int target_id = fixture.peer_manager->add_peer(target);
     REQUIRE(target_id >= 0);
-    target->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*target, true);
 
     // Initially target has no learned addresses
     auto learned_before = fixture.peer_manager->GetLearnedAddresses(target_id);
@@ -1462,17 +1465,17 @@ TEST_CASE("PeerDiscoveryManager - Address relay marks addresses as known", "[dis
     }
 }
 
-TEST_CASE("PeerDiscoveryManager - Address relay with no eligible targets", "[discovery][relay]") {
+TEST_CASE("AddrRelayManager - Address relay with no eligible targets", "[discovery][relay]") {
     DiscoveryManagerTestFixture fixture;
 
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create only the sender (no other peers to relay to)
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     // Send ADDR - should not crash with no targets
     message::AddrMessage addr_msg;
@@ -1483,24 +1486,24 @@ TEST_CASE("PeerDiscoveryManager - Address relay with no eligible targets", "[dis
     REQUIRE(result == true);
 
     // Address should still be added to AddrMan
-    REQUIRE(fixture.discovery_manager->addr_manager_for_test().size() > 0);
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(*fixture.discovery_manager).size() > 0);
 }
 
-TEST_CASE("PeerDiscoveryManager - Address relay limits to 2 peers", "[discovery][relay]") {
+TEST_CASE("AddrRelayManager - Address relay limits to 2 peers", "[discovery][relay]") {
     // Set up mock time for trickle delay
     constexpr int64_t TEST_TIME = 1700000000;
     util::MockTimeScope mock_time(TEST_TIME);
 
     DiscoveryManagerTestFixture fixture;
 
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create sender
     auto mock_conn0 = std::make_shared<MockTransportConnection>("193.0.0.0", 9590);
     mock_conn0->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn0, magic::REGTEST, 0, "193.0.0.0", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     // Create 5 target peers
     std::vector<std::shared_ptr<MockTransportConnection>> mock_conns;
@@ -1511,7 +1514,7 @@ TEST_CASE("PeerDiscoveryManager - Address relay limits to 2 peers", "[discovery]
 
         auto target = Peer::create_outbound(fixture.io_context, conn, magic::REGTEST, 0, "193.0.0." + std::to_string(i), 9590, ConnectionType::OUTBOUND_FULL_RELAY);
         fixture.peer_manager->add_peer(target);
-        target->set_successfully_connected_for_test(true);
+        PeerTestAccess::SetSuccessfullyConnected(*target, true);
     }
 
     // Clear all messages
@@ -1548,7 +1551,7 @@ TEST_CASE("PeerDiscoveryManager - Address relay limits to 2 peers", "[discovery]
 // Bitcoin Core Relay Condition Tests
 // ============================================================================
 
-TEST_CASE("PeerDiscoveryManager - Relay skipped for large ADDR messages (>10)", "[discovery][relay][bitcoin_core]") {
+TEST_CASE("AddrRelayManager - Relay skipped for large ADDR messages (>10)", "[discovery][relay][bitcoin_core]") {
     // Bitcoin Core only relays from ADDR messages with ≤10 addresses
     // to prevent relay amplification attacks
 
@@ -1557,20 +1560,20 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for large ADDR messages (>10)", 
     util::MockTimeScope mock_time(TEST_TIME);
 
     DiscoveryManagerTestFixture fixture;
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create sender and target
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender, NetPermissionFlags::Addr);  // Bypass rate limiting for 10+ addresses
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
     mock_conn2->set_inbound(false);
     auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(target);
-    target->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*target, true);
 
     mock_conn2->clear_sent_messages();
 
@@ -1607,25 +1610,25 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for large ADDR messages (>10)", 
     }
 }
 
-TEST_CASE("PeerDiscoveryManager - Relay skipped for GETADDR responses", "[discovery][relay][bitcoin_core]") {
+TEST_CASE("AddrRelayManager - Relay skipped for GETADDR responses", "[discovery][relay][bitcoin_core]") {
     // Bitcoin Core only relays unsolicited ADDR messages
     // If we sent GETADDR to a peer, their response should NOT be relayed
 
     DiscoveryManagerTestFixture fixture;
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create sender and target
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
     mock_conn2->set_inbound(false);
     auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(target);
-    target->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*target, true);
 
     mock_conn2->clear_sent_messages();
 
@@ -1642,7 +1645,7 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for GETADDR responses", "[discov
     REQUIRE(mock_conn2->sent_message_count() == 0);
 }
 
-TEST_CASE("PeerDiscoveryManager - Relay skipped for old timestamps", "[discovery][relay][bitcoin_core]") {
+TEST_CASE("AddrRelayManager - Relay skipped for old timestamps", "[discovery][relay][bitcoin_core]") {
     // Bitcoin Core only relays addresses with timestamps within last 10 minutes
 
     // Set mock time for deterministic testing
@@ -1651,20 +1654,20 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for old timestamps", "[discovery
     util::MockTimeScope mock_time(TEST_TIME);
 
     DiscoveryManagerTestFixture fixture;
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create sender and target
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
     mock_conn2->set_inbound(false);
     auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(target);
-    target->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*target, true);
 
     SECTION("Address with old timestamp (>10 min) is NOT relayed") {
         mock_conn2->clear_sent_messages();
@@ -1675,8 +1678,8 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for old timestamps", "[discovery
 
         fixture.discovery_manager->HandleAddr(sender, &addr_msg);
 
-        // Advance time and process - still no relay because timestamp too old
-        util::SetMockTime(TEST_TIME + 60);
+        // Advance time past trickle delay - still no relay because timestamp too old
+        util::SetMockTime(TEST_TIME + 67);
         fixture.discovery_manager->ProcessPendingAddrRelays();
 
         // No relay should occur (address too old)
@@ -1692,8 +1695,8 @@ TEST_CASE("PeerDiscoveryManager - Relay skipped for old timestamps", "[discovery
 
         fixture.discovery_manager->HandleAddr(sender, &addr_msg);
 
-        // Advance time and process trickle queue
-        util::SetMockTime(TEST_TIME + 60);
+        // Advance time past trickle delay (seed 12345 with 1 target generates 66260ms)
+        util::SetMockTime(TEST_TIME + 67);
         fixture.discovery_manager->ProcessPendingAddrRelays();
 
         // Relay should occur
@@ -1729,7 +1732,7 @@ TEST_CASE("AddressKey constructor from NetworkAddress - IPv4-mapped", "[network]
     // IPv4-mapped IPv6 address (::ffff:93.184.216.34)
     protocol::NetworkAddress na;
     na.ip = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 93, 184, 216, 34};
-    na.port = 8333;
+    na.port = 9590;
 
     AddressKey key(na);
 
@@ -1739,7 +1742,7 @@ TEST_CASE("AddressKey constructor from NetworkAddress - IPv4-mapped", "[network]
     REQUIRE(key.ip[13] == 184);
     REQUIRE(key.ip[14] == 216);
     REQUIRE(key.ip[15] == 34);
-    REQUIRE(key.port == 8333);
+    REQUIRE(key.port == 9590);
 }
 
 TEST_CASE("AddressKey equality with NetworkAddress constructor", "[network][addresskey]") {
@@ -1766,7 +1769,7 @@ TEST_CASE("AddressKey equality with NetworkAddress constructor", "[network][addr
 TEST_CASE("AddressKey::Hasher is deterministic", "[network][hash]") {
     AddressKey k1;
     k1.ip = {192, 168, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    k1.port = 8333;
+    k1.port = 9590;
 
     AddressKey k2 = k1;  // Same values
 
@@ -1780,10 +1783,10 @@ TEST_CASE("AddressKey::Hasher is deterministic", "[network][hash]") {
 TEST_CASE("AddressKey::Hasher differentiates IPs", "[network][hash]") {
     AddressKey k1, k2;
     k1.ip = {192, 168, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    k1.port = 8333;
+    k1.port = 9590;
 
     k2.ip = {192, 168, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};  // Different last octet
-    k2.port = 8333;
+    k2.port = 9590;
 
     AddressKey::Hasher hasher;
     REQUIRE(hasher(k1) != hasher(k2));
@@ -1792,7 +1795,7 @@ TEST_CASE("AddressKey::Hasher differentiates IPs", "[network][hash]") {
 TEST_CASE("AddressKey::Hasher differentiates ports", "[network][hash]") {
     AddressKey k1, k2;
     k1.ip = {192, 168, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    k1.port = 8333;
+    k1.port = 9590;
 
     k2.ip = k1.ip;  // Same IP
     k2.port = 8334;  // Different port
@@ -1801,25 +1804,20 @@ TEST_CASE("AddressKey::Hasher differentiates ports", "[network][hash]") {
     REQUIRE(hasher(k1) != hasher(k2));
 }
 
-TEST_CASE("AddressKey::Hasher produces correct FNV-1a hashes", "[network][hash]") {
-    // Test against known FNV-1a behavior
-    // FNV-1a 64-bit offset basis = 0xcbf29ce484222325
+TEST_CASE("AddressKey::Hasher uses SipHash with random seed", "[network][hash]") {
+    // SipHash with per-process random key means we can't predict exact values,
+    // but we can verify basic hash properties
 
-    AddressKey empty;
-    // All zeros: 16 bytes of 0x00 for IP + 2 bytes of 0x00 for port
     AddressKey::Hasher hasher;
 
-    // Verify the hash of all-zeros follows FNV-1a algorithm:
-    // Each byte XORs with h, then multiplies by prime
-    // Starting with offset 14695981039346656037, XOR with 0, multiply by prime
-    // After 18 iterations of (h ^= 0; h *= prime), we get a specific value
+    // Different inputs should (almost certainly) produce different hashes
+    AddressKey k1, k2;
+    k1.ip[0] = 10; k1.port = 8333;
+    k2.ip[0] = 10; k2.port = 8334;
+    REQUIRE(hasher(k1) != hasher(k2));
 
-    uint64_t expected = 14695981039346656037ULL;
-    for (int i = 0; i < 18; i++) {  // 16 IP bytes + 2 port bytes
-        expected ^= 0;
-        expected *= 1099511628211ULL;
-    }
-    REQUIRE(hasher(empty) == expected);
+    // Same input from same hasher instance must be deterministic
+    REQUIRE(hasher(k1) == hasher(k1));
 }
 
 TEST_CASE("AddressKey works correctly in unordered_map", "[network][hash]") {
@@ -1853,7 +1851,7 @@ TEST_CASE("AddressKey works correctly in unordered_map", "[network][hash]") {
 // ADDR Trickle Delay Tests
 // ============================================================================
 
-TEST_CASE("PeerDiscoveryManager - ProcessPendingAddrRelays with empty queue", "[discovery][trickle]") {
+TEST_CASE("AddrRelayManager - ProcessPendingAddrRelays with empty queue", "[discovery][trickle]") {
     DiscoveryManagerTestFixture fixture;
 
     // Should not crash with empty queue
@@ -1863,27 +1861,27 @@ TEST_CASE("PeerDiscoveryManager - ProcessPendingAddrRelays with empty queue", "[
     REQUIRE(true);
 }
 
-TEST_CASE("PeerDiscoveryManager - ADDR relay is queued with trickle delay", "[discovery][trickle][relay]") {
+TEST_CASE("AddrRelayManager - ADDR relay is queued with trickle delay", "[discovery][trickle][relay]") {
     // Use mock time for deterministic testing
     util::SetMockTime(0);
     constexpr int64_t TEST_TIME = 1700000000;
     util::MockTimeScope mock_time(TEST_TIME);
 
     DiscoveryManagerTestFixture fixture;
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create sender and target
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
     mock_conn2->set_inbound(false);
     auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(target);
-    target->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*target, true);
 
     mock_conn2->clear_sent_messages();
 
@@ -1897,8 +1895,8 @@ TEST_CASE("PeerDiscoveryManager - ADDR relay is queued with trickle delay", "[di
     // (it's queued for later)
     REQUIRE(mock_conn2->sent_message_count() == 0);
 
-    // Now advance time past the trickle delay (mean is 5 seconds, use 20 to be safe)
-    util::SetMockTime(TEST_TIME + 20);
+    // Advance time past the trickle delay (seed 12345 generates 66260ms delay)
+    util::SetMockTime(TEST_TIME + 67);
 
     // Process pending relays
     fixture.discovery_manager->ProcessPendingAddrRelays();
@@ -1907,26 +1905,26 @@ TEST_CASE("PeerDiscoveryManager - ADDR relay is queued with trickle delay", "[di
     REQUIRE(mock_conn2->sent_message_count() == 1);
 }
 
-TEST_CASE("PeerDiscoveryManager - Trickle delay respects mock time", "[discovery][trickle][time]") {
+TEST_CASE("AddrRelayManager - Trickle delay respects mock time", "[discovery][trickle][time]") {
     util::SetMockTime(0);
     constexpr int64_t TEST_TIME = 1700000000;
     util::MockTimeScope mock_time(TEST_TIME);
 
     DiscoveryManagerTestFixture fixture;
-    fixture.discovery_manager->TestSeedRng(42);  // Deterministic seed
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 42);  // Deterministic seed
 
     // Create sender and target
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
     mock_conn2->set_inbound(false);
     auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(target);
-    target->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*target, true);
 
     mock_conn2->clear_sent_messages();
 
@@ -1939,35 +1937,34 @@ TEST_CASE("PeerDiscoveryManager - Trickle delay respects mock time", "[discovery
     util::SetMockTime(TEST_TIME + 1);
     fixture.discovery_manager->ProcessPendingAddrRelays();
 
-    // Message might not be sent yet (depends on random delay)
-    // But after 30 seconds it should definitely be sent
-    util::SetMockTime(TEST_TIME + 30);
+    // Advance time past the trickle delay (seed 42 generates 47769ms delay)
+    util::SetMockTime(TEST_TIME + 48);
     fixture.discovery_manager->ProcessPendingAddrRelays();
 
     REQUIRE(mock_conn2->sent_message_count() == 1);
 }
 
-TEST_CASE("PeerDiscoveryManager - Trickle handles peer disconnect", "[discovery][trickle][disconnect]") {
+TEST_CASE("AddrRelayManager - Trickle handles peer disconnect", "[discovery][trickle][disconnect]") {
     util::SetMockTime(0);
     constexpr int64_t TEST_TIME = 1700000000;
     util::MockTimeScope mock_time(TEST_TIME);
 
     DiscoveryManagerTestFixture fixture;
-    fixture.discovery_manager->TestSeedRng(12345);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
 
     // Create sender and target
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     fixture.peer_manager->add_peer(sender);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     auto mock_conn2 = std::make_shared<MockTransportConnection>("193.0.0.2", 9590);
     mock_conn2->set_inbound(false);
     auto target = Peer::create_outbound(fixture.io_context, mock_conn2, magic::REGTEST, 0, "193.0.0.2", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     int target_id = fixture.peer_manager->add_peer(target);
     REQUIRE(target_id >= 0);
-    target->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*target, true);
 
     mock_conn2->clear_sent_messages();
 
@@ -1979,8 +1976,8 @@ TEST_CASE("PeerDiscoveryManager - Trickle handles peer disconnect", "[discovery]
     // Disconnect the target before delay expires
     mock_conn2->close();
 
-    // Advance time past delay
-    util::SetMockTime(TEST_TIME + 30);
+    // Advance time past delay (seed 12345 generates 66260ms delay)
+    util::SetMockTime(TEST_TIME + 67);
 
     // Should not crash when processing (peer is gone)
     fixture.discovery_manager->ProcessPendingAddrRelays();
@@ -1989,27 +1986,27 @@ TEST_CASE("PeerDiscoveryManager - Trickle handles peer disconnect", "[discovery]
     REQUIRE(mock_conn2->sent_message_count() == 0);
 }
 
-TEST_CASE("PeerDiscoveryManager - Multiple pending relays processed correctly", "[discovery][trickle]") {
+TEST_CASE("AddrRelayManager - Multiple pending relays processed correctly", "[discovery][trickle]") {
     util::SetMockTime(0);
     constexpr int64_t TEST_TIME = 1700000000;
     util::MockTimeScope mock_time(TEST_TIME);
 
     DiscoveryManagerTestFixture fixture;
-    fixture.discovery_manager->TestSeedRng(99999);
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 99999);
 
     // Create sender with Addr permission to bypass rate limiting
     auto mock_conn0 = std::make_shared<MockTransportConnection>("193.0.0.0", 9590);
     mock_conn0->set_inbound(false);
     auto sender = Peer::create_outbound(fixture.io_context, mock_conn0, magic::REGTEST, 0, "193.0.0.0", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     int sender_id = fixture.peer_manager->add_peer(sender, NetPermissionFlags::Addr);
-    sender->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*sender, true);
 
     // Create single target (eliminates randomness in peer selection)
     auto mock_conn1 = std::make_shared<MockTransportConnection>("193.0.0.1", 9590);
     mock_conn1->set_inbound(false);
     auto target = Peer::create_outbound(fixture.io_context, mock_conn1, magic::REGTEST, 0, "193.0.0.1", 9590, ConnectionType::OUTBOUND_FULL_RELAY);
     int target_id = fixture.peer_manager->add_peer(target);
-    target->set_successfully_connected_for_test(true);
+    PeerTestAccess::SetSuccessfullyConnected(*target, true);
     mock_conn1->clear_sent_messages();
 
     // Verify peer setup
@@ -2030,17 +2027,336 @@ TEST_CASE("PeerDiscoveryManager - Multiple pending relays processed correctly", 
         fixture.discovery_manager->HandleAddr(sender, &addr_msg);
     }
 
-    // Verify 3 relays were queued
-    REQUIRE(fixture.discovery_manager->PendingAddrRelayCountForTest() == 3);
+    // Verify 3 addresses were queued for the target peer
+    REQUIRE(AddrRelayManagerTestAccess::GetPendingAddrRelayCount(*fixture.discovery_manager) == 3);
 
     // No messages should be sent yet (trickle delay)
     REQUIRE(mock_conn1->sent_message_count() == 0);
 
-    // Advance time past all delays (60 seconds beyond the last HandleAddr)
-    util::SetMockTime(TEST_TIME + 63);
+    // Advance time past the timer (per-peer batching means one timer for all addresses)
+    util::SetMockTime(TEST_TIME + 142);
     fixture.discovery_manager->ProcessPendingAddrRelays();
 
-    // Should have sent 3 messages (1 per ADDR message to the single target)
+    // With per-peer batching (Bitcoin Core style), all 3 addresses are sent in 1 batch message
     INFO("Total messages sent: " << mock_conn1->sent_message_count());
-    REQUIRE(mock_conn1->sent_message_count() == 3);
+    REQUIRE(mock_conn1->sent_message_count() == 1);
+}
+
+// ============================================================================
+// SelectAddrRelayTargets_ForTest Tests (Deterministic Peer Selection)
+// ============================================================================
+
+TEST_CASE("AddrRelayManager - SelectAddrRelayTargets_ForTest selects exactly 2 peers", "[discovery][addr_relay][deterministic]") {
+    DiscoveryManagerTestFixture fixture;
+
+    // Seed for reproducibility
+    AddrRelayManagerTestAccess::SeedAddrRelay(*fixture.discovery_manager, 12345, 67890);
+
+    // Create 5 peers as candidates with unique IDs
+    std::vector<PeerPtr> candidates;
+    for (int i = 0; i < 5; i++) {
+        std::string addr = "193.0.0." + std::to_string(i + 1);
+        auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, addr, 9590);
+        peer->set_id(i + 1);  // Unique ID for deterministic hashing
+        candidates.push_back(peer);
+    }
+
+    // Create a test address
+    NetworkAddress test_addr = DiscoveryManagerTestFixture::MakeAddress(1234);
+
+    // Call SelectAddrRelayTargets_ForTest
+    auto targets = AddrRelayManagerTestAccess::SelectAddrRelayTargets(*fixture.discovery_manager, test_addr, candidates);
+
+    INFO("Selected " << targets.size() << " targets out of " << candidates.size() << " candidates");
+    REQUIRE(targets.size() == 2);
+}
+
+TEST_CASE("AddrRelayManager - SelectAddrRelayTargets_ForTest is deterministic", "[discovery][addr_relay][deterministic]") {
+    DiscoveryManagerTestFixture fixture;
+
+    // Seed for reproducibility
+    AddrRelayManagerTestAccess::SeedAddrRelay(*fixture.discovery_manager, 11111, 22222);
+
+    // Create 4 peers with unique IDs
+    std::vector<PeerPtr> candidates;
+    for (int i = 0; i < 4; i++) {
+        std::string addr = "193.0.0." + std::to_string(i + 1);
+        auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, addr, 9590);
+        peer->set_id(i + 1);
+        candidates.push_back(peer);
+    }
+
+    NetworkAddress test_addr = DiscoveryManagerTestFixture::MakeAddress(5678);
+
+    // Call SelectAddrRelayTargets_ForTest multiple times with same input
+    auto targets1 = AddrRelayManagerTestAccess::SelectAddrRelayTargets(*fixture.discovery_manager, test_addr, candidates);
+    auto targets2 = AddrRelayManagerTestAccess::SelectAddrRelayTargets(*fixture.discovery_manager, test_addr, candidates);
+    auto targets3 = AddrRelayManagerTestAccess::SelectAddrRelayTargets(*fixture.discovery_manager, test_addr, candidates);
+
+    // All calls should return the same targets (deterministic)
+    REQUIRE(targets1.size() == 2);
+    REQUIRE(targets2.size() == 2);
+    REQUIRE(targets3.size() == 2);
+
+    // Same peer IDs each time
+    REQUIRE(targets1[0]->id() == targets2[0]->id());
+    REQUIRE(targets1[0]->id() == targets3[0]->id());
+    REQUIRE(targets1[1]->id() == targets2[1]->id());
+    REQUIRE(targets1[1]->id() == targets3[1]->id());
+}
+
+TEST_CASE("AddrRelayManager - SelectAddrRelayTargets_ForTest different addresses get different targets", "[discovery][addr_relay][deterministic]") {
+    DiscoveryManagerTestFixture fixture;
+
+    AddrRelayManagerTestAccess::SeedAddrRelay(*fixture.discovery_manager, 33333, 44444);
+
+    // Create 10 peers with unique IDs to have more selection variety
+    std::vector<PeerPtr> candidates;
+    for (int i = 0; i < 10; i++) {
+        std::string addr = "193.0.0." + std::to_string(i + 1);
+        auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, addr, 9590);
+        peer->set_id(i + 1);
+        candidates.push_back(peer);
+    }
+
+    // Create multiple different addresses
+    std::vector<std::set<int>> all_target_sets;
+    for (int addr_idx = 0; addr_idx < 20; addr_idx++) {
+        NetworkAddress test_addr = DiscoveryManagerTestFixture::MakeAddress(addr_idx * 100);
+        auto targets = AddrRelayManagerTestAccess::SelectAddrRelayTargets(*fixture.discovery_manager, test_addr, candidates);
+        REQUIRE(targets.size() == 2);
+
+        std::set<int> target_ids;
+        target_ids.insert(targets[0]->id());
+        target_ids.insert(targets[1]->id());
+        all_target_sets.push_back(target_ids);
+    }
+
+    // Not all addresses should select the exact same peers
+    // (with 20 addresses and 10 peers, we should see variety)
+    std::set<std::set<int>> unique_target_combinations(all_target_sets.begin(), all_target_sets.end());
+    INFO("Unique target combinations: " << unique_target_combinations.size() << " out of 20 addresses");
+    REQUIRE(unique_target_combinations.size() > 1);  // At least some variety
+}
+
+TEST_CASE("AddrRelayManager - SelectAddrRelayTargets_ForTest handles edge cases", "[discovery][addr_relay][deterministic]") {
+    DiscoveryManagerTestFixture fixture;
+
+    AddrRelayManagerTestAccess::SeedAddrRelay(*fixture.discovery_manager, 55555, 66666);
+
+    NetworkAddress test_addr = DiscoveryManagerTestFixture::MakeAddress(9999);
+
+    SECTION("Empty candidates returns empty") {
+        std::vector<PeerPtr> empty;
+        auto targets = AddrRelayManagerTestAccess::SelectAddrRelayTargets(*fixture.discovery_manager, test_addr, empty);
+        REQUIRE(targets.empty());
+    }
+
+    SECTION("Single candidate returns that candidate") {
+        auto peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "193.0.0.1", 9590);
+        peer->set_id(100);
+
+        std::vector<PeerPtr> single = {peer};
+        auto targets = AddrRelayManagerTestAccess::SelectAddrRelayTargets(*fixture.discovery_manager, test_addr, single);
+        REQUIRE(targets.size() == 1);  // Can't select 2 from 1
+        REQUIRE(targets[0]->id() == 100);
+    }
+
+}
+
+TEST_CASE("AddrRelayManager - HandleAddr skips banned addresses", "[discovery][addr][ban][bitcoin_core]") {
+    // Bitcoin Core parity: banned/discouraged addresses in ADDR messages are not stored
+    // Reference: net_processing.cpp - "Do not process banned/discouraged addresses beyond remembering we received them"
+    DiscoveryManagerTestFixture fixture;
+
+    // Create and register an inbound full-relay peer
+    auto peer = fixture.create_peer(ConnectionType::INBOUND, "193.1.0.1", 9590);
+    int peer_id = fixture.peer_manager->add_peer(peer);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
+
+    // Boost token bucket to avoid rate limiting during test
+    fixture.discovery_manager->NotifyGetAddrSent(peer_id);
+
+    // Initial AddrMan should be empty
+    REQUIRE(fixture.discovery_manager->Size() == 0);
+
+    // Create an ADDR message with one routable address
+    auto msg = std::make_unique<message::AddrMessage>();
+    NetworkAddress addr1 = DiscoveryManagerTestFixture::MakeAddress(1);
+    msg->addresses.push_back({static_cast<uint32_t>(util::GetTime()), addr1});
+
+    // Process normally - should be added
+    REQUIRE(fixture.discovery_manager->HandleAddr(peer, msg.get()));
+    REQUIRE(fixture.discovery_manager->Size() == 1);
+
+    // Now ban an IP and try to add it
+    auto addr2 = DiscoveryManagerTestFixture::MakeAddress(2);
+    auto addr2_str = addr2.to_string();
+    REQUIRE(addr2_str.has_value());
+
+    // Ban the address (3600 seconds = 1 hour)
+    fixture.peer_manager->Ban(*addr2_str, 3600);
+    REQUIRE(fixture.peer_manager->IsBanned(*addr2_str));
+
+    // Try to add the banned address via ADDR message
+    auto msg2 = std::make_unique<message::AddrMessage>();
+    msg2->addresses.push_back({static_cast<uint32_t>(util::GetTime()), addr2});
+    REQUIRE(fixture.discovery_manager->HandleAddr(peer, msg2.get()));
+
+    // Banned address should NOT be added
+    REQUIRE(fixture.discovery_manager->Size() == 1);
+
+    // Add an unbanned address to verify normal processing still works
+    auto addr3 = DiscoveryManagerTestFixture::MakeAddress(3);
+    auto msg3 = std::make_unique<message::AddrMessage>();
+    msg3->addresses.push_back({static_cast<uint32_t>(util::GetTime()), addr3});
+    REQUIRE(fixture.discovery_manager->HandleAddr(peer, msg3.get()));
+    REQUIRE(fixture.discovery_manager->Size() == 2);
+}
+
+TEST_CASE("AddrRelayManager - HandleAddr skips discouraged addresses", "[discovery][addr][ban][bitcoin_core]") {
+    // Bitcoin Core parity: discouraged addresses in ADDR messages are not stored
+    DiscoveryManagerTestFixture fixture;
+
+    auto peer = fixture.create_peer(ConnectionType::INBOUND, "193.1.0.2", 9590);
+    int peer_id = fixture.peer_manager->add_peer(peer);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
+
+    // Boost token bucket to avoid rate limiting during test
+    fixture.discovery_manager->NotifyGetAddrSent(peer_id);
+
+    REQUIRE(fixture.discovery_manager->Size() == 0);
+
+    // Discourage an address
+    auto addr1 = DiscoveryManagerTestFixture::MakeAddress(10);
+    auto addr1_str = addr1.to_string();
+    REQUIRE(addr1_str.has_value());
+    fixture.peer_manager->Discourage(*addr1_str);
+    REQUIRE(fixture.peer_manager->IsDiscouraged(*addr1_str));
+
+    // Try to add the discouraged address via ADDR message
+    auto msg = std::make_unique<message::AddrMessage>();
+    msg->addresses.push_back({static_cast<uint32_t>(util::GetTime()), addr1});
+    REQUIRE(fixture.discovery_manager->HandleAddr(peer, msg.get()));
+
+    // Discouraged address should NOT be added
+    REQUIRE(fixture.discovery_manager->Size() == 0);
+}
+
+// ============================================================================
+// Bitcoin Core Parity: getaddr flag reset and queue cap tests
+// ============================================================================
+
+TEST_CASE("AddrRelayManager - HandleAddr resets getaddr flag after small response", "[discovery][addr][bitcoin_core]") {
+    // Bitcoin Core parity: net_processing.cpp:3939
+    // After receiving ADDR with < 1000 addresses, reset m_getaddr_sent
+    // This allows relaying subsequent ADDR messages from this peer
+    DiscoveryManagerTestFixture fixture;
+
+    auto peer = fixture.create_peer(ConnectionType::INBOUND, "193.2.0.1", 9590);
+    fixture.peer_manager->add_peer(peer);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
+
+    // Initially, peer has not sent getaddr
+    CHECK_FALSE(peer->has_sent_getaddr());
+
+    // Mark that we sent GETADDR to this peer
+    peer->mark_getaddr_sent();
+    CHECK(peer->has_sent_getaddr());
+
+    // Send a small ADDR message (< 1000 addresses)
+    auto msg = std::make_unique<message::AddrMessage>();
+    msg->addresses.push_back({static_cast<uint32_t>(util::GetTime()), DiscoveryManagerTestFixture::MakeAddress(1)});
+    msg->addresses.push_back({static_cast<uint32_t>(util::GetTime()), DiscoveryManagerTestFixture::MakeAddress(2)});
+    REQUIRE(msg->addresses.size() < protocol::MAX_ADDR_SIZE);
+
+    REQUIRE(fixture.discovery_manager->HandleAddr(peer, msg.get()));
+
+    // After small ADDR, the getaddr flag should be reset
+    CHECK_FALSE(peer->has_sent_getaddr());
+}
+
+TEST_CASE("AddrRelayManager - HandleAddr does NOT reset getaddr flag for full response", "[discovery][addr][bitcoin_core]") {
+    // Bitcoin Core parity: net_processing.cpp:3939
+    // If ADDR message has exactly MAX_ADDR_SIZE (1000) addresses, flag stays set
+    DiscoveryManagerTestFixture fixture;
+
+    auto peer = fixture.create_peer(ConnectionType::INBOUND, "193.3.0.1", 9590);
+    int peer_id = fixture.peer_manager->add_peer(peer);
+    PeerTestAccess::SetSuccessfullyConnected(*peer, true);
+
+    // Boost token bucket to avoid rate limiting for large message
+    fixture.discovery_manager->NotifyGetAddrSent(peer_id);
+
+    // Mark that we sent GETADDR to this peer
+    peer->mark_getaddr_sent();
+    CHECK(peer->has_sent_getaddr());
+
+    // Send a full ADDR message (exactly MAX_ADDR_SIZE addresses)
+    auto msg = std::make_unique<message::AddrMessage>();
+    for (size_t i = 0; i < protocol::MAX_ADDR_SIZE; ++i) {
+        msg->addresses.push_back({static_cast<uint32_t>(util::GetTime()), DiscoveryManagerTestFixture::MakeAddress(static_cast<uint32_t>(i))});
+    }
+    REQUIRE(msg->addresses.size() == protocol::MAX_ADDR_SIZE);
+
+    REQUIRE(fixture.discovery_manager->HandleAddr(peer, msg.get()));
+
+    // For full response, the getaddr flag should remain set
+    CHECK(peer->has_sent_getaddr());
+}
+
+TEST_CASE("AddrRelayManager - ADDR relay queue capped at MAX_ADDR_TO_SEND", "[discovery][addr][relay][bitcoin_core]") {
+    // Bitcoin Core parity: net_processing.cpp:1110-1113
+    // Per-peer relay queue is capped at 1000 entries with random eviction
+    DiscoveryManagerTestFixture fixture;
+
+    // Set deterministic seeds for reproducible test
+    AddrRelayManagerTestAccess::SeedRng(*fixture.discovery_manager, 12345);
+    AddrRelayManagerTestAccess::SeedAddrRelay(*fixture.discovery_manager, 0xDEADBEEF, 0xCAFEBABE);
+
+    // Create source peer (inbound, will send ADDR)
+    auto source_peer = fixture.create_peer(ConnectionType::INBOUND, "193.4.0.1", 9590);
+    int source_id = fixture.peer_manager->add_peer(source_peer);
+    PeerTestAccess::SetSuccessfullyConnected(*source_peer, true);
+
+    // Create target peer (outbound full relay, can receive relayed ADDR)
+    auto target_peer = fixture.create_peer(ConnectionType::OUTBOUND_FULL_RELAY, "193.5.0.1", 9590);
+    fixture.peer_manager->add_peer(target_peer);
+    PeerTestAccess::SetSuccessfullyConnected(*target_peer, true);
+
+    // Boost source peer's token bucket
+    fixture.discovery_manager->NotifyGetAddrSent(source_id);
+
+    // Send many small ADDR messages to trigger relay queuing
+    // Each small ADDR (≤10 addrs) with fresh timestamps gets relayed
+    const uint32_t now = static_cast<uint32_t>(util::GetTime());
+    size_t total_sent = 0;
+
+    // Send 200 batches of 10 addresses each = 2000 total addresses
+    // This should exceed the 1000 queue cap
+    for (size_t batch = 0; batch < 200; ++batch) {
+        auto msg = std::make_unique<message::AddrMessage>();
+        for (size_t i = 0; i < 10; ++i) {
+            // Fresh timestamp (within 10 min) and unique address per batch
+            uint32_t idx = static_cast<uint32_t>(batch * 10 + i);
+            auto addr = DiscoveryManagerTestFixture::MakeAddress(idx);
+            msg->addresses.push_back({now, addr});
+            ++total_sent;
+        }
+        REQUIRE(fixture.discovery_manager->HandleAddr(source_peer, msg.get()));
+    }
+
+    INFO("Total addresses sent: " << total_sent);
+    REQUIRE(total_sent == 2000);
+
+    // Check pending relay queue size (should be capped at 1000)
+    size_t pending = AddrRelayManagerTestAccess::GetPendingAddrRelayCount(*fixture.discovery_manager);
+    INFO("Pending relay count: " << pending);
+
+    // Queue should be capped at MAX_ADDR_TO_SEND (1000)
+    // Note: Actual count may be less because:
+    // 1. Deduplication prevents sending same address twice to same target
+    // 2. Deterministic selection may not always pick the same target
+    // But it should never exceed 1000 per target peer
+    CHECK(pending <= 1000);
 }

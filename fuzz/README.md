@@ -44,7 +44,6 @@ This directory contains fuzz targets for testing Unicity's parsing and deseriali
   - Validates CheckHeadersPoW (fast commitment-only checks)
   - Tests CheckHeadersAreContinuous (chain continuity)
   - Verifies CalculateHeadersWork (cumulative work calculation)
-  - Tests GetAntiDoSWorkThreshold (DoS protection)
   - Validates edge cases (timestamps, nBits values)
   - Verifies deterministic validation behavior
 

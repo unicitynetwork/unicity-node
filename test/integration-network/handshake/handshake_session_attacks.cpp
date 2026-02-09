@@ -5,11 +5,13 @@
 #include "infra/simulated_network.hpp"
 #include "infra/simulated_node.hpp"
 #include "infra/node_simulator.hpp"
+#include "infra/test_access.hpp"
 #include "test_orchestrator.hpp"
 #include "network_observer.hpp"
 
 using namespace unicity;
 using namespace unicity::test;
+using unicity::test::PeerTestAccess;
 
 namespace {
 // Helper to set zero latency for deterministic tests
@@ -24,9 +26,9 @@ void SetZeroLatency(SimulatedNetwork& network) {
 // Helper to set fast timeouts for testing
 struct TimeoutGuard {
     TimeoutGuard(std::chrono::milliseconds hs, std::chrono::milliseconds idle) {
-        network::Peer::SetTimeoutsForTest(hs, idle);
+        PeerTestAccess::SetTimeouts(hs, idle);
     }
-    ~TimeoutGuard() { network::Peer::ResetTimeoutsForTest(); }
+    ~TimeoutGuard() { PeerTestAccess::ResetTimeouts(); }
 };
 } // anonymous namespace
 
@@ -253,12 +255,13 @@ TEST_CASE("Handshake Attack - Half-open connection timeout", "[adversarial][hand
 }
 
 // =============================================================================
-// TEST 1.2 (BONUS): Concurrent Handshakes from Same IP
+// TEST 1.2: Concurrent Handshakes from Different Peers
 // =============================================================================
-// Security Goal: Test duplicate detection during handshake phase
-// Attack Scenario: Two connections from same attacker simultaneously
-// Expected: Either duplicate detection OR both proceed independently (implementation-dependent)
-TEST_CASE("Handshake Attack - Concurrent handshakes same IP", "[adversarial][handshake][concurrent]") {
+// Security Goal: Verify concurrent connection handling doesn't cause races
+// Attack Scenario: Two different peers connect simultaneously
+// Expected: Both connections succeed (different node IDs = different peers)
+// Core Reference: Bitcoin Core allows multiple concurrent inbound connections
+TEST_CASE("Handshake Attack - Concurrent handshakes different peers", "[adversarial][handshake][concurrent]") {
     SimulatedNetwork network(5004);
     SetZeroLatency(network);
     TestOrchestrator orch(&network);
@@ -267,12 +270,12 @@ TEST_CASE("Handshake Attack - Concurrent handshakes same IP", "[adversarial][han
 
     SimulatedNode victim(1, &network);
     NodeSimulator attacker1(2, &network);
-    NodeSimulator attacker2(3, &network);  // Different node ID, but could simulate same IP
+    NodeSimulator attacker2(3, &network);
 
-    observer.OnCustomEvent("TEST_START", -1, "Concurrent handshake test");
+    observer.OnCustomEvent("TEST_START", -1, "Concurrent handshake test - two different peers");
 
     // Phase 1: Initiate two connections simultaneously
-    observer.OnCustomEvent("PHASE", -1, "Initiating concurrent connections");
+    observer.OnCustomEvent("PHASE", -1, "Initiating concurrent connections from two peers");
 
     REQUIRE(attacker1.ConnectTo(victim.GetId()));
     REQUIRE(attacker2.ConnectTo(victim.GetId()));
@@ -291,42 +294,32 @@ TEST_CASE("Handshake Attack - Concurrent handshakes same IP", "[adversarial][han
 
     observer.OnCustomEvent("PHASE", -1, "Verifying connection states");
 
-    // Phase 2: Verify behavior
+    // Phase 2: Verify both connections succeeded
+    // Two different peers (different node IDs) should both be able to connect
+    REQUIRE(conn1);
+    REQUIRE(conn2);
+
     int peer_count = victim.GetPeerCount();
+    REQUIRE(peer_count == 2);
 
-    // Both behaviors are acceptable:
-    // Option A: Both connections succeed (2 peers)
-    // Option B: Duplicate detection triggers (1 peer)
-    // Option C: Both fail (0 peers) - unlikely but valid
-    CHECK((peer_count >= 0 && peer_count <= 2));
+    observer.OnCustomEvent("RESULT", 1, "Both connections succeeded as expected");
 
-    if (peer_count == 2) {
-        observer.OnCustomEvent("RESULT", 1, "Both connections succeeded (no duplicate detection during handshake)");
+    // Phase 3: Verify both connections are independent and functional
+    attacker1.SetBypassPOWValidation(true);
+    attacker2.SetBypassPOWValidation(true);
 
-        // Verify both connections are independent (send messages to verify)
-        attacker1.SetBypassPOWValidation(true);
-        attacker2.SetBypassPOWValidation(true);
+    auto hash1 = attacker1.MineBlock();
+    auto hash2 = attacker2.MineBlock();
 
-        auto hash1 = attacker1.MineBlock();
-        auto hash2 = attacker2.MineBlock();
+    observer.OnBlockMined(2, hash1.ToString(), 1);
+    observer.OnBlockMined(3, hash2.ToString(), 1);
 
-        observer.OnBlockMined(2, hash1.ToString(), 1);
-        observer.OnBlockMined(3, hash2.ToString(), 1);
+    orch.AdvanceTime(std::chrono::milliseconds(200));
+    victim.ProcessEvents();
+    attacker1.ProcessEvents();
+    attacker2.ProcessEvents();
 
-        orch.AdvanceTime(std::chrono::milliseconds(200));
-
-        // Both blocks should propagate independently
-        // Note: Just verify connections exist, sync behavior is tested elsewhere
-        observer.OnCustomEvent("RESULT", 1, "Both connections independent and functional");
-
-    } else if (peer_count == 1) {
-        observer.OnCustomEvent("RESULT", 1, "Duplicate detection triggered (1 connection succeeded)");
-        CHECK((conn1 || conn2));  // At least one succeeded
-
-    } else {
-        observer.OnCustomEvent("RESULT", 1, "Both connections failed (implementation behavior)");
-    }
-
-    observer.OnCustomEvent("TEST_END", -1, "PASSED - Concurrent handshakes handled correctly");
+    observer.OnCustomEvent("RESULT", 1, "Both connections independent and functional");
+    observer.OnCustomEvent("TEST_END", -1, "PASSED - Concurrent handshakes from different peers handled correctly");
     auto_dump.MarkSuccess();
 }

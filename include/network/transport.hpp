@@ -50,7 +50,6 @@ public:
   [[nodiscard]] virtual std::string remote_address() const = 0;
   [[nodiscard]] virtual uint16_t remote_port() const = 0;
   [[nodiscard]] virtual bool is_inbound() const = 0;
-  [[nodiscard]] virtual uint64_t connection_id() const = 0;
 
   virtual void set_receive_callback(ReceiveCallback callback) = 0;
   virtual void set_disconnect_callback(DisconnectCallback callback) = 0;

@@ -34,7 +34,7 @@ public:
   CBlockIndex* Tip() const { return vChain.size() > 0 ? vChain[vChain.size() - 1] : nullptr; }
 
   CBlockIndex* operator[](int nHeight) const {
-    if (nHeight < 0 || nHeight >= (int)vChain.size())
+    if (nHeight < 0 || nHeight >= static_cast<int>(vChain.size()))
       return nullptr;
     return vChain[nHeight];
   }
@@ -43,7 +43,7 @@ public:
   bool Contains(const CBlockIndex* pindex) const {
     if (!pindex)
       return false;
-    if (pindex->nHeight < 0 || pindex->nHeight >= (int)vChain.size()) {
+    if (pindex->nHeight < 0 || pindex->nHeight >= static_cast<int>(vChain.size())) {
       return false;
     }
     return vChain[pindex->nHeight] == pindex;
@@ -58,7 +58,7 @@ public:
   }
 
   // Return maximal height in chain (equal to chain.Tip() ? chain.Tip()->nHeight: -1)
-  int Height() const { return int(vChain.size()) - 1; }
+  int Height() const { return static_cast<int>(vChain.size()) - 1; }
 
   // Set/initialize chain with given tip (walks backwards using pprev to
   // populate entire vector)

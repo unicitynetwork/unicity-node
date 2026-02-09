@@ -30,18 +30,18 @@ TEST_CASE("InvalidateBlock - Basic invalidation with reorg (test2)", "[invalidat
     uint256 blockB = node1.MineBlock();
     uint256 blockC = node1.MineBlock();
 
-    network.AdvanceTime(network.GetCurrentTime() + 100);
+    network.AdvanceTime(100);
 
     CHECK(node1.GetTipHeight() == 3);
     CHECK(node1.GetTipHash() == blockC);
 
     node2.ConnectTo(1);
-    for (int i = 0; i < 20; i++) network.AdvanceTime(network.GetCurrentTime() + 100);
+    for (int i = 0; i < 20; i++) network.AdvanceTime(100);
     CHECK(node2.GetTipHeight() == 3);
     CHECK(node2.GetTipHash() == blockC);
 
     node2.DisconnectFrom(1);
-    network.AdvanceTime(network.GetCurrentTime() + 100);
+    network.AdvanceTime(100);
 
     // Invalidate blockB on node2 and build D,E,F
     bool invalidated = node2.GetChainstate().InvalidateBlock(blockB);
@@ -52,14 +52,14 @@ TEST_CASE("InvalidateBlock - Basic invalidation with reorg (test2)", "[invalidat
     uint256 blockD = node2.MineBlock(); (void)blockD;
     uint256 blockE = node2.MineBlock(); (void)blockE;
     uint256 blockF = node2.MineBlock();
-    network.AdvanceTime(network.GetCurrentTime() + 100);
+    network.AdvanceTime(100);
     CHECK(node2.GetTipHeight() == 4);
 
     node2.ConnectTo(1);
     // With outbound-only header sync (Core parity), ensure the lagging node (node1)
     // also has an OUTBOUND connection to the announcer so it will initiate GETHEADERS.
     node1.ConnectTo(2);
-    for (int i = 0; i < 100; i++) network.AdvanceTime(network.GetCurrentTime() + 100);
+    for (int i = 0; i < 100; i++) network.AdvanceTime(100);
 
     CHECK(node1.GetTipHeight() == 4);
     CHECK(node1.GetTipHash() == blockF);

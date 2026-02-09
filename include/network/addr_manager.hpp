@@ -30,18 +30,15 @@
  - Timestamp clamping: rejects timestamps >10min in future (TERRIBLE_FUTURE_TIMESTAMP_SEC)
  - Terrible address filtering: removes addresses not seen in 30 days (ADDRMAN_HORIZON_DAYS),
    or with too many failures (ADDRMAN_RETRIES=3 for new, ADDRMAN_MAX_FAILURES=10 for tried)
- - Tried→New demotion: addresses with 10+ consecutive failures move back to NEW table
 
 */
 
 #include "network/protocol.hpp"
 
-#include <chrono>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <random>
-#include <set>
 #include <vector>
 
 namespace unicity {
@@ -73,10 +70,10 @@ struct AddrKey {
   bool operator==(const AddrKey& other) const { return data == other.data; }
 };
 
- // AddrInfo - Extended address information with connection history
+// AddrInfo - Extended address information with connection history
 struct AddrInfo {
   protocol::NetworkAddress address;
-  protocol::NetworkAddress source;  // Peer who sent us this address (for Sybil resistance)
+  protocol::NetworkAddress source;  // Peer who sent us this address 
   uint32_t timestamp;           // Last time we heard about this address via gossip
   uint32_t last_try;            // Last connection attempt timestamp
   uint32_t last_count_attempt;  // Last counted failure (used with m_last_good_ to prevent double-counting)
@@ -94,25 +91,20 @@ struct AddrInfo {
     return source.ip != zero_ip;
   }
 
-  // Check if address is too old to be useful
   bool is_stale(uint32_t now) const;
-
-  // Check if address is terrible (too many failed attempts, etc.)
   bool is_terrible(uint32_t now) const;
-
-  // Calculate probabilistic selection chance (0.0 to 1.0)
   double GetChance(uint32_t now) const;
 };
 
 
- //AddressManager - Manages peer addresses for peer discovery and connection
+// AddressManager - Manages peer addresses for peer discovery and connection
 class AddressManager {
 public:
   AddressManager();
 
   // Add a new address from peer discovery
-  // source: the peer who sent us this address (optional, for Sybil resistance)
-  //         If not provided, per-source limits are not enforced.
+  // source: the peer who sent us this address (optional)
+  // If not provided, per-source limits are not enforced.
   bool add(const protocol::NetworkAddress& addr,
            const protocol::NetworkAddress& source,
            uint32_t timestamp = 0);
@@ -123,23 +115,26 @@ public:
 
   // Add multiple addresses (e.g., from ADDR message)
   // source: the peer who sent us these addresses (optional, for Sybil resistance)
+  // time_penalty_seconds: penalty subtracted from timestamps 
+  // Self-announcements (addr == source) are exempt from penalty.
   size_t add_multiple(const std::vector<protocol::TimestampedAddress>& addresses,
-                      const protocol::NetworkAddress& source);
+                      const protocol::NetworkAddress& source,
+                      uint32_t time_penalty_seconds = 0);
 
-  // Overload for backwards compatibility (no source tracking)
+  // Overload for backwards compatibility (no source tracking, no penalty)
   size_t add_multiple(const std::vector<protocol::TimestampedAddress>& addresses) {
-    return add_multiple(addresses, {});
+    return add_multiple(addresses, {}, 0);
   }
 
   // Mark address as a connection attempt
-  // fCountFailure: if true, count this attempt towards failure count (prevents double-counting)
-  void attempt(const protocol::NetworkAddress& addr, bool fCountFailure = true);
+  // count_failure: if true, count this attempt towards failure count (prevents double-counting)
+  void attempt(const protocol::NetworkAddress& addr, bool count_failure = true);
 
-  // Mark address as successfully connected
+  // Mark address as successfully connected (moves NEW→TRIED)
   void good(const protocol::NetworkAddress& addr);
 
-  // Mark address as connection failure
-  void failed(const protocol::NetworkAddress& addr);
+  // Update timestamp for long-running connection (called on graceful disconnect)
+  void connected(const protocol::NetworkAddress& addr);
 
   // Get a random address to connect to
   std::optional<protocol::NetworkAddress> select();
@@ -147,13 +142,21 @@ public:
   // Select address from "new" table for feeler connection
   std::optional<protocol::NetworkAddress> select_new_for_feeler();
 
-  // Get multiple addresses for ADDR message (limited to max_count)
-  std::vector<protocol::TimestampedAddress> get_addresses(size_t max_count = protocol::MAX_ADDR_SIZE);
+  // Get multiple addresses for ADDR message
+  // max_count: absolute maximum addresses to return 
+  // max_pct: percentage of total addresses (0-100, 0 = no percentage limit)
+  // Actual limit is min(max_count, total * max_pct / 100) when max_pct > 0
+  std::vector<protocol::TimestampedAddress> get_addresses(size_t max_count = protocol::MAX_ADDR_SIZE,
+                                                          size_t max_pct = 0);
 
   // Get statistics
   size_t size() const;
   size_t tried_count() const;
   size_t new_count() const;
+
+  // Get all entries from a table (for debugging/RPC)
+  // Returns copies of AddrInfo for all addresses in the specified table
+  std::vector<AddrInfo> GetEntries(bool from_tried) const;
 
   // Remove stale addresses
   void cleanup_stale();
@@ -164,11 +167,10 @@ public:
 
 private:
  
-  // Table size limits (defense-in-depth against unbounded memory growth)
-  static constexpr size_t MAX_NEW_ADDRESSES = 20000;
-  static constexpr size_t MAX_TRIED_ADDRESSES = 10000;
+  static constexpr size_t MAX_NEW_ADDRESSES = 65536;
+  static constexpr size_t MAX_TRIED_ADDRESSES = 16384;
 
-  // Per-source limit: max addresses any single peer can contribute (Sybil resistance)
+  // Per-source limit: max addresses any single peer can contribute 
   // This limits how much any single peer can pollute our address tables
   static constexpr size_t MAX_ADDRESSES_PER_SOURCE = 64;
 

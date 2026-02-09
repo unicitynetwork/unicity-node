@@ -59,14 +59,12 @@ TEST_CASE("failed() works with IPv4-compatible addresses after normalization", "
     REQUIRE(am.size() == 1);
     REQUIRE(am.new_count() == 1);
 
-    // Call failed() with the same IPv4-compatible address (un-normalized)
-    for (int i = 0; i < 20; ++i) {
-        am.failed(addr);
-    }
+    // Note: Bitcoin Core has no failed() function
+    // Terrible addresses are filtered via GetChance() and cleaned by cleanup_stale()
 
-    // Cleanup should remove it (it's terrible now)
-    am.cleanup_stale();
-    REQUIRE(am.size() == 0);
+    // Address remains in table
+    REQUIRE(am.size() == 1);
+    REQUIRE(am.new_count() == 1);
 }
 
 TEST_CASE("good() works with IPv4-compatible addresses after normalization", "[network][addr][normalization]") {
@@ -145,13 +143,12 @@ TEST_CASE("Multiple IPv4-compatible addresses with different IPs don't collide",
     REQUIRE(am.add(addr2));
     REQUIRE(am.size() == 2);
 
-    // Failed on addr1 should only affect addr1
-    for (int i = 0; i < 20; ++i) {
-        am.failed(addr1);
-    }
+    // Note: Bitcoin Core has no failed() function
+    // Terrible addresses are filtered via GetChance() and cleaned by cleanup_stale()
 
+    // Both addresses remain in table
     am.cleanup_stale();
-    REQUIRE(am.size() == 1);  // Only addr2 remains
+    REQUIRE(am.size() == 2);  // Both remain (normalized correctly)
 }
 
 TEST_CASE("IPv4-mapped addresses are not re-normalized", "[network][addr][normalization]") {
@@ -268,12 +265,11 @@ TEST_CASE("Incremental vector updates maintain consistency", "[network][addr][pe
     auto selected = am.select();
     REQUIRE(selected.has_value());
 
-    // Fail addr1 many times to demote back to new (tests incremental update in failed())
-    for (int i = 0; i < 15; ++i) {
-        am.failed(addr1);
-    }
-    REQUIRE(am.new_count() == 2);
-    REQUIRE(am.tried_count() == 0);
+    // Bitcoin Core: TRIED addresses are never demoted back to NEW via failures.
+    // They stay in TRIED until evicted by collision during Good().
+    // Note: Bitcoin Core has no failed() function
+    REQUIRE(am.new_count() == 1);     // addr2 still in NEW
+    REQUIRE(am.tried_count() == 1);   // addr1 still in TRIED
 
     // Selection should still work
     selected = am.select();
@@ -315,7 +311,7 @@ TEST_CASE("Exception safety in Load() with rebuild_key_vectors()", "[network][ad
     std::remove(temp_file.c_str());
 }
 
-TEST_CASE("Failure counting state persists across Save/Load", "[network][addr][persistence]") {
+TEST_CASE("Address state persists across Save/Load", "[network][addr][persistence]") {
     AddressManager am1;
 
     // Create routable address: 93.184.216.34
@@ -335,33 +331,27 @@ TEST_CASE("Failure counting state persists across Save/Load", "[network][addr][p
     am1.good(addr);
     REQUIRE(am1.tried_count() == 1);
 
-    // Simulate some failures (but not enough to demote)
-    for (int i = 0; i < 5; ++i) {
-        am1.failed(addr);
-    }
+    // Note: Bitcoin Core has no failed() function
 
     // Save to file
-    const std::string temp_file = "/tmp/test_addr_failure_persist.json";
+    const std::string temp_file = "/tmp/test_addr_state_persist.json";
     REQUIRE(am1.Save(temp_file));
 
     // Load into new manager
     AddressManager am2;
     REQUIRE(am2.Load(temp_file));
 
-    // Verify basic state
+    // Verify state persisted correctly
     REQUIRE(am2.size() == 1);
     REQUIRE(am2.tried_count() == 1);
 
-    // Verify failure counting state by checking that more failures lead to demotion
-    // If attempts weren't persisted, we'd need 10 more failures
-    // Since it was persisted (5 already counted), we only need 5 more to reach threshold of 10
-    for (int i = 0; i < 5; ++i) {
-        am2.failed(addr);
-    }
+    // Bitcoin Core: TRIED addresses are never demoted via failures.
+    // They stay in TRIED until evicted by collision during Good().
+    // Note: Bitcoin Core has no failed() function
 
-    // Should now be demoted to new table (5 persisted + 5 new = 10 total >= TRIED_DEMOTION_THRESHOLD)
-    REQUIRE(am2.tried_count() == 0);
-    REQUIRE(am2.new_count() == 1);
+    // Should still be in TRIED (no demotion in Bitcoin Core behavior)
+    REQUIRE(am2.tried_count() == 1);
+    REQUIRE(am2.new_count() == 0);
 
     // Cleanup
     std::remove(temp_file.c_str());

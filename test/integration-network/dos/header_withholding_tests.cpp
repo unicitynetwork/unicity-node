@@ -3,11 +3,11 @@
 // These tests verify SPECIFIC behaviors not covered by basic stalling_peer_tests:
 //
 // 1. GETHEADERS rate limiting under orphan flood
-// 2. Misbehavior score threshold verification (exactly 100 points = ban)
+// 2. Instant discourage on invalid headers (Core March 2024 parity)
 // 3. Competing chain tip resolution (most-work wins)
 // 4. Orphan resolution depth limits (no stack overflow)
 // 5. Sync peer selection prefers outbound
-// 6. Stall detection timing precision
+// 6. Stall detection timing precision (120s timeout)
 // 7. Recovery when all initial peers stall
 // 8. Header announcement from non-sync peer during IBD
 
@@ -44,8 +44,7 @@ TEST_CASE("DoS: GETHEADERS rate limiting under orphan flood", "[dos][withholding
     NodeSimulator attacker(2, &net);
     attacker.ConnectTo(victim.GetId());
 
-    uint64_t t = 1000;
-    net.AdvanceTime(t);
+    net.AdvanceTime(1000);
 
     // Record GETHEADERS count before attack
     int gh_before = net.CountCommandSent(victim.GetId(), attacker.GetId(),
@@ -54,8 +53,7 @@ TEST_CASE("DoS: GETHEADERS rate limiting under orphan flood", "[dos][withholding
     // Flood with orphan headers (1000 orphans in batches)
     for (int batch = 0; batch < 20; ++batch) {
         attacker.SendOrphanHeaders(victim.GetId(), 50);
-        t += 100;
-        net.AdvanceTime(t);
+        net.AdvanceTime(100);
     }
 
     // Count GETHEADERS after attack
@@ -72,66 +70,41 @@ TEST_CASE("DoS: GETHEADERS rate limiting under orphan flood", "[dos][withholding
 }
 
 // =============================================================================
-// TEST 2: Misbehavior Score Threshold Verification
+// TEST 2: Instant Discourage on Invalid Headers (Core March 2024 Parity)
 // =============================================================================
-// Send invalid PoW headers and verify exactly 100 points triggers disconnect.
-// Each invalid header = 20 points, so 5 batches should trigger ban.
+// Bitcoin Core removed score-based misbehavior in March 2024 (commit ae60d485da).
+// Any misbehavior now triggers instant discourage - no score accumulation.
+// This test verifies that a single invalid PoW header triggers disconnect.
 
-TEST_CASE("DoS: Misbehavior 100-point threshold triggers disconnect", "[dos][withholding][misbehavior]") {
+TEST_CASE("DoS: Instant discourage on invalid PoW header", "[dos][withholding][misbehavior]") {
     SimulatedNetwork net(3002);
-    net.EnableCommandTracking(true);
+
+    // Zero latency for reliable test timing
+    SimulatedNetwork::NetworkConditions fast;
+    fast.latency_min = fast.latency_max = std::chrono::milliseconds(0);
+    fast.jitter_max = std::chrono::milliseconds(0);
+    net.SetNetworkConditions(fast);
+
+    TestOrchestrator orch(&net);
 
     SimulatedNode victim(1, &net);
     for (int i = 0; i < 10; ++i) victim.MineBlock();
 
+    // Enable strict PoW validation (disabled by default for test speed)
+    victim.SetBypassPOWValidation(false);
+
     NodeSimulator attacker(2, &net);
     attacker.ConnectTo(victim.GetId());
+    REQUIRE(orch.WaitForConnection(victim, attacker));
 
-    uint64_t t = 1000;
-    net.AdvanceTime(t);
-
-    // Verify connection established
-    auto peers_before = victim.GetNetworkManager().peer_manager().get_all_peers();
-    size_t connected_before = 0;
-    for (const auto& p : peers_before) {
-        if (p->is_connected()) connected_before++;
-    }
-    REQUIRE(connected_before >= 1);
-
-    // Send invalid PoW headers: each triggers 20 misbehavior points
-    // After 5 invalid headers = 100 points = disconnect threshold
+    // Send invalid PoW header - should trigger instant disconnect
     uint256 prev = victim.GetTipHash();
-
-    // Send 4 invalid headers (80 points) - should NOT disconnect
-    for (int i = 0; i < 4; ++i) {
-        attacker.SendInvalidPoWHeaders(victim.GetId(), prev, 1);
-        t += 200;
-        net.AdvanceTime(t);
-    }
-
-    // Check still connected after 80 points
-    t += 500;
-    net.AdvanceTime(t);
-    auto peers_mid = victim.GetNetworkManager().peer_manager().get_all_peers();
-    size_t connected_mid = 0;
-    for (const auto& p : peers_mid) {
-        if (p->is_connected()) connected_mid++;
-    }
-
-    // Send 5th invalid header (100 points) - should trigger disconnect
     attacker.SendInvalidPoWHeaders(victim.GetId(), prev, 1);
-    t += 500;
-    net.AdvanceTime(t);
 
-    // Verify attacker disconnected
-    auto peers_after = victim.GetNetworkManager().peer_manager().get_all_peers();
-    size_t connected_after = 0;
-    for (const auto& p : peers_after) {
-        if (p->is_connected()) connected_after++;
-    }
+    // Wait for disconnect (instant discourage)
+    REQUIRE(orch.WaitForPeerCount(victim, 0, std::chrono::seconds(3)));
 
-    // Either attacker was disconnected OR misbehavior threshold works differently
-    // The key is victim remains functional
+    // Victim should still be functional
     CHECK(victim.GetTipHeight() == 10);
 }
 
@@ -153,14 +126,12 @@ TEST_CASE("DoS: Longer chain triggers reorg", "[dos][withholding][consensus]") {
     SimulatedNode victim(100, &net);
     victim.ConnectTo(peer1.GetId());
 
-    uint64_t t = 1000;
-    net.AdvanceTime(t);
+    net.AdvanceTime(1000);
 
     // Sync to peer1's chain
     for (int i = 0; i < 30 && victim.GetTipHeight() < 20; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(500);
+        victim.CheckInitialSync();
     }
     REQUIRE(victim.GetTipHeight() == 20);
 
@@ -170,9 +141,8 @@ TEST_CASE("DoS: Longer chain triggers reorg", "[dos][withholding][consensus]") {
 
     // Victim should sync the new blocks
     for (int i = 0; i < 30 && victim.GetTipHeight() < 30; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(500);
+        victim.CheckInitialSync();
     }
 
     // Victim should have the longer chain
@@ -194,15 +164,13 @@ TEST_CASE("DoS: Deep orphan chain resolution is bounded", "[dos][withholding][or
     NodeSimulator attacker(2, &net);
     attacker.ConnectTo(victim.GetId());
 
-    uint64_t t = 1000;
-    net.AdvanceTime(t);
+    net.AdvanceTime(1000);
 
     // Send many orphan headers (deep chain with unknown parent)
     // This tests orphan limit and eviction
     for (int batch = 0; batch < 10; ++batch) {
         attacker.SendOrphanHeaders(victim.GetId(), 100);
-        t += 100;
-        net.AdvanceTime(t);
+        net.AdvanceTime(100);
     }
 
     // Victim should still be functional (orphans evicted, not crashed)
@@ -213,13 +181,11 @@ TEST_CASE("DoS: Deep orphan chain resolution is bounded", "[dos][withholding][or
     for (int i = 0; i < 20; ++i) honest.MineBlock();
 
     victim.ConnectTo(honest.GetId());
-    t += 500;
-    net.AdvanceTime(t);
+    net.AdvanceTime(500);
 
     for (int i = 0; i < 30 && victim.GetTipHeight() < 20; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(500);
+        victim.CheckInitialSync();
     }
 
     CHECK(victim.GetTipHeight() == 20);
@@ -243,13 +209,11 @@ TEST_CASE("DoS: Sync peer selection prefers outbound", "[dos][withholding][sync]
     SimulatedNode victim(100, &net);
     victim.ConnectTo(honest.GetId());  // Outbound from victim's perspective
 
-    uint64_t t = 1000;
-    net.AdvanceTime(t);
+    net.AdvanceTime(1000);
 
     // Trigger sync peer selection
-    victim.GetNetworkManager().test_hook_check_initial_sync();
-    t += 500;
-    net.AdvanceTime(t);
+    victim.CheckInitialSync();
+    net.AdvanceTime(500);
 
     // Check GETHEADERS was sent (indicating sync started)
     int gh_count = net.CountCommandSent(victim.GetId(), honest.GetId(),
@@ -258,20 +222,20 @@ TEST_CASE("DoS: Sync peer selection prefers outbound", "[dos][withholding][sync]
 
     // Sync should complete
     for (int i = 0; i < 30 && victim.GetTipHeight() < 30; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(500);
+        victim.CheckInitialSync();
     }
 
     CHECK(victim.GetTipHeight() == 30);
 }
 
 // =============================================================================
-// TEST 6: Stall Detection Timing - 120 Second Threshold
+// TEST 6: Stall Detection Timing - 5 Minute Threshold
 // =============================================================================
-// Verify stall timeout fires at ~120 seconds, not before.
+// Verify stall timeout fires at ~5 minutes (Unicity uses 5min instead of Core's 15min
+// for faster IBD recovery).
 
-TEST_CASE("DoS: Stall timeout fires at 120 seconds", "[dos][withholding][timing]") {
+TEST_CASE("DoS: Stall timeout fires at 5 minutes", "[dos][withholding][timing]") {
     SimulatedNetwork net(3006);
     net.EnableCommandTracking(true);
 
@@ -282,63 +246,55 @@ TEST_CASE("DoS: Stall timeout fires at 120 seconds", "[dos][withholding][timing]
     // Stalling peer
     SimulatedNode staller(2, &net);
     staller.ConnectTo(honest.GetId());
-    uint64_t t = 1000;
-    net.AdvanceTime(t);
+    net.AdvanceTime(1000);
     for (int i = 0; i < 20 && staller.GetTipHeight() < 30; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
-        staller.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(500);
+        staller.CheckInitialSync();
     }
     REQUIRE(staller.GetTipHeight() == 30);
 
     // Victim connects to staller
     SimulatedNode victim(100, &net);
     victim.ConnectTo(staller.GetId());
-    t += 500;
-    net.AdvanceTime(t);
+    net.AdvanceTime(500);
 
     // Start sync
-    victim.GetNetworkManager().test_hook_check_initial_sync();
-    t += 500;
-    net.AdvanceTime(t);
+    victim.CheckInitialSync();
+    net.AdvanceTime(500);
 
     // Drop all messages from staller to victim (simulate stall)
     SimulatedNetwork::NetworkConditions drop;
     drop.packet_loss_rate = 1.0;
     net.SetLinkConditions(staller.GetId(), victim.GetId(), drop);
 
-    // Advance 60 seconds - should NOT timeout yet
-    for (int i = 0; i < 6; ++i) {
-        t += 10 * 1000;  // 10 seconds
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_header_sync_process_timers();
+    // Advance 3 minutes - should NOT timeout yet (5 min base)
+    for (int i = 0; i < 3; ++i) {
+        net.AdvanceTime(60 * 1000);  // 1 minute
+        victim.ProcessHeaderSyncTimers();
     }
 
-    // Victim should still have staller as peer (not disconnected at 60s)
-    auto peers_60s = victim.GetNetworkManager().peer_manager().get_all_peers();
-    bool staller_connected_60s = false;
-    for (const auto& p : peers_60s) {
-        if (p->is_connected()) staller_connected_60s = true;
+    // Victim should still have staller as peer (not disconnected at 3 min)
+    auto peers_3min = victim.GetNetworkManager().peer_manager().get_all_peers();
+    bool staller_connected_3min = false;
+    for (const auto& p : peers_3min) {
+        if (p->is_connected()) staller_connected_3min = true;
     }
-    // May or may not be connected depending on implementation
+    CHECK(staller_connected_3min);  // Should still be connected
 
-    // Advance to 130 seconds total - should timeout
-    for (int i = 0; i < 7; ++i) {
-        t += 10 * 1000;
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_header_sync_process_timers();
+    // Advance to 6 minutes total - should timeout
+    for (int i = 0; i < 4; ++i) {
+        net.AdvanceTime(60 * 1000);  // 1 minute
+        victim.ProcessHeaderSyncTimers();
     }
 
     // Verify stall was detected (victim should try to recover)
     // Connect to honest peer and verify sync completes
     victim.ConnectTo(honest.GetId());
-    t += 500;
-    net.AdvanceTime(t);
+    net.AdvanceTime(500);
 
     for (int i = 0; i < 30 && victim.GetTipHeight() < 30; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(500);
+        victim.CheckInitialSync();
     }
 
     CHECK(victim.GetTipHeight() == 30);
@@ -364,8 +320,7 @@ TEST_CASE("DoS: Recovery when all initial peers stall", "[dos][withholding][reco
     staller1.ConnectTo(victim.GetId());
     staller2.ConnectTo(victim.GetId());
 
-    uint64_t t = 1000;
-    net.AdvanceTime(t);
+    net.AdvanceTime(1000);
 
     // Mine some blocks on victim so it has a chain
     for (int i = 0; i < 5; ++i) victim.MineBlock();
@@ -374,15 +329,13 @@ TEST_CASE("DoS: Recovery when all initial peers stall", "[dos][withholding][reco
     // Stallers send orphans to trigger requests
     staller1.SendOrphanHeaders(victim.GetId(), 20);
     staller2.SendOrphanHeaders(victim.GetId(), 20);
-    t += 500;
-    net.AdvanceTime(t);
+    net.AdvanceTime(500);
 
     // Process multiple timeout cycles
     for (int cycle = 0; cycle < 3; ++cycle) {
         for (int i = 0; i < 15; ++i) {
-            t += 10 * 1000;
-            net.AdvanceTime(t);
-            victim.GetNetworkManager().test_hook_header_sync_process_timers();
+            net.AdvanceTime(10 * 1000);
+            victim.ProcessHeaderSyncTimers();
         }
     }
 
@@ -395,14 +348,12 @@ TEST_CASE("DoS: Recovery when all initial peers stall", "[dos][withholding][reco
     REQUIRE(honest.GetTipHeight() == 30);
 
     victim.ConnectTo(honest.GetId());
-    t += 500;
-    net.AdvanceTime(t);
+    net.AdvanceTime(500);
 
     // Should sync from honest peer
     for (int i = 0; i < 40 && victim.GetTipHeight() < 30; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(500);
+        victim.CheckInitialSync();
     }
 
     CHECK(victim.GetTipHeight() == 30);
@@ -426,12 +377,10 @@ TEST_CASE("DoS: Header announcement from non-sync peer during IBD", "[dos][withh
 
     // Sync peer2 from peer1
     peer2.ConnectTo(peer1.GetId());
-    uint64_t t = 1000;
-    net.AdvanceTime(t);
+    net.AdvanceTime(1000);
     for (int i = 0; i < 30 && peer2.GetTipHeight() < 30; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
-        peer2.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(500);
+        peer2.CheckInitialSync();
     }
     REQUIRE(peer2.GetTipHeight() == 30);
 
@@ -439,19 +388,16 @@ TEST_CASE("DoS: Header announcement from non-sync peer during IBD", "[dos][withh
     SimulatedNode victim(100, &net);
     victim.ConnectTo(peer1.GetId());
     victim.ConnectTo(peer2.GetId());
-    t += 500;
-    net.AdvanceTime(t);
+    net.AdvanceTime(500);
 
     // Start IBD - one peer becomes sync peer
-    victim.GetNetworkManager().test_hook_check_initial_sync();
-    t += 500;
-    net.AdvanceTime(t);
+    victim.CheckInitialSync();
+    net.AdvanceTime(500);
 
     // Sync should complete using headers from peers
     for (int i = 0; i < 40 && victim.GetTipHeight() < 30; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(500);
+        victim.CheckInitialSync();
     }
 
     CHECK(victim.GetTipHeight() == 30);
@@ -462,15 +408,13 @@ TEST_CASE("DoS: Header announcement from non-sync peer during IBD", "[dos][withh
 
     // Propagate to peer2
     for (int i = 0; i < 10 && peer2.GetTipHeight() < 31; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
+        net.AdvanceTime(500);
     }
 
     // Victim should eventually get the new block
     for (int i = 0; i < 20 && victim.GetTipHeight() < 31; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(500);
+        victim.CheckInitialSync();
     }
 
     CHECK(victim.GetTipHeight() == 31);

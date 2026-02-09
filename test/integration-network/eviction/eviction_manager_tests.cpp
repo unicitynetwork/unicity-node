@@ -784,3 +784,357 @@ TEST_CASE("EvictionManager - Header protection edge cases", "[eviction][unit][bo
         // But after ping protection, likely only 1 remains
     }
 }
+
+// ============================================================================
+// prefer_evict tests (Core parity - discouraged peers evicted first)
+// ============================================================================
+
+TEST_CASE("EvictionManager - prefer_evict basic behavior", "[eviction][unit][prefer_evict]") {
+    SECTION("Single prefer_evict peer among normal peers - prefer_evict evicted") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // 4 normal peers (oldest connections, should normally be protected)
+        for (int i = 1; i <= 4; i++) {
+            candidates.push_back({
+                i, base_time + seconds(i), 100, "10.0", false, false, {},
+                false  // prefer_evict = false
+            });
+        }
+
+        // 1 prefer_evict peer (newest, but should still be evicted due to prefer_evict)
+        candidates.push_back({
+            5, base_time + seconds(100), 100, "10.0", false, false, {},
+            true  // prefer_evict = true (discouraged peer)
+        });
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // Peer 5 should be evicted because it has prefer_evict=true
+        // Even though protection phases would normally keep other criteria
+        REQUIRE(*result == 5);
+    }
+
+    SECTION("Multiple prefer_evict peers - youngest prefer_evict evicted") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // 3 normal peers
+        for (int i = 1; i <= 3; i++) {
+            candidates.push_back({
+                i, base_time + seconds(i), 100, "10.0", false, false, {},
+                false  // prefer_evict = false
+            });
+        }
+
+        // 2 prefer_evict peers - oldest and newest of the prefer_evict group
+        candidates.push_back({
+            10, base_time + seconds(50), 100, "10.0", false, false, {},
+            true  // prefer_evict = true (older discouraged peer)
+        });
+        candidates.push_back({
+            11, base_time + seconds(100), 100, "10.0", false, false, {},
+            true  // prefer_evict = true (newer discouraged peer)
+        });
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // Among prefer_evict peers, youngest (peer 11) should be evicted
+        REQUIRE(*result == 11);
+    }
+
+    SECTION("No prefer_evict peers - normal eviction logic applies") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // 4 normal peers, no prefer_evict
+        for (int i = 1; i <= 4; i++) {
+            candidates.push_back({
+                i, base_time + seconds(i), 100, "10.0", false, false, {},
+                false  // prefer_evict = false
+            });
+        }
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // Normal eviction: youngest (peer 4) evicted
+        REQUIRE(*result == 4);
+    }
+
+    SECTION("All peers are prefer_evict - youngest evicted") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // 4 prefer_evict peers
+        for (int i = 1; i <= 4; i++) {
+            candidates.push_back({
+                i, base_time + seconds(i * 10), 100, "10.0", false, false, {},
+                true  // all prefer_evict
+            });
+        }
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // All are prefer_evict, so normal selection: youngest (peer 4) evicted
+        REQUIRE(*result == 4);
+    }
+}
+
+TEST_CASE("EvictionManager - prefer_evict respects protection phases", "[eviction][unit][prefer_evict]") {
+    SECTION("prefer_evict peer with good ping survives if protected by ping") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // 10 peers from same netgroup - need enough to trigger ping protection
+        // Netgroup: 10 > 4, protect 1 -> 9 remain
+        // Ping: 9 > 8, protect 8 -> 1 remains
+
+        // 9 normal peers with bad ping (500ms)
+        for (int i = 1; i <= 9; i++) {
+            candidates.push_back({
+                i, base_time + seconds(i), 500, "10.0", false, false, {},
+                false  // normal peers
+            });
+        }
+
+        // 1 prefer_evict peer with EXCELLENT ping (10ms) - should be protected by ping
+        candidates.push_back({
+            10, base_time + seconds(50), 10, "10.0", false, false, {},
+            true  // prefer_evict but has best ping
+        });
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // The prefer_evict peer has the best ping, so it should be protected
+        // by ping protection. One of the normal peers should be evicted.
+        // After netgroup (1 protected) -> 9 remain
+        // Ping protection protects 8 lowest ping - peer 10 has best ping (10ms)
+        // So peer 10 is among the 8 protected, leaving 1 normal peer
+        // That 1 normal peer gets evicted
+        REQUIRE(*result != 10);
+    }
+
+    SECTION("prefer_evict peer with recent headers survives if protected") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+        auto recent_headers = steady_clock::now() - minutes(1);
+
+        // Create scenario where prefer_evict peer is protected by headers
+        // Need: after netgroup and ping, > 4 remain so header protection kicks in
+
+        // 14 peers from same netgroup
+        // Netgroup: 14 > 4, protect 1 -> 13 remain
+        // Ping: 13 > 8, protect 8 -> 5 remain
+        // Header: 5 > 4, protect 4 -> 1 remains
+
+        // 13 normal peers with no headers (epoch time)
+        for (int i = 1; i <= 13; i++) {
+            candidates.push_back({
+                i, base_time + seconds(i), 100, "10.0", false, false, {},
+                false
+            });
+        }
+
+        // 1 prefer_evict peer with RECENT headers - should be protected
+        candidates.push_back({
+            14, base_time + seconds(100), 100, "10.0", false, false, recent_headers,
+            true  // prefer_evict but has recent headers
+        });
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // Peer 14 has most recent headers, should be in top 4 protected
+        // A normal peer without headers should be evicted
+        REQUIRE(*result != 14);
+    }
+
+    SECTION("prefer_evict peer NOT protected - gets evicted over normal peers") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // Create scenario where prefer_evict peer survives protection but is mediocre
+        // 6 peers - just enough to have some protection but prefer_evict peer is average
+
+        // 5 normal peers with varying qualities
+        // Give them all good ping and recent headers so they're protected
+        auto recent_headers = steady_clock::now() - minutes(5);
+        for (int i = 1; i <= 5; i++) {
+            candidates.push_back({
+                i, base_time + seconds(i), 50, "10.0", false, false, recent_headers,
+                false  // normal peers with good metrics
+            });
+        }
+
+        // 1 prefer_evict peer with BAD metrics (high ping, no headers)
+        candidates.push_back({
+            6, base_time + seconds(50), 500, "10.0", false, false, {},
+            true  // prefer_evict with bad metrics
+        });
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // Peer 6 has bad ping (not protected) and no headers (not protected)
+        // After protections, it should remain in candidate pool with prefer_evict
+        // It should be evicted over normal peers
+        REQUIRE(*result == 6);
+    }
+}
+
+TEST_CASE("EvictionManager - prefer_evict with multiple netgroups", "[eviction][unit][prefer_evict]") {
+    SECTION("prefer_evict peer in smaller netgroup still evicted first") {
+        // Use only 4 peers to avoid protection phases interfering
+        // (4 is not > 4, so no netgroup protection)
+        // (4 is not > 8, so no ping protection)
+        // (4 is not > 4, so no header protection)
+        // (4 > 1, but uptime protects 2, leaving 2 - both can be prefer_evict filtered)
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // 1 normal peer in netgroup A (oldest - protected by uptime)
+        candidates.push_back({
+            1, base_time + seconds(1), 100, "192.168", false, false, {},
+            false
+        });
+
+        // 2 normal peers in netgroup B (larger group - would normally be eviction target)
+        candidates.push_back({
+            2, base_time + seconds(50), 100, "10.0", false, false, {},
+            false
+        });
+        candidates.push_back({
+            3, base_time + seconds(60), 100, "10.0", false, false, {},
+            false
+        });
+
+        // 1 prefer_evict peer in netgroup A (newest - would be evicted anyway, but has prefer_evict)
+        candidates.push_back({
+            4, base_time + seconds(100), 100, "192.168", false, false, {},
+            true  // prefer_evict
+        });
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // With 4 peers:
+        // - No netgroup protection (4 not > 4)
+        // - No ping protection (4 not > 8)
+        // - No header protection (4 not > 4)
+        // - Uptime protection: 4 > 1, protect 50% = 2 oldest (peers 1, 2)
+        // Remaining: peers 3, 4
+        // prefer_evict filtering: peer 4 has prefer_evict, so only consider peer 4
+        // Evict peer 4
+        REQUIRE(*result == 4);
+    }
+
+    SECTION("prefer_evict in larger netgroup - still evicted over normal peers") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // 2 normal peers in small netgroup (oldest)
+        candidates.push_back({
+            1, base_time + seconds(1), 100, "192.168", false, false, {},
+            false
+        });
+        candidates.push_back({
+            2, base_time + seconds(2), 100, "192.168", false, false, {},
+            false
+        });
+
+        // 1 normal peer in larger netgroup
+        candidates.push_back({
+            3, base_time + seconds(50), 100, "10.0", false, false, {},
+            false
+        });
+
+        // 1 prefer_evict peer in larger netgroup (newest)
+        candidates.push_back({
+            4, base_time + seconds(100), 100, "10.0", false, false, {},
+            true
+        });
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // Uptime protects 2 oldest (peers 1, 2)
+        // Remaining: peers 3, 4 (both in netgroup 10.0)
+        // prefer_evict: only peer 4 has it, so only consider peer 4
+        // Evict peer 4
+        REQUIRE(*result == 4);
+    }
+}
+
+TEST_CASE("EvictionManager - prefer_evict boundary conditions", "[eviction][unit][prefer_evict][boundary]") {
+    SECTION("Single prefer_evict peer that is also protected - still protected") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // 1 prefer_evict peer that is ALSO is_protected (NoBan)
+        candidates.push_back({
+            1, base_time, 100, "10.0", true, false, {},  // is_protected = true
+            true  // prefer_evict = true
+        });
+
+        // 1 normal peer
+        candidates.push_back({
+            2, base_time + seconds(10), 100, "10.0", false, false, {},
+            false
+        });
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // Peer 1 is protected (NoBan), so even with prefer_evict it cannot be evicted
+        // Peer 2 should be evicted
+        REQUIRE(*result == 2);
+    }
+
+    SECTION("prefer_evict peer that is outbound - outbound protection takes precedence") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // 1 prefer_evict OUTBOUND peer - should never be evicted
+        candidates.push_back({
+            1, base_time, 100, "10.0", false, true, {},  // is_outbound = true
+            true  // prefer_evict = true
+        });
+
+        // 1 normal inbound peer
+        candidates.push_back({
+            2, base_time + seconds(10), 100, "10.0", false, false, {},
+            false
+        });
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE(result.has_value());
+        // Peer 1 is outbound, so it's filtered before prefer_evict even matters
+        // Peer 2 should be evicted
+        REQUIRE(*result == 2);
+    }
+
+    SECTION("Empty candidates after filtering outbound/protected - returns nullopt") {
+        std::vector<EvictionManager::EvictionCandidate> candidates;
+        auto base_time = steady_clock::now() - hours(1);
+
+        // Only prefer_evict peers, but all are protected or outbound
+        candidates.push_back({
+            1, base_time, 100, "10.0", true, false, {},  // protected
+            true
+        });
+        candidates.push_back({
+            2, base_time + seconds(10), 100, "10.0", false, true, {},  // outbound
+            true
+        });
+
+        auto result = EvictionManager::SelectNodeToEvict(std::move(candidates));
+
+        REQUIRE_FALSE(result.has_value());
+    }
+}

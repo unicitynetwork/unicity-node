@@ -3,9 +3,10 @@
 
 #include "application.hpp"
 #include "chain/randomx_pow.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 #include "util/fs_lock.hpp"
 #include "util/logging.hpp"
+#include "util/ntp.hpp"
 #include "util/sha256.hpp"
 #include "util/time.hpp"
 #include "version.hpp"
@@ -18,21 +19,21 @@ namespace unicity {
 namespace app {
 
 // Static instance for signal handling
-Application *Application::instance_ = nullptr;
+std::atomic<Application*> Application::instance_{nullptr};
 
 Application::Application(const AppConfig &config) : config_(config) {
-  instance_ = this;
+  instance_.store(this, std::memory_order_release);
 }
 
 Application::~Application() {
   try {
     stop();
-  } catch (...) {   
+  } catch (...) {
   }
-  instance_ = nullptr;
+  instance_.store(nullptr, std::memory_order_release);
 }
 
-Application *Application::instance() { return instance_; }
+Application* Application::instance() { return instance_.load(std::memory_order_acquire); }
 
 bool Application::initialize() {
   if (config_.chain_type == chain::ChainType::MAIN) {
@@ -96,18 +97,6 @@ bool Application::initialize() {
     return false;
   }
 
-  // Subscribe to block notifications to relay new blocks to peers
-  block_sub_ = Notifications().SubscribeBlockConnected(
-      [this](const BlockConnectedEvent& event) {
-        if (!network_manager_ || chainstate_manager_->IsInitialBlockDownload()) {
-          return;
-        }
-        // Relay non-genesis blocks (height > 0)
-        if (event.height > 0) {
-          network_manager_->relay_block(event.hash);
-        }
-      });
-
   // Subscribe to fatal error notifications to trigger immediate shutdown
   fatal_error_sub_ = Notifications().SubscribeFatalError(
       [this](const std::string& debug_message, const std::string& user_message) {
@@ -120,15 +109,20 @@ bool Application::initialize() {
       });
 
   // Subscribe to chain tip changes to invalidate miner block templates and announce to peers
+  // Note: is_initial_download is true if batch started during IBD
+  // We skip tip announcement during IBD to avoid flooding peers with stale tips
   tip_sub_ = Notifications().SubscribeChainTip(
       [this](const ChainTipEvent& event) {
-        (void)event;  // event data available if needed
         if (miner_) {
           miner_->InvalidateTemplate();
         }
-        // Announcements are queued here and flushed by periodic SendMessages-like loop
+        // Skip tip announcement during IBD
+        if (event.is_initial_download) {
+          return;
+        }
+        // Announce new tip to all connected peers via direct HEADERS
         if (network_manager_) {
-          network_manager_->announce_tip_to_peers();
+          network_manager_->announce_block(event.hash);
         }
       });
 
@@ -157,6 +151,22 @@ bool Application::start() {
     }
   }
 
+  // NTP clock check (skip in regtest)
+  if (config_.chain_type != chain::ChainType::REGTEST) {
+    auto offset = util::CheckNTPOffset();
+    if (offset.has_value()) {
+      int64_t abs_offset = std::abs(*offset);
+      if (abs_offset > 30) {
+        LOG_WARN("System clock is off by {} seconds (NTP). "
+                 "Please check your system time.", *offset);
+      } else {
+        LOG_DEBUG("NTP clock check: offset {}s", *offset);
+      }
+    } else {
+      LOG_DEBUG("NTP check: unable to reach time server (continuing)");
+    }
+  }
+
   // Setup signal handlers
   setup_signal_handlers();
 
@@ -178,7 +188,6 @@ bool Application::start() {
   start_periodic_saves();
 
   LOG_INFO("Unicity started successfully");
-  LOG_INFO("Data directory: {}", config_.datadir.string());
 
   if (config_.network_config.listen_enabled) {
     LOG_INFO("Listening on port: {}", config_.network_config.listen_port);
@@ -223,7 +232,6 @@ void Application::shutdown() {
   stop_periodic_saves();
 
   // Unsubscribe before stopping components to prevent race conditions
-  block_sub_.Unsubscribe();
   fatal_error_sub_.Unsubscribe();
   tip_sub_.Unsubscribe();
 
@@ -354,8 +362,9 @@ bool Application::init_chain() {
 
   // Create chainstate manager (which owns BlockManager)
   // Apply command-line override to chain params if provided
-  if (config_.suspicious_reorg_depth > 0) {
-    LOG_INFO("Overriding suspicious reorg depth: {} (default was {})",
+  if (config_.suspicious_reorg_depth > 0 &&
+      config_.suspicious_reorg_depth != chain_params_->GetConsensus().nSuspiciousReorgDepth) {
+    LOG_INFO("suspicious reorg depth: {} (default was {})",
              config_.suspicious_reorg_depth,
              chain_params_->GetConsensus().nSuspiciousReorgDepth);
     chain_params_->SetSuspiciousReorgDepth(config_.suspicious_reorg_depth);
@@ -408,10 +417,6 @@ bool Application::init_network() {
   network_manager_ = std::make_unique<network::NetworkManager>(
       *chainstate_manager_, config_.network_config);
 
-  // Load peer addresses (anchors loaded during start() when connection machinery is ready)
-  std::string peers_file = (config_.datadir / "peers.json").string();
-  network_manager_->discovery_manager().LoadAddresses(peers_file);
-
   return true;
 }
 
@@ -438,13 +443,14 @@ void Application::setup_signal_handlers() {
 }
 
 void Application::signal_handler(int signal) {
-  if (instance_) {
+  Application* inst = instance_.load(std::memory_order_acquire);
+  if (inst) {
     // Use write() for async-signal-safety (std::cout, snprintf are NOT safe)
     // Cast to void to silence warn_unused_result - nothing we can do if write fails in signal handler
     static const char msg[] = "\nReceived signal\n";
     (void)write(STDOUT_FILENO, msg, sizeof(msg) - 1);
 
-    instance_->shutdown_requested_ = true;
+    inst->shutdown_requested_ = true;
   }
 }
 

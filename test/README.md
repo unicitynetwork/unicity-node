@@ -36,7 +36,7 @@ test/
 │   ├── peer/                # Peer lifecycle
 │   ├── security/            # Eclipse attack simulations
 │   └── infra/               # Test infrastructure
-├── integration-chain/       # Chain tests (orphans, reorgs)
+├── integration-chain/       # Chain tests (reorgs, validation)
 ├── wire/                    # Wire-level protocol tools
 ├── functional/              # Python tests against real node
 │   ├── docker_*/            # Multi-node Docker tests
@@ -73,8 +73,8 @@ P2P tests using simulated network infrastructure.
 
 | File | Purpose |
 |------|---------|
-| `orphan_*_tests.cpp` | Orphan pool DoS, edge cases, threading |
 | `chain_e2e_tests.cpp` | End-to-end chain operations |
+| `invalidateblock_chain_tests.cpp` | Block invalidation and recovery |
 | `reorg_multi_node_tests.cpp` | Multi-node reorganization |
 
 ### Wire Tests (`wire/`)
@@ -186,10 +186,10 @@ orchestrator.WaitForCondition([]() { return check(); }, std::chrono::seconds(5))
 ### Attack Methods
 
 ```cpp
-AttackSimulatedNode attacker(2, &network, params.get());
+NodeSimulator attacker(2, &network, params.get());
 
 attacker.SendInvalidPoWHeaders(victim_id, prev_hash, count);
-attacker.SendOrphanHeaders(victim_id, count);
+attacker.SendUnconnectingHeaders(victim_id, count);
 attacker.SendNonContinuousHeaders(victim_id, prev_hash);
 attacker.SendOversizedHeaders(victim_id, 2500);  // Max is 2000
 attacker.SendLowWorkHeaders(victim_id, header_hashes);

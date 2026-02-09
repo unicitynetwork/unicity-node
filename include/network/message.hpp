@@ -21,7 +21,7 @@ class MessageSerializer;
 class MessageDeserializer;
 
 
-//VarInt - Variable length integer encoding
+// VarInt - Variable length integer encoding
 class VarInt {
 public:
   uint64_t value;
@@ -40,12 +40,11 @@ public:
 };
 
 
- //Serialization buffer for building wire-format messages
+// Serialization buffer for building wire-format messages
 class MessageSerializer {
 public:
   MessageSerializer();
 
-  // Write primitives
   void write_uint8(uint8_t value);
   void write_uint16(uint16_t value);
   void write_uint32(uint32_t value);
@@ -54,26 +53,18 @@ public:
   void write_int64(int64_t value);
   void write_bool(bool value);
 
-  // Write variable-length
   void write_varint(uint64_t value);
   void write_string(const std::string& str);
   void write_bytes(const uint8_t* data, size_t len);
   void write_bytes(const std::vector<uint8_t>& data);
 
-  // Stream interface for base_blob::Serialize()
-  // Forwards to write_bytes() with appropriate cast
   void write(const char* data, size_t len) { write_bytes(reinterpret_cast<const uint8_t*>(data), len); }
 
-  // Write protocol structures
-  // Note: Timestamps are NOT written by this function. 
   void write_network_address(const protocol::NetworkAddress& addr);
-  void write_inventory_vector(const protocol::InventoryVector& inv);
 
-  // Get serialized data
   const std::vector<uint8_t>& data() const { return buffer_; }
   size_t size() const { return buffer_.size(); }
 
-  // Clear buffer
   void clear() { buffer_.clear(); }
 
 private:
@@ -95,18 +86,13 @@ public:
   int64_t read_int64();
   bool read_bool();
 
-  // Read variable-length
   uint64_t read_varint();
   std::string read_string(size_t max_length = SIZE_MAX);
   std::vector<uint8_t> read_bytes(size_t count);
 
-  // Read protocol structures
-  // Note: Timestamps are NOT read by this function. 
   protocol::NetworkAddress read_network_address();
   protocol::TimestampedAddress read_timestamped_address();
-  protocol::InventoryVector read_inventory_vector();
 
-  // State
   size_t bytes_remaining() const { return size_ - position_; }
   size_t position() const { return position_; }
   bool has_error() const { return error_; }
@@ -120,7 +106,7 @@ private:
   void check_available(size_t bytes);
 };
 
-//Base class for all message payloads
+// Base class for all message payloads
 class Message {
 public:
   virtual ~Message() = default;
@@ -135,7 +121,7 @@ public:
   virtual bool deserialize(const uint8_t* data, size_t size) = 0;
 };
 
-//VERSION message - First message sent to establish connection
+// VERSION message - First message sent to establish connection
 class VersionMessage : public Message {
 public:
   int32_t version;
@@ -154,7 +140,7 @@ public:
   bool deserialize(const uint8_t* data, size_t size) override;
 };
 
-//VERACK message - Acknowledge version
+// VERACK message - Acknowledge version
 class VerackMessage : public Message {
 public:
   VerackMessage() = default;
@@ -164,7 +150,7 @@ public:
   bool deserialize(const uint8_t* data, size_t size) override;
 };
 
-//PING message - Keep-alive check
+// PING message - Keep-alive check
 class PingMessage : public Message {
 public:
   uint64_t nonce;
@@ -177,7 +163,7 @@ public:
   bool deserialize(const uint8_t* data, size_t size) override;
 };
 
-//PONG message - Response to ping
+// PONG message - Response to ping
 class PongMessage : public Message {
 public:
   uint64_t nonce;
@@ -190,7 +176,7 @@ public:
   bool deserialize(const uint8_t* data, size_t size) override;
 };
 
-//ADDR message - Share peer addresses
+// ADDR message - Share peer addresses
 class AddrMessage : public Message {
 public:
   std::vector<protocol::TimestampedAddress> addresses;
@@ -202,7 +188,7 @@ public:
   bool deserialize(const uint8_t* data, size_t size) override;
 };
 
-//GETADDR message - Request peer addresses
+// GETADDR message - Request peer addresses
 class GetAddrMessage : public Message {
 public:
   GetAddrMessage() = default;
@@ -212,19 +198,7 @@ public:
   bool deserialize(const uint8_t* data, size_t size) override;
 };
 
-//INV message - Announce inventory (blocks)
-class InvMessage : public Message {
-public:
-  std::vector<protocol::InventoryVector> inventory;
-
-  InvMessage() = default;
-
-  std::string command() const override { return protocol::commands::INV; }
-  std::vector<uint8_t> serialize() const override;
-  bool deserialize(const uint8_t* data, size_t size) override;
-};
-
-//GETHEADERS message - Request block headers
+// GETHEADERS message - Request headers
 class GetHeadersMessage : public Message {
 public:
   uint32_t version;
@@ -238,7 +212,7 @@ public:
   bool deserialize(const uint8_t* data, size_t size) override;
 };
 
-//HEADERS message - Receive block headers
+// HEADERS message - Receive  headers
 class HeadersMessage : public Message {
 public:
   std::vector<::CBlockHeader> headers;

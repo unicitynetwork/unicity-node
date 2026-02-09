@@ -1,3 +1,6 @@
+// Copyright (c) 2025 The Unicity Foundation
+// Distributed under the MIT software license
+
 #include "util/files.hpp"
 
 #include "util/logging.hpp"

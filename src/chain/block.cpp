@@ -15,8 +15,8 @@
 
 namespace {
 // Compile-time header size calculation
-static constexpr size_t kHeaderSize = 4 /*nVersion*/ + 32 /*hashPrevBlock*/ + 20 /*minerAddress*/ + 4 /*nTime*/ +
-                                      4 /*nBits*/ + 4 /*nNonce*/ + 32 /*hashRandomX*/;
+constexpr size_t kHeaderSize = 4 /*nVersion*/ + 32 /*hashPrevBlock*/ + 20 /*minerAddress*/ + 4 /*nTime*/ +
+                               4 /*nBits*/ + 4 /*nNonce*/ + 32 /*hashRandomX*/;
 static_assert(kHeaderSize == CBlockHeader::HEADER_SIZE, "HEADER_SIZE mismatch");
 }  // namespace
 
@@ -82,7 +82,7 @@ bool CBlockHeader::Deserialize(const uint8_t* data, size_t size) noexcept {
   // nNonce (4 bytes, offset 64)
   nNonce = endian::ReadLE32(data + OFF_NONCE);
 
-  // hashRandomX (32 bytes)
+  // hashRandomX (32 bytes, offset 68)
   std::copy(data + OFF_RANDOMX, data + OFF_RANDOMX + UINT256_BYTES, hashRandomX.begin());
 
   return true;

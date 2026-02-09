@@ -13,9 +13,6 @@
 #include "util/time.hpp"
 #include "util/uint.hpp"
 
-#include <algorithm>
-#include <ctime>
-
 namespace unicity {
 namespace validation {
 
@@ -93,49 +90,13 @@ bool ContextualCheckBlockHeader(const CBlockHeader& header, const chain::CBlockI
   return true;
 }
 
-int64_t GetAdjustedTime() {
-  // Returns unadjusted system time (mockable for tests).
-  // Network-adjusted time was removed following Bitcoin Core 27.0 (PR #28956).
-  // Rationale: removes attack surface from malicious peers, relies on NTP.
-  return ::unicity::util::GetTime();
-}
 
 // ============================================================================
 // DoS Protection Functions
 // ============================================================================
 
-// NOTE: GetAntiDoSWorkThreshold and CalculateHeadersWork are currently UNUSED.
-//
-// These functions were intended to provide work-based DoS protection by rejecting
-// header chains with insufficient cumulative work. However, the current implementation
-// relies on different mechanisms:
-//
-//   1. Deep fork rejection (nSuspiciousReorgDepth) - rejects headers forking too far back
-//   2. Side-chain pruning (PruneStaleSideChains) - cleans up stale side-chain headers
-//   3. Unconnecting headers limit (MAX_UNCONNECTING_HEADERS) - limits orphan spam
-//
-// The assumption is that BFT will prevent forks entirely.
-// These functions are retained for potential future use if work-based thresholds
-// are needed (e.g., to accept deep forks that have significantly more work).
-
-arith_uint256 GetAntiDoSWorkThreshold(const chain::CBlockIndex* tip, const chain::ChainParams& params) {
-  arith_uint256 near_tip_work = 0;
-
-  if (tip != nullptr) {
-    // Calculate work of one block at current difficulty
-    arith_uint256 block_proof = chain::GetBlockProof(*tip);
-
-    // Calculate work buffer (chain-specific number of blocks)
-    arith_uint256 buffer = block_proof * params.GetConsensus().nAntiDosWorkBufferBlocks;
-
-    // Subtract buffer from tip work (but don't go negative)
-    near_tip_work = tip->nChainWork - std::min(buffer, tip->nChainWork);
-  }
-
-  // Return the higher of: near-tip work OR configured minimum
-  arith_uint256 min_chain_work = UintToArith256(params.GetConsensus().nMinimumChainWork);
-  return std::max(near_tip_work, min_chain_work);
-}
+// CalculateHeadersWork is used by HeaderSyncManager to reject low-work header
+// batches before they reach AcceptBlockHeader (gated on nMinimumChainWork > 0).
 
 arith_uint256 CalculateHeadersWork(const std::vector<CBlockHeader>& headers) {
   arith_uint256 total_work = 0;

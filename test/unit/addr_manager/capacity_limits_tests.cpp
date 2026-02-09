@@ -32,7 +32,7 @@ static NetworkAddress MakeIPv4Address(uint32_t index, uint16_t port = 9590) {
     // - third/fourth: from index modulo
     //
     // This gives us ~56,000 unique /16 subnets (223 * 256 minus reserved)
-    // With 8 addresses per /16 (TRIED limit), we need ~1250 /16s for 10000 addresses
+    // With 8 addresses per /16 (TRIED limit), we need ~2048 /16s for 16384 addresses
     uint16_t netgroup_index = index / 8;  // Change /16 every 8 addresses (TRIED limit)
     uint8_t first = 1 + (netgroup_index / 256) % 222;  // 1-222 (avoid 10.x, 127.x)
     if (first >= 10) first++;  // Skip 10.x.x.x (RFC1918)
@@ -52,8 +52,8 @@ static NetworkAddress MakeIPv6Address(const std::string& ipv6_str, uint16_t port
 TEST_CASE("Address table respects MAX_NEW_ADDRESSES limit", "[addr_manager][capacity][limits][slow]") {
     AddressManager am;
 
-    // Try to add 25,000 addresses (exceeds MAX_NEW_ADDRESSES = 20,000)
-    const int addresses_to_add = 25000;
+    // Try to add 70,000 addresses (exceeds MAX_NEW_ADDRESSES = 65,536)
+    const int addresses_to_add = 70000;
     int added_count = 0;
 
     for (int i = 0; i < addresses_to_add; i++) {
@@ -65,12 +65,12 @@ TEST_CASE("Address table respects MAX_NEW_ADDRESSES limit", "[addr_manager][capa
 
     INFO("Added " << added_count << " addresses out of " << addresses_to_add << " attempted");
 
-    // Should cap at MAX_NEW_ADDRESSES (20,000)
-    REQUIRE(am.new_count() <= 20000);
+    // Should cap at MAX_NEW_ADDRESSES (65,536)
+    REQUIRE(am.new_count() <= 65536);
 
     // Should have triggered eviction for addresses beyond limit
-    REQUIRE(added_count > 20000);  // We successfully added more than limit (via eviction)
-    REQUIRE(am.new_count() == 20000);  // But table capped at limit
+    REQUIRE(added_count > 65536);  // We successfully added more than limit (via eviction)
+    REQUIRE(am.new_count() == 65536);  // But table capped at limit
 
     // Should still be able to select addresses
     auto selected = am.select();
@@ -80,8 +80,8 @@ TEST_CASE("Address table respects MAX_NEW_ADDRESSES limit", "[addr_manager][capa
 TEST_CASE("Address table respects MAX_TRIED_ADDRESSES limit", "[addr_manager][capacity][limits]") {
     AddressManager am;
 
-    // Add and promote 12,000 addresses to tried table (exceeds MAX_TRIED_ADDRESSES = 10,000)
-    const int addresses_to_try = 12000;
+    // Add and promote 18,000 addresses to tried table (exceeds MAX_TRIED_ADDRESSES = 16,384)
+    const int addresses_to_try = 18000;
 
     for (int i = 0; i < addresses_to_try; i++) {
         auto addr = MakeIPv4Address(i, 9590);
@@ -95,27 +95,27 @@ TEST_CASE("Address table respects MAX_TRIED_ADDRESSES limit", "[addr_manager][ca
 
     INFO("Tried count: " << am.tried_count());
 
-    // Should cap at MAX_TRIED_ADDRESSES (10,000)
-    REQUIRE(am.tried_count() <= 10000);
+    // Should cap at MAX_TRIED_ADDRESSES (16,384)
+    REQUIRE(am.tried_count() <= 16384);
 }
 
 TEST_CASE("Eviction allows new addresses when at capacity", "[addr_manager][capacity][eviction]") {
     AddressManager am;
 
     // Fill NEW table to capacity
-    for (int i = 0; i < 20000; i++) {
+    for (int i = 0; i < 65536; i++) {
         auto addr = MakeIPv4Address(i, 9590);
         am.add(addr);
     }
 
-    REQUIRE(am.new_count() == 20000);  // At capacity
+    REQUIRE(am.new_count() == 65536);  // At capacity
 
     // Add one more address - should evict an existing one
     auto new_addr = MakeIPv4Address(99999, 9591);
     REQUIRE(am.add(new_addr));
 
     // Should still be at capacity
-    REQUIRE(am.new_count() == 20000);
+    REQUIRE(am.new_count() == 65536);
 }
 
 // Note: Testing specific eviction strategies (terrible addresses, oldest timestamp)
@@ -211,7 +211,7 @@ TEST_CASE("Capacity limits work with failed() and demotion", "[addr_manager][cap
     AddressManager am;
 
     // Fill TRIED table to capacity
-    const int addresses = 10000;
+    const int addresses = 16384;
 
     for (int i = 0; i < addresses; i++) {
         auto addr = MakeIPv4Address(i, 9590);
@@ -219,7 +219,7 @@ TEST_CASE("Capacity limits work with failed() and demotion", "[addr_manager][cap
         am.good(addr);
     }
 
-    REQUIRE(am.tried_count() == 10000);
+    REQUIRE(am.tried_count() == 16384);
 
     // Add one more and promote - should trigger eviction in tried table
     auto new_addr = MakeIPv4Address(99999, 9591);
@@ -227,19 +227,19 @@ TEST_CASE("Capacity limits work with failed() and demotion", "[addr_manager][cap
     am.good(new_addr);
 
     // Should still be at capacity
-    REQUIRE(am.tried_count() <= 10000);
+    REQUIRE(am.tried_count() <= 16384);
 }
 
 TEST_CASE("select() works with table at capacity", "[addr_manager][capacity][selection]") {
     AddressManager am;
 
     // Fill NEW table to capacity
-    for (int i = 0; i < 20000; i++) {
+    for (int i = 0; i < 65536; i++) {
         auto addr = MakeIPv4Address(i, 9590);
         am.add(addr);
     }
 
-    REQUIRE(am.new_count() == 20000);
+    REQUIRE(am.new_count() == 65536);
 
     // Should still be able to select addresses
     for (int i = 0; i < 100; i++) {
@@ -252,7 +252,7 @@ TEST_CASE("get_addresses() works with table at capacity", "[addr_manager][capaci
     AddressManager am;
 
     // Fill NEW table
-    for (int i = 0; i < 20000; i++) {
+    for (int i = 0; i < 65536; i++) {
         auto addr = MakeIPv4Address(i, 9590);
         am.add(addr);
     }

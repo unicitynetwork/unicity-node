@@ -87,10 +87,10 @@ TEST_CASE("NetworkAddress - IPv4 mapping", "[network][protocol]") {
     SECTION("Create from IPv4 address") {
         // 192.168.1.1 = 0xC0A80101
         uint32_t ipv4 = (192 << 24) | (168 << 16) | (1 << 8) | 1;
-        NetworkAddress addr = NetworkAddress::from_ipv4(NODE_NETWORK, ipv4, 8333);
+        NetworkAddress addr = NetworkAddress::from_ipv4(NODE_NETWORK, ipv4, 9590);
 
         CHECK(addr.services == NODE_NETWORK);
-        CHECK(addr.port == 8333);
+        CHECK(addr.port == 9590);
         CHECK(addr.is_ipv4());
         CHECK(addr.get_ipv4() == ipv4);
 
@@ -117,7 +117,7 @@ TEST_CASE("NetworkAddress - IPv4 mapping", "[network][protocol]") {
 
     SECTION("Broadcast 255.255.255.255") {
         uint32_t broadcast = 0xFFFFFFFF;
-        NetworkAddress addr = NetworkAddress::from_ipv4(0, broadcast, 8333);
+        NetworkAddress addr = NetworkAddress::from_ipv4(0, broadcast, 9590);
 
         CHECK(addr.is_ipv4());
         CHECK(addr.get_ipv4() == broadcast);
@@ -140,7 +140,7 @@ TEST_CASE("NetworkAddress - IPv6 detection", "[network][protocol]") {
     SECTION("Pure IPv6 is not IPv4-mapped") {
         NetworkAddress addr;
         addr.services = NODE_NETWORK;
-        addr.port = 8333;
+        addr.port = 9590;
 
         // Set to 2001:db8::1 (documentation IPv6)
         addr.ip[0] = 0x20;
@@ -199,50 +199,13 @@ TEST_CASE("TimestampedAddress - Construction", "[network][protocol]") {
     }
 
     SECTION("Parameterized constructor") {
-        NetworkAddress addr = NetworkAddress::from_ipv4(NODE_NETWORK, 0xC0A80101, 8333);
+        NetworkAddress addr = NetworkAddress::from_ipv4(NODE_NETWORK, 0xC0A80101, 9590);
         TimestampedAddress taddr(1234567890, addr);
 
         CHECK(taddr.timestamp == 1234567890);
         CHECK(taddr.address.services == NODE_NETWORK);
-        CHECK(taddr.address.port == 8333);
+        CHECK(taddr.address.port == 9590);
         CHECK(taddr.address.is_ipv4());
-    }
-}
-
-TEST_CASE("InventoryVector - Construction", "[network][protocol]") {
-    SECTION("Default constructor") {
-        InventoryVector inv;
-        CHECK(inv.type == InventoryType::ERROR);
-        CHECK(inv.hash.data()[0] == 0);
-        CHECK(inv.hash.data()[31] == 0);
-    }
-
-    SECTION("Parameterized constructor") {
-        uint256 test_hash;
-        for (int i = 0; i < 32; i++) {
-            test_hash.data()[i] = static_cast<uint8_t>(i);
-        }
-
-        InventoryVector inv(InventoryType::MSG_BLOCK, test_hash);
-        CHECK(inv.type == InventoryType::MSG_BLOCK);
-        CHECK(inv.hash.data()[0] == 0);
-        CHECK(inv.hash.data()[31] == 31);
-    }
-}
-
-TEST_CASE("InventoryType - Enum values", "[network][protocol]") {
-    SECTION("InventoryType values") {
-        CHECK(static_cast<uint32_t>(InventoryType::ERROR) == 0);
-        CHECK(static_cast<uint32_t>(InventoryType::MSG_BLOCK) == 2);
-    }
-
-    SECTION("InventoryType comparison") {
-        InventoryType t1 = InventoryType::ERROR;
-        InventoryType t2 = InventoryType::MSG_BLOCK;
-
-        CHECK(t1 != t2);
-        CHECK(t1 == InventoryType::ERROR);
-        CHECK(t2 == InventoryType::MSG_BLOCK);
     }
 }
 
@@ -271,7 +234,6 @@ TEST_CASE("Protocol limits - Security constants", "[network][protocol]") {
 
     SECTION("Protocol-specific limits") {
         CHECK(MAX_LOCATOR_SZ == 101);
-        CHECK(MAX_INV_SIZE == 50000);
         CHECK(MAX_HEADERS_SIZE == 80000);  // ~22 years @ 10 blocks/day
         CHECK(MAX_ADDR_SIZE == 1000);
     }
@@ -292,7 +254,6 @@ TEST_CASE("Protocol commands - String constants", "[network][protocol]") {
     SECTION("Command strings are valid") {
         CHECK(std::string(commands::VERSION) == "version");
         CHECK(std::string(commands::VERACK) == "verack");
-        CHECK(std::string(commands::INV) == "inv");
         CHECK(std::string(commands::GETHEADERS) == "getheaders");
         CHECK(std::string(commands::HEADERS) == "headers");
 // SENDHEADERS not supported in this implementation
@@ -314,10 +275,10 @@ TEST_CASE("Protocol commands - String constants", "[network][protocol]") {
 
 TEST_CASE("NetworkAddress::from_string - IPv4 addresses", "[network][protocol][from_string]") {
     SECTION("Valid IPv4 address") {
-        auto addr = NetworkAddress::from_string("192.168.1.100", 8333);
+        auto addr = NetworkAddress::from_string("192.168.1.100", 9590);
         CHECK_FALSE(addr.is_zero());
         CHECK(addr.is_ipv4());
-        CHECK(addr.port == 8333);
+        CHECK(addr.port == 9590);
         CHECK(addr.services == NODE_NETWORK);  // Default
         // Verify IPv4-mapped format
         CHECK(addr.ip[10] == 0xff);
@@ -339,15 +300,15 @@ TEST_CASE("NetworkAddress::from_string - IPv4 addresses", "[network][protocol][f
     }
 
     SECTION("Custom services flag") {
-        auto addr = NetworkAddress::from_string("10.0.0.1", 8333, 0);
+        auto addr = NetworkAddress::from_string("10.0.0.1", 9590, 0);
         CHECK(addr.services == 0);
 
-        auto addr2 = NetworkAddress::from_string("10.0.0.2", 8333, NODE_NETWORK);
+        auto addr2 = NetworkAddress::from_string("10.0.0.2", 9590, NODE_NETWORK);
         CHECK(addr2.services == NODE_NETWORK);
     }
 
     SECTION("Broadcast address") {
-        auto addr = NetworkAddress::from_string("255.255.255.255", 8333);
+        auto addr = NetworkAddress::from_string("255.255.255.255", 9590);
         CHECK_FALSE(addr.is_zero());
         CHECK(addr.is_ipv4());
         CHECK(addr.ip[12] == 255);
@@ -359,10 +320,10 @@ TEST_CASE("NetworkAddress::from_string - IPv4 addresses", "[network][protocol][f
 
 TEST_CASE("NetworkAddress::from_string - IPv6 addresses", "[network][protocol][from_string]") {
     SECTION("Valid IPv6 address") {
-        auto addr = NetworkAddress::from_string("2001:db8::1", 8333);
+        auto addr = NetworkAddress::from_string("2001:db8::1", 9590);
         CHECK_FALSE(addr.is_zero());
         CHECK_FALSE(addr.is_ipv4());
-        CHECK(addr.port == 8333);
+        CHECK(addr.port == 9590);
         // Verify first bytes of 2001:db8::
         CHECK(addr.ip[0] == 0x20);
         CHECK(addr.ip[1] == 0x01);
@@ -371,7 +332,7 @@ TEST_CASE("NetworkAddress::from_string - IPv6 addresses", "[network][protocol][f
     }
 
     SECTION("IPv6 loopback") {
-        auto addr = NetworkAddress::from_string("::1", 8333);
+        auto addr = NetworkAddress::from_string("::1", 9590);
         CHECK_FALSE(addr.is_zero());
         CHECK_FALSE(addr.is_ipv4());
         // All zeros except last byte
@@ -382,7 +343,7 @@ TEST_CASE("NetworkAddress::from_string - IPv6 addresses", "[network][protocol][f
     }
 
     SECTION("Full IPv6 address") {
-        auto addr = NetworkAddress::from_string("fe80:1234:5678:9abc:def0:1234:5678:9abc", 8333);
+        auto addr = NetworkAddress::from_string("fe80:1234:5678:9abc:def0:1234:5678:9abc", 9590);
         CHECK_FALSE(addr.is_zero());
         CHECK_FALSE(addr.is_ipv4());
         CHECK(addr.ip[0] == 0xfe);
@@ -392,32 +353,32 @@ TEST_CASE("NetworkAddress::from_string - IPv6 addresses", "[network][protocol][f
 
 TEST_CASE("NetworkAddress::from_string - Invalid inputs", "[network][protocol][from_string]") {
     SECTION("Empty string returns zeroed address") {
-        auto addr = NetworkAddress::from_string("", 8333);
+        auto addr = NetworkAddress::from_string("", 9590);
         CHECK(addr.is_zero());
     }
 
     SECTION("Invalid format returns zeroed address") {
-        auto addr = NetworkAddress::from_string("not.an.ip", 8333);
+        auto addr = NetworkAddress::from_string("not.an.ip", 9590);
         CHECK(addr.is_zero());
     }
 
     SECTION("Incomplete IPv4 returns zeroed address") {
-        auto addr = NetworkAddress::from_string("192.168.1", 8333);
+        auto addr = NetworkAddress::from_string("192.168.1", 9590);
         CHECK(addr.is_zero());
     }
 
     SECTION("Out of range IPv4 octet returns zeroed address") {
-        auto addr = NetworkAddress::from_string("192.168.1.999", 8333);
+        auto addr = NetworkAddress::from_string("192.168.1.999", 9590);
         CHECK(addr.is_zero());
     }
 
     SECTION("Hostname returns zeroed address") {
-        auto addr = NetworkAddress::from_string("example.com", 8333);
+        auto addr = NetworkAddress::from_string("example.com", 9590);
         CHECK(addr.is_zero());
     }
 
     SECTION("Negative IPv4 returns zeroed address") {
-        auto addr = NetworkAddress::from_string("-1.0.0.1", 8333);
+        auto addr = NetworkAddress::from_string("-1.0.0.1", 9590);
         CHECK(addr.is_zero());
     }
 }
@@ -428,21 +389,21 @@ TEST_CASE("NetworkAddress::from_string - Invalid inputs", "[network][protocol][f
 
 TEST_CASE("NetworkAddress::to_string - IPv4 round-trip", "[network][protocol][tostring]") {
     SECTION("Basic IPv4") {
-        auto addr = NetworkAddress::from_string("192.168.1.100", 8333);
+        auto addr = NetworkAddress::from_string("192.168.1.100", 9590);
         auto result = addr.to_string();
         REQUIRE(result.has_value());
         CHECK(*result == "192.168.1.100");
     }
 
     SECTION("Loopback") {
-        auto addr = NetworkAddress::from_string("127.0.0.1", 8333);
+        auto addr = NetworkAddress::from_string("127.0.0.1", 9590);
         auto result = addr.to_string();
         REQUIRE(result.has_value());
         CHECK(*result == "127.0.0.1");
     }
 
     SECTION("Public IP") {
-        auto addr = NetworkAddress::from_string("8.8.8.8", 8333);
+        auto addr = NetworkAddress::from_string("8.8.8.8", 9590);
         auto result = addr.to_string();
         REQUIRE(result.has_value());
         CHECK(*result == "8.8.8.8");
@@ -451,7 +412,7 @@ TEST_CASE("NetworkAddress::to_string - IPv4 round-trip", "[network][protocol][to
     SECTION("from_ipv4 round-trip") {
         // 192.168.1.1 = 0xC0A80101
         uint32_t ipv4 = (192 << 24) | (168 << 16) | (1 << 8) | 1;
-        auto addr = NetworkAddress::from_ipv4(NODE_NETWORK, ipv4, 8333);
+        auto addr = NetworkAddress::from_ipv4(NODE_NETWORK, ipv4, 9590);
         auto result = addr.to_string();
         REQUIRE(result.has_value());
         CHECK(*result == "192.168.1.1");
@@ -460,14 +421,14 @@ TEST_CASE("NetworkAddress::to_string - IPv4 round-trip", "[network][protocol][to
 
 TEST_CASE("NetworkAddress::to_string - IPv6 round-trip", "[network][protocol][tostring]") {
     SECTION("IPv6 loopback") {
-        auto addr = NetworkAddress::from_string("::1", 8333);
+        auto addr = NetworkAddress::from_string("::1", 9590);
         auto result = addr.to_string();
         REQUIRE(result.has_value());
         CHECK(*result == "::1");
     }
 
     SECTION("Documentation IPv6") {
-        auto addr = NetworkAddress::from_string("2001:db8::1", 8333);
+        auto addr = NetworkAddress::from_string("2001:db8::1", 9590);
         auto result = addr.to_string();
         REQUIRE(result.has_value());
         CHECK(*result == "2001:db8::1");
@@ -494,33 +455,33 @@ TEST_CASE("NetworkAddress::is_zero", "[network][protocol][is_zero]") {
     }
 
     SECTION("Valid IPv4 is not zero") {
-        auto addr = NetworkAddress::from_string("192.168.1.1", 8333);
+        auto addr = NetworkAddress::from_string("192.168.1.1", 9590);
         CHECK_FALSE(addr.is_zero());
     }
 
     SECTION("Valid IPv6 is not zero") {
-        auto addr = NetworkAddress::from_string("2001:db8::1", 8333);
+        auto addr = NetworkAddress::from_string("2001:db8::1", 9590);
         CHECK_FALSE(addr.is_zero());
     }
 
     SECTION("IPv6 loopback (::1) is not zero") {
-        auto addr = NetworkAddress::from_string("::1", 8333);
+        auto addr = NetworkAddress::from_string("::1", 9590);
         CHECK_FALSE(addr.is_zero());
     }
 
     SECTION("Parse failure results in zero") {
-        auto addr = NetworkAddress::from_string("invalid", 8333);
+        auto addr = NetworkAddress::from_string("invalid", 9590);
         CHECK(addr.is_zero());
     }
 
     SECTION("from_ipv4 with non-zero is not zero") {
-        auto addr = NetworkAddress::from_ipv4(0, 1, 8333);  // IP = 0.0.0.1
+        auto addr = NetworkAddress::from_ipv4(0, 1, 9590);  // IP = 0.0.0.1
         CHECK_FALSE(addr.is_zero());
     }
 
     SECTION("from_ipv4 with 0.0.0.0 is not zero (has ffff prefix)") {
         // Even 0.0.0.0 has the ::ffff: prefix, so ip[10] and ip[11] are 0xff
-        auto addr = NetworkAddress::from_ipv4(0, 0, 8333);
+        auto addr = NetworkAddress::from_ipv4(0, 0, 9590);
         CHECK_FALSE(addr.is_zero());  // Has ffff prefix
     }
 }
@@ -531,27 +492,27 @@ TEST_CASE("NetworkAddress::is_zero", "[network][protocol][is_zero]") {
 
 TEST_CASE("NetworkAddress::is_loopback", "[network][protocol][is_loopback]") {
     SECTION("IPv4 loopback 127.0.0.1") {
-        auto addr = NetworkAddress::from_string("127.0.0.1", 8333);
+        auto addr = NetworkAddress::from_string("127.0.0.1", 9590);
         CHECK(addr.is_loopback());
     }
 
     SECTION("IPv4 loopback 127.255.255.255") {
-        auto addr = NetworkAddress::from_string("127.255.255.255", 8333);
+        auto addr = NetworkAddress::from_string("127.255.255.255", 9590);
         CHECK(addr.is_loopback());
     }
 
     SECTION("IPv6 loopback ::1") {
-        auto addr = NetworkAddress::from_string("::1", 8333);
+        auto addr = NetworkAddress::from_string("::1", 9590);
         CHECK(addr.is_loopback());
     }
 
     SECTION("Non-loopback IPv4") {
-        auto addr = NetworkAddress::from_string("192.168.1.1", 8333);
+        auto addr = NetworkAddress::from_string("192.168.1.1", 9590);
         CHECK_FALSE(addr.is_loopback());
     }
 
     SECTION("Non-loopback IPv6") {
-        auto addr = NetworkAddress::from_string("2001:db8::1", 8333);
+        auto addr = NetworkAddress::from_string("2001:db8::1", 9590);
         CHECK_FALSE(addr.is_loopback());
     }
 }
@@ -562,90 +523,90 @@ TEST_CASE("NetworkAddress::is_loopback", "[network][protocol][is_loopback]") {
 
 TEST_CASE("NetworkAddress::is_routable - routable addresses", "[network][protocol][is_routable]") {
     SECTION("Public IPv4") {
-        auto addr = NetworkAddress::from_string("8.8.8.8", 8333);
+        auto addr = NetworkAddress::from_string("8.8.8.8", 9590);
         CHECK(addr.is_routable());
     }
 
     SECTION("Public IPv4 edge case") {
-        auto addr = NetworkAddress::from_string("1.1.1.1", 8333);
+        auto addr = NetworkAddress::from_string("1.1.1.1", 9590);
         CHECK(addr.is_routable());
     }
 
     SECTION("Public IPv6") {
         // Use a real-looking public IPv6 (not documentation range)
-        auto addr = NetworkAddress::from_string("2607:f8b0:4004:800::200e", 8333);
+        auto addr = NetworkAddress::from_string("2607:f8b0:4004:800::200e", 9590);
         CHECK(addr.is_routable());
     }
 }
 
 TEST_CASE("NetworkAddress::is_routable - non-routable addresses", "[network][protocol][is_routable]") {
     SECTION("Private 10.x.x.x (RFC 1918)") {
-        auto addr = NetworkAddress::from_string("10.0.0.1", 8333);
+        auto addr = NetworkAddress::from_string("10.0.0.1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("Private 172.16.x.x (RFC 1918)") {
-        auto addr = NetworkAddress::from_string("172.16.0.1", 8333);
+        auto addr = NetworkAddress::from_string("172.16.0.1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("Private 192.168.x.x (RFC 1918)") {
-        auto addr = NetworkAddress::from_string("192.168.1.1", 8333);
+        auto addr = NetworkAddress::from_string("192.168.1.1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("Loopback 127.x.x.x") {
-        auto addr = NetworkAddress::from_string("127.0.0.1", 8333);
+        auto addr = NetworkAddress::from_string("127.0.0.1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("Link-local 169.254.x.x (RFC 3927)") {
-        auto addr = NetworkAddress::from_string("169.254.1.1", 8333);
+        auto addr = NetworkAddress::from_string("169.254.1.1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("CGNAT 100.64.x.x (RFC 6598)") {
-        auto addr = NetworkAddress::from_string("100.64.0.1", 8333);
+        auto addr = NetworkAddress::from_string("100.64.0.1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("Documentation 192.0.2.x (RFC 5737)") {
-        auto addr = NetworkAddress::from_string("192.0.2.1", 8333);
+        auto addr = NetworkAddress::from_string("192.0.2.1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("Multicast 224.x.x.x") {
-        auto addr = NetworkAddress::from_string("224.0.0.1", 8333);
+        auto addr = NetworkAddress::from_string("224.0.0.1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("Reserved 240.x.x.x") {
-        auto addr = NetworkAddress::from_string("240.0.0.1", 8333);
+        auto addr = NetworkAddress::from_string("240.0.0.1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("Broadcast 255.255.255.255") {
-        auto addr = NetworkAddress::from_string("255.255.255.255", 8333);
+        auto addr = NetworkAddress::from_string("255.255.255.255", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("IPv6 loopback ::1") {
-        auto addr = NetworkAddress::from_string("::1", 8333);
+        auto addr = NetworkAddress::from_string("::1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("IPv6 link-local fe80::") {
-        auto addr = NetworkAddress::from_string("fe80::1", 8333);
+        auto addr = NetworkAddress::from_string("fe80::1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("IPv6 unique local fc00::") {
-        auto addr = NetworkAddress::from_string("fc00::1", 8333);
+        auto addr = NetworkAddress::from_string("fc00::1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
     SECTION("IPv6 documentation 2001:db8::") {
-        auto addr = NetworkAddress::from_string("2001:db8::1", 8333);
+        auto addr = NetworkAddress::from_string("2001:db8::1", 9590);
         CHECK_FALSE(addr.is_routable());
     }
 
@@ -661,35 +622,35 @@ TEST_CASE("NetworkAddress::is_routable - non-routable addresses", "[network][pro
 
 TEST_CASE("NetworkAddress::get_netgroup", "[network][protocol][get_netgroup]") {
     SECTION("IPv4 netgroup is /16 prefix") {
-        auto addr = NetworkAddress::from_string("192.168.1.100", 8333);
+        auto addr = NetworkAddress::from_string("192.168.1.100", 9590);
         CHECK(addr.get_netgroup() == "192.168");
     }
 
     SECTION("Different IPs in same /16 have same netgroup") {
-        auto addr1 = NetworkAddress::from_string("10.20.1.1", 8333);
-        auto addr2 = NetworkAddress::from_string("10.20.255.255", 8333);
+        auto addr1 = NetworkAddress::from_string("10.20.1.1", 9590);
+        auto addr2 = NetworkAddress::from_string("10.20.255.255", 9590);
         CHECK(addr1.get_netgroup() == addr2.get_netgroup());
         CHECK(addr1.get_netgroup() == "10.20");
     }
 
     SECTION("Different /16 have different netgroups") {
-        auto addr1 = NetworkAddress::from_string("192.168.1.1", 8333);
-        auto addr2 = NetworkAddress::from_string("192.169.1.1", 8333);
+        auto addr1 = NetworkAddress::from_string("192.168.1.1", 9590);
+        auto addr2 = NetworkAddress::from_string("192.169.1.1", 9590);
         CHECK(addr1.get_netgroup() != addr2.get_netgroup());
     }
 
     SECTION("IPv6 netgroup is /32 prefix") {
-        auto addr = NetworkAddress::from_string("2001:db8:1234:5678::1", 8333);
+        auto addr = NetworkAddress::from_string("2001:db8:1234:5678::1", 9590);
         CHECK(addr.get_netgroup() == "2001:0db8");
     }
 
     SECTION("IPv4 loopback returns 'local'") {
-        auto addr = NetworkAddress::from_string("127.0.0.1", 8333);
+        auto addr = NetworkAddress::from_string("127.0.0.1", 9590);
         CHECK(addr.get_netgroup() == "local");
     }
 
     SECTION("IPv6 loopback returns 'local'") {
-        auto addr = NetworkAddress::from_string("::1", 8333);
+        auto addr = NetworkAddress::from_string("::1", 9590);
         CHECK(addr.get_netgroup() == "local");
     }
 
@@ -705,26 +666,26 @@ TEST_CASE("NetworkAddress::get_netgroup", "[network][protocol][get_netgroup]") {
 
 TEST_CASE("NetworkAddress::operator== - identity is IP + port only", "[network][protocol][comparison]") {
     SECTION("Same IP and port are equal regardless of services") {
-        auto addr1 = NetworkAddress::from_string("8.8.8.8", 8333, NODE_NETWORK);
-        auto addr2 = NetworkAddress::from_string("8.8.8.8", 8333, NODE_NONE);
+        auto addr1 = NetworkAddress::from_string("8.8.8.8", 9590, NODE_NETWORK);
+        auto addr2 = NetworkAddress::from_string("8.8.8.8", 9590, NODE_NONE);
         CHECK(addr1 == addr2);  // services differs, but still equal
     }
 
     SECTION("Different IP are not equal") {
-        auto addr1 = NetworkAddress::from_string("8.8.8.8", 8333);
-        auto addr2 = NetworkAddress::from_string("8.8.4.4", 8333);
+        auto addr1 = NetworkAddress::from_string("8.8.8.8", 9590);
+        auto addr2 = NetworkAddress::from_string("8.8.4.4", 9590);
         CHECK_FALSE(addr1 == addr2);
     }
 
     SECTION("Different port are not equal") {
-        auto addr1 = NetworkAddress::from_string("8.8.8.8", 8333);
-        auto addr2 = NetworkAddress::from_string("8.8.8.8", 9590);
+        auto addr1 = NetworkAddress::from_string("8.8.8.8", 9590);
+        auto addr2 = NetworkAddress::from_string("8.8.8.8", 19590);
         CHECK_FALSE(addr1 == addr2);
     }
 
     SECTION("IPv4 and IPv6 loopback are not equal") {
-        auto addr1 = NetworkAddress::from_string("127.0.0.1", 8333);
-        auto addr2 = NetworkAddress::from_string("::1", 8333);
+        auto addr1 = NetworkAddress::from_string("127.0.0.1", 9590);
+        auto addr2 = NetworkAddress::from_string("::1", 9590);
         CHECK_FALSE(addr1 == addr2);
     }
 }
@@ -743,8 +704,8 @@ TEST_CASE("NetworkAddress::operator< - ordering for std::set", "[network][protoc
     }
 
     SECTION("Services does not affect ordering") {
-        auto addr1 = NetworkAddress::from_string("8.8.8.8", 8333, NODE_NONE);
-        auto addr2 = NetworkAddress::from_string("8.8.8.8", 8333, NODE_NETWORK);
+        auto addr1 = NetworkAddress::from_string("8.8.8.8", 9590, NODE_NONE);
+        auto addr2 = NetworkAddress::from_string("8.8.8.8", 9590, NODE_NETWORK);
         // Neither should be less than the other (they're equal)
         CHECK_FALSE(addr1 < addr2);
         CHECK_FALSE(addr2 < addr1);
@@ -752,8 +713,8 @@ TEST_CASE("NetworkAddress::operator< - ordering for std::set", "[network][protoc
 
     SECTION("std::set deduplicates by IP + port") {
         std::set<NetworkAddress> addrs;
-        addrs.insert(NetworkAddress::from_string("8.8.8.8", 8333, NODE_NETWORK));
-        addrs.insert(NetworkAddress::from_string("8.8.8.8", 8333, NODE_NONE));  // Same IP:port, different services
+        addrs.insert(NetworkAddress::from_string("8.8.8.8", 9590, NODE_NETWORK));
+        addrs.insert(NetworkAddress::from_string("8.8.8.8", 9590, NODE_NONE));  // Same IP:port, different services
         CHECK(addrs.size() == 1);  // Should deduplicate
     }
 }

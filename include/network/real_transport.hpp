@@ -1,3 +1,6 @@
+// Copyright (c) 2025 The Unicity Foundation
+// Distributed under the MIT software license
+
 #pragma once
 
 #include "network/transport.hpp"
@@ -12,6 +15,12 @@
 #include <asio/strand.hpp>
 
 namespace unicity {
+
+// Forward declaration for test access
+namespace test {
+class RealTransportTestAccess;
+}  // namespace test
+
 namespace network {
 
 // RealTransportConnection - TCP socket implementation of TransportConnection
@@ -42,19 +51,12 @@ public:
   std::string remote_address() const override;
   uint16_t remote_port() const override;
   bool is_inbound() const override { return is_inbound_; }
-  uint64_t connection_id() const override { return id_; }
   void set_receive_callback(ReceiveCallback callback) override;
   void set_disconnect_callback(DisconnectCallback callback) override;
 
-  // Test-only: override connect timeout (0ms disables override)
-  static void SetConnectTimeoutForTest(std::chrono::milliseconds timeout_ms);
-  static void ResetConnectTimeoutForTest();
-
-  // Test-only: override send queue byte limit (0 disables override)
-  static void SetSendQueueLimitForTest(size_t bytes);
-  static void ResetSendQueueLimitForTest();
-
 private:
+  // Test access - allows test code to manipulate internal state
+  friend class test::RealTransportTestAccess;
   RealTransportConnection(asio::io_context& io_context, bool is_inbound);
 
   void do_connect(const std::string& address, uint16_t port, ConnectCallback callback);

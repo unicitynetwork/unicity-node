@@ -11,7 +11,7 @@
 #include <map>
 #include <string>
 
-#include <stddef.h>
+#include <cstddef>
 
 // Forward declaration
 class CBlockHeader;
@@ -71,17 +71,6 @@ public:
   // Only ChainstateManager should use this - external code should use const version
   std::map<uint256, CBlockIndex>& GetMutableBlockIndex() { return m_block_index; }
 
-  // O(1) check if a block has any children
-  bool HasChildren(const CBlockIndex* pindex) const;
-
-  // Prune stale side-chain headers that can never become active.
-  // Removes headers that are:
-  //   - NOT on the active chain
-  //   - At height < (tip_height - max_depth)
-  //   - Have no children (are leaf nodes)
-  // Returns number of headers pruned.
-  size_t PruneStaleSideChains(int max_depth);
-
   bool Save(const std::string& filepath) const;
 
   // Load headers from disk (reconstructs block index and active chain)
@@ -92,18 +81,13 @@ public:
   LoadResult Load(const std::string& filepath, const uint256& expected_genesis_hash);
 
   // Rebuild all skip pointers in height order.
-  // Must be called after any operation that invalidates skip pointers (e.g., pruning).
+  // Called during Load() to reconstruct skip pointers from deserialized block index.
   // Iterates all blocks, sorts by height, and calls BuildSkip() on each.
   void RebuildSkipPointers();
 
 private:
   // Map of all known blocks: hash -> CBlockIndex (map owns CBlockIndex objects)
   std::map<uint256, CBlockIndex> m_block_index;
-
-  // Track parent->children relationships for O(1) HasChildren lookup
-  // Multi-map allows multiple children per parent (fork branches)
-  // Maintained by AddToBlockIndex() when adding new blocks
-  std::multimap<const CBlockIndex*, const CBlockIndex*> m_children;
 
   // Active (best) chain (points to CBlockIndex objects owned by m_block_index)
   CChain m_active_chain;

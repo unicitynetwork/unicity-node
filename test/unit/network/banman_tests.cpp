@@ -3,7 +3,7 @@
 // Focuses on persistence, expiration, and core operations
 
 #include "catch_amalgamated.hpp"
-#include "network/peer_lifecycle_manager.hpp"
+#include "network/connection_manager.hpp"
 #include "network/addr_manager.hpp"
 #include <asio.hpp>
 #include <filesystem>
@@ -39,9 +39,9 @@ public:
     }
 
     // Helper to create a ConnectionManager for testing ban functionality
-    std::unique_ptr<PeerLifecycleManager> CreatePeerLifecycleManager(const std::string& datadir = "") {
+    std::unique_ptr<ConnectionManager> CreateConnectionManager(const std::string& datadir = "") {
         // Phase 2: ConnectionManager no longer requires AddressManager at construction
-        auto pm = std::make_unique<PeerLifecycleManager>(io_context);
+        auto pm = std::make_unique<ConnectionManager>(io_context);
         if (!datadir.empty()) {
             pm->LoadBans(datadir);
         }
@@ -51,7 +51,7 @@ public:
 
 TEST_CASE("ConnectionManager - Basic Ban Operations", "[network][peermgr][ban][unit]") {
     BanTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
     SECTION("Ban and check") {
         REQUIRE_FALSE(pm->IsBanned("192.168.1.1"));
@@ -99,7 +99,7 @@ TEST_CASE("ConnectionManager - Basic Ban Operations", "[network][peermgr][ban][u
 
 TEST_CASE("ConnectionManager - Discouragement", "[network][peermgr][ban][unit]") {
     BanTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
     SECTION("Discourage and check") {
         REQUIRE_FALSE(pm->IsDiscouraged("192.168.1.1"));
@@ -125,23 +125,39 @@ TEST_CASE("ConnectionManager - Discouragement", "[network][peermgr][ban][unit]")
     }
 }
 
-TEST_CASE("ConnectionManager - Permanent Bans", "[network][peermgr][ban][unit]") {
+TEST_CASE("ConnectionManager - Default Ban Time", "[network][peermgr][ban][unit]") {
     BanTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
-    SECTION("Permanent ban (ban_time_offset = 0)") {
-        pm->Ban("192.168.1.1", 0);  // 0 = permanent
+    SECTION("ban_time_offset = 0 uses default 24h ban (matches Bitcoin Core)") {
+        int64_t now = unicity::util::GetTime();
+        pm->Ban("192.168.1.1", 0);  // 0 = use default (24h)
         REQUIRE(pm->IsBanned("192.168.1.1"));
 
         auto banned = pm->GetBanned();
         REQUIRE(banned.size() == 1);
-        REQUIRE(banned["192.168.1.1"].nBanUntil == 0);  // 0 means permanent
+        // Should be ~24h from now, not 0 (permanent)
+        int64_t expected_ban_until = now + BanManager::DEFAULT_BAN_TIME_SEC;
+        // Allow 5 seconds tolerance for timing
+        REQUIRE(banned["192.168.1.1"].ban_until >= expected_ban_until - 5);
+        REQUIRE(banned["192.168.1.1"].ban_until <= expected_ban_until + 5);
+    }
+
+    SECTION("ban_time_offset < 0 also uses default 24h ban") {
+        int64_t now = unicity::util::GetTime();
+        pm->Ban("192.168.1.1", -100);  // Negative = use default (24h)
+        REQUIRE(pm->IsBanned("192.168.1.1"));
+
+        auto banned = pm->GetBanned();
+        int64_t expected_ban_until = now + BanManager::DEFAULT_BAN_TIME_SEC;
+        REQUIRE(banned["192.168.1.1"].ban_until >= expected_ban_until - 5);
+        REQUIRE(banned["192.168.1.1"].ban_until <= expected_ban_until + 5);
     }
 }
 
 TEST_CASE("ConnectionManager - Ban Expiration", "[network][peermgr][ban][unit]") {
     BanTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
     SECTION("Ban expires after time passes") {
         // Ban for 1 second
@@ -164,10 +180,10 @@ TEST_CASE("ConnectionManager - Ban Persistence", "[network][peermgr][ban][persis
 
     SECTION("Save and load bans") {
         {
-            auto pm = fixture.CreatePeerLifecycleManager(fixture.test_dir);
-            pm->Ban("192.168.1.1", 0);  // Permanent
-            pm->Ban("192.168.1.2", 3600);
-            pm->Ban("192.168.1.3", 0);  // Permanent
+            auto pm = fixture.CreateConnectionManager(fixture.test_dir);
+            pm->Ban("192.168.1.1", 86400);  // 24h
+            pm->Ban("192.168.1.2", 3600);   // 1h
+            pm->Ban("192.168.1.3", 86400);  // 24h
 
             REQUIRE(pm->IsBanned("192.168.1.1"));
             REQUIRE(pm->IsBanned("192.168.1.2"));
@@ -179,7 +195,7 @@ TEST_CASE("ConnectionManager - Ban Persistence", "[network][peermgr][ban][persis
 
         // Create new ConnectionManager and load bans
         {
-            auto pm = fixture.CreatePeerLifecycleManager(fixture.test_dir);
+            auto pm = fixture.CreateConnectionManager(fixture.test_dir);
 
             REQUIRE(pm->IsBanned("192.168.1.1"));
             REQUIRE(pm->IsBanned("192.168.1.2"));
@@ -192,10 +208,10 @@ TEST_CASE("ConnectionManager - Ban Persistence", "[network][peermgr][ban][persis
 
     SECTION("Unban persists correctly") {
         {
-            auto pm = fixture.CreatePeerLifecycleManager(fixture.test_dir);
-            pm->Ban("192.168.1.1", 0);
-            pm->Ban("192.168.1.2", 0);
-            pm->Ban("192.168.1.3", 0);
+            auto pm = fixture.CreateConnectionManager(fixture.test_dir);
+            pm->Ban("192.168.1.1", 86400);
+            pm->Ban("192.168.1.2", 86400);
+            pm->Ban("192.168.1.3", 86400);
             pm->Unban("192.168.1.2");
 
             REQUIRE(pm->IsBanned("192.168.1.1"));
@@ -206,7 +222,7 @@ TEST_CASE("ConnectionManager - Ban Persistence", "[network][peermgr][ban][persis
         }
 
         {
-            auto pm = fixture.CreatePeerLifecycleManager(fixture.test_dir);
+            auto pm = fixture.CreateConnectionManager(fixture.test_dir);
 
             REQUIRE(pm->IsBanned("192.168.1.1"));
             REQUIRE_FALSE(pm->IsBanned("192.168.1.2"));
@@ -215,31 +231,64 @@ TEST_CASE("ConnectionManager - Ban Persistence", "[network][peermgr][ban][persis
     }
 }
 
-TEST_CASE("ConnectionManager - Whitelist (NoBan)", "[network][peermgr][ban][unit]") {
+TEST_CASE("ConnectionManager - Ban Extension Logic (Core Parity)", "[network][peermgr][ban][unit]") {
     BanTestFixture fixture;
-    auto pm = fixture.CreatePeerLifecycleManager();
+    auto pm = fixture.CreateConnectionManager();
 
-    SECTION("Whitelisted address can be banned (like Bitcoin Core)") {
-        pm->AddToWhitelist("192.168.1.1");
-        REQUIRE(pm->IsWhitelisted("192.168.1.1"));
+    SECTION("Re-banning with longer duration extends the ban") {
+        int64_t now = unicity::util::GetTime();
 
-        // Can ban whitelisted address (ban and whitelist are independent)
+        // Initial ban for 1 hour
         pm->Ban("192.168.1.1", 3600);
-        REQUIRE(pm->IsBanned("192.168.1.1"));
+        auto banned = pm->GetBanned();
+        int64_t original_ban_until = banned["192.168.1.1"].ban_until;
+        REQUIRE(original_ban_until >= now + 3600 - 5);
+        REQUIRE(original_ban_until <= now + 3600 + 5);
 
-        // Both states coexist
-        REQUIRE(pm->IsWhitelisted("192.168.1.1"));
-        REQUIRE(pm->IsBanned("192.168.1.1"));
+        // Re-ban for 24 hours - should extend the ban
+        pm->Ban("192.168.1.1", 86400);
+        banned = pm->GetBanned();
+        int64_t extended_ban_until = banned["192.168.1.1"].ban_until;
 
-        // Note: Whitelist is checked at connection time, not ban time
-        // This matches Bitcoin Core behavior where ban/whitelist are independent
+        // Ban should now be ~24 hours from now
+        REQUIRE(extended_ban_until >= now + 86400 - 5);
+        REQUIRE(extended_ban_until <= now + 86400 + 5);
+        REQUIRE(extended_ban_until > original_ban_until);
     }
 
-    SECTION("Remove from whitelist") {
-        pm->AddToWhitelist("192.168.1.1");
-        REQUIRE(pm->IsWhitelisted("192.168.1.1"));
+    SECTION("Re-banning with shorter duration does NOT shorten the ban (Core parity)") {
+        int64_t now = unicity::util::GetTime();
 
-        pm->RemoveFromWhitelist("192.168.1.1");
-        REQUIRE_FALSE(pm->IsWhitelisted("192.168.1.1"));
+        // Initial ban for 24 hours
+        pm->Ban("192.168.1.1", 86400);
+        auto banned = pm->GetBanned();
+        int64_t original_ban_until = banned["192.168.1.1"].ban_until;
+        REQUIRE(original_ban_until >= now + 86400 - 5);
+
+        // Try to re-ban for only 1 hour - should NOT shorten
+        pm->Ban("192.168.1.1", 3600);
+        banned = pm->GetBanned();
+        int64_t current_ban_until = banned["192.168.1.1"].ban_until;
+
+        // Ban should still be ~24 hours (not shortened to 1 hour)
+        REQUIRE(current_ban_until == original_ban_until);
+    }
+
+    SECTION("Re-banning with equal duration does not change the ban") {
+        int64_t now = unicity::util::GetTime();
+
+        // Initial ban for 1 hour
+        pm->Ban("192.168.1.1", 3600);
+        auto banned = pm->GetBanned();
+        int64_t original_ban_until = banned["192.168.1.1"].ban_until;
+
+        // Re-ban for same duration - should not change
+        pm->Ban("192.168.1.1", 3600);
+        banned = pm->GetBanned();
+        int64_t current_ban_until = banned["192.168.1.1"].ban_until;
+
+        // Allow small tolerance since time may have advanced slightly
+        REQUIRE(current_ban_until >= original_ban_until);
+        REQUIRE(current_ban_until <= original_ban_until + 2);
     }
 }

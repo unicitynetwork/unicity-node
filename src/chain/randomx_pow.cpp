@@ -140,8 +140,6 @@ std::shared_ptr<RandomXVMWrapper> GetCachedVM(uint32_t nEpoch) {
   if (cachePtr) {
     myCache = *cachePtr;
   } else {
-    LOG_CRYPTO_INFO("Creating thread-local RandomX cache for epoch {} ", nEpoch);
-
     randomx_cache* pCache = randomx_alloc_cache(flags);
     if (!pCache) {
       LOG_ERROR("Failed to allocate RandomX cache for epoch {}", nEpoch);
@@ -151,13 +149,9 @@ std::shared_ptr<RandomXVMWrapper> GetCachedVM(uint32_t nEpoch) {
     myCache = std::make_shared<RandomXCacheWrapper>(pCache);
     // LRU insert: automatically evicts oldest if at capacity
     t_cache_storage.insert(nEpoch, myCache);
-
-    LOG_CRYPTO_INFO("Created thread-local RandomX cache for epoch {}", nEpoch);
   }
 
   // Create thread-local VM (no lock needed, each thread has its own cache and VM)
-  LOG_CRYPTO_INFO("Creating thread-local RandomX VM for epoch {}...", nEpoch);
-
   randomx_vm* myVM = randomx_create_vm(flags, myCache->cache, nullptr);
   if (!myVM) {
     LOG_ERROR("Failed to create RandomX VM for epoch {}", nEpoch);
@@ -168,7 +162,7 @@ std::shared_ptr<RandomXVMWrapper> GetCachedVM(uint32_t nEpoch) {
   // LRU insert: automatically evicts oldest epoch if at capacity
   t_vm_cache.insert(nEpoch, vmWrapper);
 
-  LOG_CRYPTO_INFO("Created thread-local RandomX VM for epoch {} (LRU cache size: {})", nEpoch, t_vm_cache.size());
+  LOG_CRYPTO_DEBUG("RandomX VM ready (epoch={})", nEpoch);
 
   return vmWrapper;
 }
@@ -196,9 +190,7 @@ void InitRandomX() {
   }
   g_randomx_initialized.store(true, std::memory_order_release);
 
-  LOG_CRYPTO_INFO("RandomX initialized with LRU-bounded thread-local caches and VMs "
-                  "(cache size: {})",
-                  DEFAULT_RANDOMX_VM_CACHE_SIZE);
+  LOG_CRYPTO_INFO("RandomX initialized (cache_size={})", DEFAULT_RANDOMX_VM_CACHE_SIZE);
 }
 
 void ShutdownRandomX() {

@@ -28,6 +28,15 @@ static void InitializeInternal(const std::string& log_level, bool log_to_file, c
     // Create sinks
     std::vector<spdlog::sink_ptr> sinks;
 
+    // Console sink (colorized stdout, auto-detects TTY)
+    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    console_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v");
+    // When file logging is active, console only shows warn+ (file gets full detail)
+    if (log_to_file) {
+      console_sink->set_level(spdlog::level::warn);
+    }
+    sinks.push_back(console_sink);
+
     if (log_to_file) {
       namespace fs = std::filesystem;
       try {
@@ -45,17 +54,8 @@ static void InitializeInternal(const std::string& log_level, bool log_to_file, c
         file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v");
         sinks.push_back(file_sink);
       } catch (const spdlog::spdlog_ex& ex) {
-        std::cerr << "Failed to initialize file logger (" << ex.what() << ") — falling back to console logging\n";
-        auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-        console_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v");
-        sinks.push_back(console_sink);
-        log_to_file = false;  // skip file-only post-init behavior below
+        std::cerr << "Failed to initialize file logger (" << ex.what() << ") — continuing with console only\n";
       }
-    } else {
-      // Console sink for tests (colorized stdout)
-      auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-      console_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v");
-      sinks.push_back(console_sink);
     }
 
     // Create loggers for different components
@@ -81,9 +81,9 @@ static void InitializeInternal(const std::string& log_level, bool log_to_file, c
 
     // Add visual separator for new session (only if logging is enabled)
     if (log_to_file && log_level != "off") {
-      for (int i = 0; i < 10; ++i) {
-        spdlog::default_logger()->info("");
-      }
+      spdlog::default_logger()->info("");
+      spdlog::default_logger()->info("================================================================================");
+      spdlog::default_logger()->info("");
     }
 
     // Direct logger access (cannot use LOG_INFO macro - would deadlock on mutex)

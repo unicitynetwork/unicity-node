@@ -1,47 +1,44 @@
+// Copyright (c) 2025 The Unicity Foundation
+// Distributed under the MIT software license
+
 #pragma once
 
 /*
- BanManager — manages banned, discouraged, and whitelisted peers
+ BanManager — manages banned and discouraged peers
 
  Purpose
  - Track banned peers (persistent, saved to disk)
  - Track discouraged peers (temporary, in-memory)
- - Track whitelisted peers (immune to bans)
  - Persist ban state across restarts
 
  Key responsibilities
  1. Ban/unban peers by IP address
  2. Discourage peers temporarily
- 3. Whitelist peers (bypass ban/discourage checks)
- 4. Save/load ban state to/from disk
- 5. Sweep expired bans and discouragements
+ 3. Save/load ban state to/from disk
+ 4. Sweep expired bans and discouragements
 */
 
 #include <cstdint>
 #include <map>
 #include <mutex>
 #include <string>
-#include <unordered_set>
 
 namespace unicity {
 namespace network {
 
 class BanManager {
 public:
-  // Ban entry structure (persistent bans)
-  struct CBanEntry {
+  struct BanEntry {
     static constexpr int CURRENT_VERSION = 1;
-    int nVersion{CURRENT_VERSION};
-    int64_t nCreateTime{0};  // Unix timestamp when ban was created
-    int64_t nBanUntil{0};    // Unix timestamp when ban expires (0 = permanent)
+    int version{CURRENT_VERSION};
+    int64_t create_time{0};  // Unix timestamp when ban was created
+    int64_t ban_until{0};    // Unix timestamp when ban expires
 
-    CBanEntry() = default;
-    CBanEntry(int64_t create_time, int64_t ban_until) : nCreateTime(create_time), nBanUntil(ban_until) {}
+    BanEntry() = default;
+    BanEntry(int64_t created, int64_t until) : create_time(created), ban_until(until) {}
 
-    // Check if ban has expired
     bool IsExpired(int64_t now) const {
-      // nBanUntil == 0 means permanent ban
-      return nBanUntil != 0 && nBanUntil < now;
+      return ban_until < now;
     }
   };
 
@@ -52,17 +49,24 @@ public:
   BanManager(const BanManager&) = delete;
   BanManager& operator=(const BanManager&) = delete;
 
-  // Ban an address (persistent). ban_time_offset is seconds from now until ban expires (0 = permanent).
+  // Default ban duration (24 hours)
+  static constexpr int64_t DEFAULT_BAN_TIME_SEC = 24 * 60 * 60;
+
+  // Maximum discouraged addresses (memory cap)
+  static constexpr size_t MAX_DISCOURAGED = 50000;
+
+  // Ban an address (persistent).
+  // If ban_time_offset <= 0, uses DEFAULT_BAN_TIME_SEC 
+  // Otherwise, ban lasts for ban_time_offset seconds from now.
   void Ban(const std::string& address, int64_t ban_time_offset = 0);
 
-  // Unban an address.
   void Unban(const std::string& address);
 
   // Check if address is banned. Returns true if banned and not expired.
   bool IsBanned(const std::string& address) const;
 
   // Get all currently banned addresses. Returns map of banned addresses to ban entries.
-  std::map<std::string, CBanEntry> GetBanned() const;
+  std::map<std::string, BanEntry> GetBanned() const;
 
   // Clear all bans (used for testing and RPC).
   void ClearBanned();
@@ -83,15 +87,6 @@ public:
   // Remove expired discouragements.
   void SweepDiscouraged();
 
-  // Add address to whitelist (immune to bans).
-  void AddToWhitelist(const std::string& address);
-
-  // Remove address from whitelist.
-  void RemoveFromWhitelist(const std::string& address);
-
-  // Check if address is whitelisted. Returns true if whitelisted.
-  bool IsWhitelisted(const std::string& address) const;
-
   // Load bans from disk. Returns true on success (including "no file found" case).
   bool LoadBans(const std::string& datadir);
 
@@ -102,25 +97,18 @@ public:
   std::string GetBanlistPath() const;
 
 private:
-  // Discourage duration
-  static constexpr int64_t DISCOURAGE_DURATION_SEC = 24 * 60 * 60;
-
   // Banned addresses (persistent, stored on disk)
   mutable std::mutex banned_mutex_;
-  std::map<std::string, CBanEntry> banned_;
+  std::map<std::string, BanEntry> banned_;
 
-  // Discouraged addresses (temporary, in-memory with expiry times)
+  // Discouraged addresses (in-memory, no expiry - evicted when at capacity)
   mutable std::mutex discouraged_mutex_;
-  std::map<std::string, int64_t> discouraged_;  // address -> expiry time
-
-  // Whitelist (NoBan) state
-  mutable std::mutex whitelist_mutex_;
-  std::unordered_set<std::string> whitelist_;
+  std::map<std::string, int64_t> discouraged_;  // address -> insertion time (for eviction ordering)
 
   // Persistence
   std::string ban_file_path_;
   bool ban_auto_save_{true};
-  bool is_dirty_{false};  // Tracks if in-memory state differs from disk )
+  bool is_dirty_{false};  // Tracks if in-memory state differs from disk
 
   // Internal helper: Save bans (must be called with banned_mutex_ held)
   bool SaveBansInternal();

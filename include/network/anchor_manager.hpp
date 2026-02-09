@@ -1,3 +1,6 @@
+// Copyright (c) 2025 The Unicity Foundation
+// Distributed under the MIT software license
+
 #pragma once
 
 #include "network/protocol.hpp"
@@ -9,7 +12,7 @@ namespace unicity {
 namespace network {
 
 // Forward declarations
-class PeerLifecycleManager;
+class ConnectionManager;
 
 /**
  * AnchorManager - Manages anchor peer persistence for eclipse attack resistance
@@ -24,10 +27,12 @@ class PeerLifecycleManager;
  */
 class AnchorManager {
 public:
-  explicit AnchorManager(PeerLifecycleManager& peer_mgr);
+  static constexpr size_t MAX_ANCHORS = 2;
+
+  explicit AnchorManager(ConnectionManager& peer_mgr);
 
   // Get current anchor peers from connected outbound peers.
-  // Selects up to 2 high-quality outbound peers based on connection age and ping time.
+  // Selects up to MAX_ANCHORS high-quality outbound peers based on connection age and ping time.
   std::vector<protocol::NetworkAddress> GetAnchors() const;
 
   // Save current anchors to file.
@@ -40,7 +45,7 @@ public:
   std::vector<protocol::NetworkAddress> LoadAnchors(const std::string& filepath);
 
 private:
-  PeerLifecycleManager& peer_manager_;
+  ConnectionManager& peer_manager_;
 };
 
 }  // namespace network

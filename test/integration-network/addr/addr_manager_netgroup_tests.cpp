@@ -511,27 +511,20 @@ TEST_CASE("Eclipse resistance: GetChance deprioritizes failed addresses", "[netw
 }
 
 // ============================================================================
-// TRIED→NEW demotion behavior test
+// TRIED address failure handling (Bitcoin Core parity)
 // ============================================================================
 
-TEST_CASE("AddrManager - TRIED to NEW demotion allows internal movement", "[network][addr][security][unit][demotion]") {
+TEST_CASE("AddrManager - TRIED addresses stay in TRIED despite failures", "[network][addr][security][unit][bitcoin-core]") {
     AddressManager addr_mgr;
 
-    // DESIGN CLARIFICATION:
-    // The per-netgroup limits (MAX_PER_NETGROUP_NEW=32, MAX_PER_NETGROUP_TRIED=8) prevent
-    // EXTERNAL flooding from attackers. They do NOT restrict internal table movements.
-    //
-    // When addresses are demoted from TRIED→NEW due to failures, they are returning
-    // to where they came from. This is correct behavior because:
-    // 1. The total addresses from a netgroup is bounded (32 NEW + 8 TRIED = 40 max)
-    // 2. No NEW external addresses bypass the limit via demotion
-    // 3. Demoted addresses were already "known" to the system
-    //
-    // This test verifies the demotion mechanism works correctly.
+    // BITCOIN CORE PARITY:
+    // TRIED addresses are NEVER demoted back to NEW via failures.
+    // They stay in TRIED until evicted by collision during Good().
+    // This matches Bitcoin Core's addrman.cpp behavior.
 
     const std::string NETGROUP_PREFIX = "8.100.0.";
 
-    SECTION("Demotion moves addresses from TRIED back to NEW") {
+    SECTION("TRIED addresses remain in TRIED after failures") {
         // Add 8 addresses and move them to TRIED
         for (int i = 1; i <= 8; i++) {
             std::string ip = NETGROUP_PREFIX + std::to_string(i);
@@ -553,24 +546,17 @@ TEST_CASE("AddrManager - TRIED to NEW demotion allows internal movement", "[netw
         // - NEW has 32 addresses from 8.100.x.x (addresses 9-40)
         // - Total from netgroup: 40
 
-        // Cause TRIED addresses to fail repeatedly to trigger demotion
-        // TRIED_DEMOTION_THRESHOLD = 10 failures
-        for (int i = 1; i <= 8; i++) {
-            std::string ip = NETGROUP_PREFIX + std::to_string(i);
-            for (int fail = 0; fail < 10; fail++) {
-                addr_mgr.failed(MakeNetworkAddress(ip, 18444));
-            }
-        }
+        // Note: No failed() function - matches Bitcoin Core
+        // TRIED addresses stay in TRIED until evicted by collision during Good()
 
-        // After demotion: all 8 TRIED addresses moved to NEW
-        // This is CORRECT behavior - internal movements are allowed
-        INFO("NEW count after demotion: " << addr_mgr.new_count());
-        INFO("TRIED count after demotion: " << addr_mgr.tried_count());
+        // Bitcoin Core behavior: TRIED addresses stay in TRIED
+        INFO("NEW count after failures: " << addr_mgr.new_count());
+        INFO("TRIED count after failures: " << addr_mgr.tried_count());
 
-        REQUIRE(addr_mgr.tried_count() == 0);  // All demoted
-        REQUIRE(addr_mgr.new_count() == 40);   // 32 original + 8 demoted
+        REQUIRE(addr_mgr.tried_count() == 8);   // Still in TRIED (no demotion)
+        REQUIRE(addr_mgr.new_count() == 32);    // Unchanged
 
-        // Verify external additions are still blocked
+        // Verify external additions are still blocked by netgroup limits
         REQUIRE_FALSE(addr_mgr.add(MakeNetworkAddress(NETGROUP_PREFIX + "200", 18444)));
     }
 }

@@ -1,3 +1,6 @@
+// Copyright (c) 2025 The Unicity Foundation
+// Distributed under the MIT software license
+
 #pragma once
 
 /*
@@ -5,21 +8,20 @@
 
  Purpose
  - Mark misbehaving peers for disconnection/discouragement
- - Track duplicate invalid headers and unconnecting header sequences
+ - Track duplicate invalid headers to prevent double-penalizing
  - Respect NetPermissionFlags (NoBan peers are not disconnected)
 
  Key responsibilities
  1. Mark peers as misbehaving (instant discourage, no score accumulation)
  2. Respect NetPermissionFlags (NoBan peers tracked but not disconnected)
- 3. Track unconnecting headers with threshold-based penalty
- 4. Prevent duplicate reports for the same invalid header
+ 3. Prevent duplicate reports for the same invalid header
 
  Architecture
- Extracted from PeerLifecycleManager to separate DoS protection logic.
- Operates on per-peer state (PeerTrackingData) owned by PeerLifecycleManager.
+ Extracted from ConnectionManager to separate DoS protection logic.
+ Operates on per-peer state (PeerTrackingData) owned by ConnectionManager.
 */
 
-#include "network/peer_tracking.hpp"
+#include "network/peer.hpp"
 #include "util/threadsafe_containers.hpp"
 #include "util/uint.hpp"
 
@@ -30,8 +32,8 @@ namespace network {
 
 class MisbehaviorManager {
 public:
-  // Constructor. peer_states is reference to the peer states map (owned by PeerLifecycleManager).
-  explicit MisbehaviorManager(util::ThreadSafeMap<int, PeerTrackingData>& peer_states);
+  // Constructor. peer_states is reference to the peer states map (owned by ConnectionManager).
+  explicit MisbehaviorManager(util::ThreadSafeMap<int, PeerPtr>& peer_states);
 
   ~MisbehaviorManager() = default;
 
@@ -39,36 +41,17 @@ public:
   MisbehaviorManager(const MisbehaviorManager&) = delete;
   MisbehaviorManager& operator=(const MisbehaviorManager&) = delete;
 
-  // Report invalid proof of work from peer.
   void ReportInvalidPoW(int peer_id);
 
-  // Report oversized message from peer.
   void ReportOversizedMessage(int peer_id);
 
-  // Report non-continuous headers sequence from peer.
   void ReportNonContinuousHeaders(int peer_id);
 
-  // Report low-work / deep-fork headers. Used when peer sends headers that fork from too deep
-  // in the chain (beyond nSuspiciousReorgDepth). Such headers have insufficient cumulative
-  // work to ever become the active chain.
   void ReportLowWorkHeaders(int peer_id);
 
-  // Report invalid header with reason describing why header is invalid.
   void ReportInvalidHeader(int peer_id, const std::string& reason);
 
-  // Report too many orphan headers from peer.
-  void ReportTooManyOrphans(int peer_id);
-
-  // Report protocol message received before handshake completion (before VERACK).
   void ReportPreVerackMessage(int peer_id);
-
-  // === Unconnecting Headers Tracking ===
-
-  // Increment unconnecting headers counter. Applies penalty if threshold is exceeded.
-  void IncrementUnconnectingHeaders(int peer_id);
-
-  // Reset unconnecting headers counter (when progress is made).
-  void ResetUnconnectingHeaders(int peer_id);
 
   // === Duplicate Invalid Header Tracking ===
 
@@ -91,18 +74,14 @@ public:
   // Returns true if peer has misbehaved.
   bool IsMisbehaving(int peer_id) const;
 
-  // Get unconnecting headers count for a peer (for logging).
-  // Returns number of unconnecting headers messages (0 if peer not found).
-  int GetUnconnectingHeadersCount(int peer_id) const;
-
 private:
   // Mark a peer as misbehaving (will be disconnected and discouraged).
   // Internal method - not exposed to external code.
   // Returns true if peer should be disconnected (false for NoBan peers).
   bool Misbehaving(int peer_id, const std::string& reason);
 
-  // Reference to peer states (owned by PeerLifecycleManager)
-  util::ThreadSafeMap<int, PeerTrackingData>& peer_states_;
+  // Reference to peer states (owned by ConnectionManager)
+  util::ThreadSafeMap<int, PeerPtr>& peer_states_;
 };
 
 }  // namespace network

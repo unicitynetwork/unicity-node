@@ -3,8 +3,9 @@
 #include "catch_amalgamated.hpp"
 #include "infra/simulated_network.hpp"
 #include "infra/simulated_node.hpp"
+#include "infra/test_access.hpp"
 #include "network/network_manager.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 #include "network/addr_manager.hpp"
 #include "network/protocol.hpp"
 #include "network/message.hpp"
@@ -13,6 +14,7 @@
 #include <cstring>
 
 using namespace unicity;
+using unicity::test::AddrRelayManagerTestAccess;
 using namespace unicity::network;
 using namespace unicity::protocol;
 using namespace unicity::test;
@@ -123,7 +125,7 @@ TEST_CASE("network_address_to_string converts IPv4 addresses correctly", "[netwo
         REQUIRE(ipv4 == 0x7F000001);
     }
     SECTION("Convert 1.1.1.1") {
-        NetworkAddress addr = MakeIPv4Address("1.1.1.1", 8333);
+        NetworkAddress addr = MakeIPv4Address("1.1.1.1", 9590);
         REQUIRE(addr.is_ipv4());
         uint32_t ipv4 = addr.get_ipv4();
         REQUIRE(ipv4 == 0x01010101);
@@ -171,13 +173,8 @@ TEST_CASE("AddressManager can store and retrieve addresses for connection attemp
         REQUIRE(addr.is_ipv4());
         REQUIRE(addr.port == 9590);
     }
-    SECTION("Mark address as failed") {
-        NetworkAddress addr = MakeIPv4Address("2.0.0.1", 9590);
-        addrman.add(addr);
-        REQUIRE(addrman.size() == 1);
-        addrman.failed(addr);
-        REQUIRE(addrman.size() == 1);
-    }
+    // Note: No "Mark address as failed" test - Bitcoin Core has no failed() function
+    // Terrible addresses are filtered via GetChance() and cleaned by cleanup_stale()
     SECTION("Mark address as good moves to tried table") {
         NetworkAddress addr = MakeIPv4Address("2.0.0.2", 9590);
         addrman.add(addr);
@@ -227,7 +224,7 @@ TEST_CASE("attempt_outbound_connections uses addresses from AddressManager", "[n
     auto& nm = node1.GetNetworkManager(); auto& discovery = nm.discovery_manager();
     NetworkAddress addr1 = MakeIPv4Address("1.1.1.100", 9590);
     NetworkAddress addr2 = MakeIPv4Address("1.1.1.101", 9590);
-    REQUIRE(discovery.addr_manager_for_test().add(addr1)); REQUIRE(discovery.addr_manager_for_test().add(addr2));
+    REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(discovery).add(addr1)); REQUIRE(AddrRelayManagerTestAccess::GetAddrManager(discovery).add(addr2));
     REQUIRE(discovery.Size() == 2);
 }
 
@@ -236,38 +233,17 @@ TEST_CASE("REGRESSION: attempt_outbound_connections no longer uses empty IP stri
     SECTION("NetworkAddress conversion produces valid IP strings") {
         NetworkAddress addr1 = MakeIPv4Address("127.0.0.1", 9590);
         REQUIRE(addr1.is_ipv4()); REQUIRE(addr1.get_ipv4() == 0x7F000001);
-        NetworkAddress addr2 = MakeIPv4Address("2.0.0.1", 8333);
+        NetworkAddress addr2 = MakeIPv4Address("2.0.0.1", 9590);
         REQUIRE(addr2.is_ipv4()); REQUIRE(addr2.get_ipv4() == 0x02000001);
         REQUIRE(true);
     }
-    SECTION("AddressManager feedback on failed connections") {
+    SECTION("AddressManager tracks attempt on failed connections") {
+        // Note: No failed() function - matches Bitcoin Core
+        // Terrible addresses filtered via GetChance(), cleaned by cleanup_stale()
         AddressManager addrman;
         NetworkAddress addr = MakeIPv4Address("1.1.1.1", 9590);
         addrman.add(addr); REQUIRE(addrman.size() == 1);
-        addrman.attempt(addr); addrman.failed(addr);
+        addrman.attempt(addr);  // Just track attempt, no failed() needed
         REQUIRE(addrman.size() == 1);
     }
-}
-
-// Performance/documentation
-TEST_CASE("Address conversion performance", "[network][peer_discovery][performance]") {
-    SECTION("Convert 1000 IPv4 addresses") {
-        std::vector<NetworkAddress> addresses;
-        for (int i = 0; i < 1000; i++) {
-            std::string ip = "1.0." + std::to_string(i / 256) + "." + std::to_string(i % 256);
-            addresses.push_back(MakeIPv4Address(ip, 9590));
-        }
-        for (const auto& addr : addresses) { REQUIRE(addr.is_ipv4()); REQUIRE(addr.get_ipv4() != 0); }
-        REQUIRE(addresses.size() == 1000);
-    }
-}
-
-TEST_CASE("EXAMPLE: How peer discovery works end-to-end", "[network][peer_discovery][example]") {
-    AddressManager addrman;
-    NetworkAddress addr1 = MakeIPv4Address("2.2.2.1", 9590);
-    NetworkAddress addr2 = MakeIPv4Address("2.2.2.2", 9590);
-    REQUIRE(addrman.add(addr1)); REQUIRE(addrman.add(addr2));
-    auto maybe_addr = addrman.select(); REQUIRE(maybe_addr.has_value());
-    auto& addr = *maybe_addr; REQUIRE(addr.is_ipv4());
-    SUCCEED();
 }

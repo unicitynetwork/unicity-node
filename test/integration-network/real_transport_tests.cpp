@@ -1,5 +1,6 @@
 #include "catch_amalgamated.hpp"
 #include "network/real_transport.hpp"
+#include "infra/test_access.hpp"
 #include <asio/executor_work_guard.hpp>
 #include <atomic>
 #include <condition_variable>
@@ -9,6 +10,7 @@
 #include <chrono>
 
 using namespace unicity::network;
+using unicity::test::RealTransportTestAccess;
 
 namespace {
 
@@ -210,7 +212,7 @@ TEST_CASE("RealTransport connect timeout triggers timely failure", "[network][tr
     RealTransport t(io.get());
 
     // Set a short timeout override for this test
-    RealTransportConnection::SetConnectTimeoutForTest(std::chrono::milliseconds(200));
+    RealTransportTestAccess::SetConnectTimeout(std::chrono::milliseconds(200));
 
     std::mutex m;
     std::condition_variable cv;
@@ -240,7 +242,7 @@ TEST_CASE("RealTransport connect timeout triggers timely failure", "[network][tr
     CHECK_FALSE(ok);
     CHECK(elapsed.count() <= 1000);
 
-    RealTransportConnection::ResetConnectTimeoutForTest();
+    RealTransportTestAccess::ResetConnectTimeout();
     t.stop();
 }
 
@@ -408,7 +410,7 @@ TEST_CASE("Connect race: small timeout does not double-callback on fast success"
     uint16_t port = pick_listen_port(server, accept_cb);
     if (port == 0) { WARN("Skipping: unable to bind any listening port"); return; }
 
-    RealTransportConnection::SetConnectTimeoutForTest(std::chrono::milliseconds(10));
+    RealTransportTestAccess::SetConnectTimeout(std::chrono::milliseconds(10));
 
     std::mutex m; std::condition_variable cv; int cb_count=0; bool ok=false;
     auto conn = client.connect("127.0.0.1", port, [&](bool success){ std::lock_guard<std::mutex> lk(m); cb_count++; ok=success; cv.notify_all(); });
@@ -422,7 +424,7 @@ TEST_CASE("Connect race: small timeout does not double-callback on fast success"
     CHECK(cb_count == 1);
     CHECK(ok);
 
-    RealTransportConnection::ResetConnectTimeoutForTest();
+    RealTransportTestAccess::ResetConnectTimeout();
     client.stop(); server.stop();
 }
 
@@ -452,7 +454,7 @@ TEST_CASE("Send-queue overflow closes connection (test override)", "[network][tr
     client_conn->start();
 
     // Set very small queue limit and send a payload bigger than the limit
-    RealTransportConnection::SetSendQueueLimitForTest(512);
+    RealTransportTestAccess::SetSendQueueLimit(512);
 
     std::vector<uint8_t> big(2048, 0xAA);
     CHECK(client_conn->send(big));
@@ -465,7 +467,7 @@ TEST_CASE("Send-queue overflow closes connection (test override)", "[network][tr
     CHECK(client_disc == 1);
     CHECK_FALSE(client_conn->send(big));
 
-    RealTransportConnection::ResetSendQueueLimitForTest();
+    RealTransportTestAccess::ResetSendQueueLimit();
 
     client.stop(); server.stop();
 }
@@ -711,6 +713,179 @@ TEST_CASE("Rapid connect/close cycle handles cleanup correctly", "[network][tran
         server_conns.clear();
     }
 
+    client.stop();
+    server.stop();
+}
+
+// =============================================================================
+// COVERAGE GAP: Write chaining (real_transport.cpp:325-328)
+// SimulatedNetwork delivers synchronously so do_write_impl() never chains.
+// =============================================================================
+
+TEST_CASE("Write chaining: queued messages drain sequentially", "[network][transport][real][write-chain]") {
+    TestIoContext io;
+    RealTransport server(io.get());
+    RealTransport client(io.get());
+
+    std::shared_ptr<TransportConnection> inbound_conn;
+    std::mutex m;
+    std::condition_variable cv;
+    bool accepted = false;
+    bool connected = false;
+    std::vector<uint8_t> received_data;
+
+    auto accept_cb = [&](TransportConnectionPtr c) {
+        inbound_conn = c;
+        inbound_conn->set_receive_callback([&](const std::vector<uint8_t>& data) {
+            std::lock_guard<std::mutex> lk(m);
+            received_data.insert(received_data.end(), data.begin(), data.end());
+            cv.notify_all();
+        });
+        inbound_conn->start();
+        {
+            std::lock_guard<std::mutex> lk(m);
+            accepted = true;
+        }
+        cv.notify_all();
+    };
+
+    uint16_t port = pick_listen_port(server, accept_cb);
+    if (port == 0) { WARN("Skipping: unable to bind any listening port"); return; }
+
+    auto client_conn = client.connect("127.0.0.1", port, [&](bool ok) {
+        std::lock_guard<std::mutex> lk(m);
+        connected = ok;
+        cv.notify_all();
+    });
+    REQUIRE(client_conn);
+    client_conn->set_receive_callback([](const std::vector<uint8_t>&) {});
+
+    {
+        std::unique_lock<std::mutex> lk(m);
+        cv.wait_for(lk, std::chrono::seconds(2), [&] { return accepted && connected; });
+    }
+    REQUIRE(accepted);
+    REQUIRE(connected);
+
+    client_conn->start();
+
+    // Rapidly send 10 messages of 1KB each. The first send starts async_write;
+    // subsequent sends queue up and are drained by the write handler chaining
+    // at real_transport.cpp:327-328 (send_queue_ not empty -> do_write_impl).
+    constexpr int NUM_MESSAGES = 10;
+    constexpr size_t MSG_SIZE = 1024;
+    for (int i = 0; i < NUM_MESSAGES; ++i) {
+        std::vector<uint8_t> msg(MSG_SIZE, static_cast<uint8_t>(i));
+        CHECK(client_conn->send(msg));
+    }
+
+    const size_t expected_total = NUM_MESSAGES * MSG_SIZE;
+
+    {
+        std::unique_lock<std::mutex> lk(m);
+        cv.wait_for(lk, std::chrono::seconds(5), [&] {
+            return received_data.size() >= expected_total;
+        });
+    }
+
+    CHECK(received_data.size() == expected_total);
+
+    // Verify byte content: each 1KB block should contain the message index byte
+    for (int i = 0; i < NUM_MESSAGES; ++i) {
+        uint8_t expected_byte = static_cast<uint8_t>(i);
+        size_t offset = i * MSG_SIZE;
+        bool all_match = true;
+        for (size_t j = 0; j < MSG_SIZE; ++j) {
+            if (received_data[offset + j] != expected_byte) {
+                all_match = false;
+                break;
+            }
+        }
+        CHECK(all_match);
+    }
+
+    client_conn->close();
+    if (inbound_conn) inbound_conn->close();
+    client.stop();
+    server.stop();
+}
+
+// =============================================================================
+// COVERAGE GAP: Writing flag skip branch (real_transport.cpp:288-292)
+// When send() is called while another async_write is in flight, writing_ is
+// already true and do_write_impl() is skipped. The queued data is drained
+// by the active write chain instead.
+// =============================================================================
+
+TEST_CASE("Concurrent sends exercise writing-flag skip branch", "[network][transport][real][write-flag]") {
+    TestIoContext io;
+    RealTransport server(io.get());
+    RealTransport client(io.get());
+
+    std::shared_ptr<TransportConnection> inbound_conn;
+    std::mutex m;
+    std::condition_variable cv;
+    bool accepted = false;
+    bool connected = false;
+    std::atomic<size_t> total_received{0};
+
+    auto accept_cb = [&](TransportConnectionPtr c) {
+        inbound_conn = c;
+        inbound_conn->set_receive_callback([&](const std::vector<uint8_t>& data) {
+            total_received.fetch_add(data.size(), std::memory_order_relaxed);
+            cv.notify_all();
+        });
+        inbound_conn->start();
+        {
+            std::lock_guard<std::mutex> lk(m);
+            accepted = true;
+        }
+        cv.notify_all();
+    };
+
+    uint16_t port = pick_listen_port(server, accept_cb);
+    if (port == 0) { WARN("Skipping: unable to bind any listening port"); return; }
+
+    auto client_conn = client.connect("127.0.0.1", port, [&](bool ok) {
+        std::lock_guard<std::mutex> lk(m);
+        connected = ok;
+        cv.notify_all();
+    });
+    REQUIRE(client_conn);
+    client_conn->set_receive_callback([](const std::vector<uint8_t>&) {});
+
+    {
+        std::unique_lock<std::mutex> lk(m);
+        cv.wait_for(lk, std::chrono::seconds(2), [&] { return accepted && connected; });
+    }
+    REQUIRE(accepted);
+    REQUIRE(connected);
+
+    client_conn->start();
+
+    // Blast 50 messages as fast as possible. With 50 rapid sends, the first
+    // triggers async_write (writing_ = true). Subsequent sends hit the skip
+    // branch at real_transport.cpp:291 (writing_.exchange(true) returns true).
+    constexpr int NUM_MESSAGES = 50;
+    constexpr size_t MSG_SIZE = 256;
+    for (int i = 0; i < NUM_MESSAGES; ++i) {
+        std::vector<uint8_t> msg(MSG_SIZE, static_cast<uint8_t>(i & 0xFF));
+        (void)client_conn->send(msg);
+    }
+
+    const size_t expected_total = NUM_MESSAGES * MSG_SIZE;
+
+    {
+        std::unique_lock<std::mutex> lk(m);
+        cv.wait_for(lk, std::chrono::seconds(5), [&] {
+            return total_received.load() >= expected_total;
+        });
+    }
+
+    CHECK(total_received.load() == expected_total);
+
+    client_conn->close();
+    if (inbound_conn) inbound_conn->close();
     client.stop();
     server.stop();
 }

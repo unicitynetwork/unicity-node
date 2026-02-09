@@ -7,6 +7,7 @@
 #include "version.hpp"
 #include <filesystem>
 #include <iostream> // Keep for CLI output and early errors before logger initialized
+#include <optional>
 #include <set>
 
 void print_usage(const char *program_name) {
@@ -18,6 +19,7 @@ void print_usage(const char *program_name) {
       << "  --port=<port>        Listen port (default: 9590 mainnet, 19590 testnet, 29590 regtest)\n"
       << "  --nolisten           Disable inbound connections (inbound is enabled by default)\n"
       << "  --connect=<n>        Maximum outbound connections (0 = disable automatic outbound)\n"
+      << "  --maxinbound=<n>     Maximum inbound connections (default: 125)\n"
       << "  --suspiciousreorgdepth=<n>  Override suspicious reorg depth (0 = use chain default)\n"
       << "  --regtest            Use regression test chain (easy mining)\n"
       << "  --testnet            Use test network\n"
@@ -43,6 +45,7 @@ int main(int argc, char *argv[]) {
     unicity::app::AppConfig config;
     std::string log_level = "info";
     std::vector<std::string> debug_components;
+    std::optional<uint16_t> explicit_port;
 
     for (int i = 1; i < argc; ++i) {
       std::string arg = argv[i];
@@ -68,7 +71,7 @@ int main(int argc, char *argv[]) {
           std::cerr << "Port must be a number between 1 and 65535" << std::endl;
           return 1;
         }
-        config.network_config.listen_port = *port_opt;
+        explicit_port = *port_opt;
       } else if (arg == "--nolisten") {
         config.network_config.listen_enabled = false;
       } else if (arg == "--listen") {
@@ -81,6 +84,14 @@ int main(int argc, char *argv[]) {
           return 1;
         }
         config.network_config.max_outbound_connections = *connect_opt;
+      } else if (arg.starts_with("--maxinbound=")) {
+        auto maxinbound_opt = unicity::util::SafeParseInt(arg.substr(13), 0, 10000);
+        if (!maxinbound_opt) {
+          std::cerr << "Error: Invalid --maxinbound value: " << arg.substr(13) << std::endl;
+          std::cerr << "Value must be a number between 0 and 10000" << std::endl;
+          return 1;
+        }
+        config.network_config.max_inbound_connections = *maxinbound_opt;
       } else if (arg.starts_with("--suspiciousreorgdepth=")) {
         auto depth_opt = unicity::util::SafeParseInt(arg.substr(23), 0, 1000000);
         if (!depth_opt) {
@@ -128,6 +139,11 @@ int main(int argc, char *argv[]) {
         print_usage(argv[0]);
         return 1;
       }
+    }
+
+    // Explicit --port always wins over chain-type defaults
+    if (explicit_port) {
+      config.network_config.listen_port = *explicit_port;
     }
 
     // Ensure datadir exists before initializing file logger

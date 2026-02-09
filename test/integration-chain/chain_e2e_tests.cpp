@@ -342,57 +342,6 @@ TEST_CASE("E2E: Multiple competing forks resolve correctly", "[e2e][chain][fork]
     }
 }
 
-TEST_CASE("E2E: Headers received out of order still result in correct chain", "[e2e][chain][ordering]") {
-    auto params = ChainParams::CreateRegTest();
-    TestChainstateManager chainstate(*params);
-    chainstate.Initialize(params->GenesisBlock());
-    chainstate.SetBypassPOWValidation(true);
-    const auto& genesis = params->GenesisBlock();
-
-    SECTION("Reverse order headers resolve to correct chain") {
-        // Create headers in order
-        auto headers = BuildHeaderChain(genesis.GetHash(), genesis.nTime, 5);
-
-        // Add them in REVERSE order (as orphans, then resolve)
-        for (int i = 4; i >= 0; i--) {
-            ValidationState st;
-            chain::CBlockIndex* pindex = chainstate.AcceptBlockHeader(headers[i], st);
-            if (pindex) {
-                chainstate.TryAddBlockIndexCandidate(pindex);
-            } else if (st.GetRejectReason() == "prev-blk-not-found") {
-                // Expected for orphans
-                chainstate.AddOrphanHeader(headers[i], 1);
-            }
-        }
-
-        REQUIRE(chainstate.ActivateBestChain(nullptr));
-
-        // E2E verification: chain is complete despite out-of-order receipt
-        REQUIRE(chainstate.GetChainHeight() == 5);
-        REQUIRE(chainstate.GetTip()->GetBlockHash() == headers.back().GetHash());
-    }
-
-    SECTION("Random order headers resolve correctly") {
-        auto headers = BuildHeaderChain(genesis.GetHash(), genesis.nTime, 10);
-
-        // Shuffle order: 5, 2, 8, 0, 3, 9, 1, 6, 4, 7
-        std::vector<int> order = {5, 2, 8, 0, 3, 9, 1, 6, 4, 7};
-
-        for (int idx : order) {
-            ValidationState st;
-            chain::CBlockIndex* pindex = chainstate.AcceptBlockHeader(headers[idx], st);
-            if (pindex) {
-                chainstate.TryAddBlockIndexCandidate(pindex);
-            } else if (st.GetRejectReason() == "prev-blk-not-found") {
-                chainstate.AddOrphanHeader(headers[idx], 1);
-            }
-        }
-
-        REQUIRE(chainstate.ActivateBestChain(nullptr));
-
-        // E2E verification: chain is complete
-        REQUIRE(chainstate.GetChainHeight() == 10);
-        REQUIRE(chainstate.GetTip()->GetBlockHash() == headers.back().GetHash());
-        REQUIRE(chainstate.GetOrphanHeaderCount() == 0);
-    }
-}
+// Note: Test "E2E: Headers received out of order still result in correct chain"
+// was removed because orphan pool infrastructure was removed. Out-of-order headers
+// are now discarded and trigger GETHEADERS requests to fill the gap.

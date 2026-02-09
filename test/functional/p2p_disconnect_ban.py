@@ -91,7 +91,7 @@ def test_ban_node(node1, node2_port):
     print("    ✓ Successfully banned address")
     
     # Try to reconnect node2 - should fail since it's on 127.0.0.1
-    # Unicity blocks banned IPs for both inbound and outbound (peer_lifecycle_manager.cpp:1161, 1329)
+    # Unicity blocks banned IPs for both inbound and outbound (connection_manager.cpp:1161, 1329)
     time.sleep(1)
     
     # addnode should return an error when trying to connect to banned IP

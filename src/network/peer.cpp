@@ -5,24 +5,26 @@
 #include "network/peer.hpp"
 
 #include "chain/timedata.hpp"
+#include <algorithm>
 #include "util/hash.hpp"
 #include "util/logging.hpp"
 #include "util/time.hpp"
 
 #include <random>
 
-#include <asio/ip/address.hpp>
-#include <asio/ip/address_v6.hpp>
-
 namespace unicity {
 namespace network {
 
-// Generate random nonce for ping messages
+// Generate random nonce for ping messages (never returns 0)
 static uint64_t generate_ping_nonce() {
-  static std::random_device rd;
-  static std::mt19937_64 gen(rd());
-  static std::uniform_int_distribution<uint64_t> dis;
-  return dis(gen);
+  thread_local std::random_device rd;
+  thread_local std::mt19937_64 gen(rd());
+  thread_local std::uniform_int_distribution<uint64_t> dis;
+  uint64_t nonce;
+  do {
+    nonce = dis(gen);
+  } while (nonce == 0);
+  return nonce;
 }
 
 // Initialize process-wide nonce (set by NetworkManager at startup)
@@ -33,57 +35,103 @@ std::atomic<std::chrono::milliseconds> Peer::handshake_timeout_override_ms_{std:
 std::atomic<std::chrono::milliseconds> Peer::inactivity_timeout_override_ms_{std::chrono::milliseconds{0}};
 
 // Peer implementation
-Peer::Peer(PrivateTag, asio::io_context& io_context, TransportConnectionPtr connection, uint32_t network_magic,
-           bool is_inbound, int32_t start_height, const std::string& target_address, uint16_t target_port,
-           ConnectionType conn_type)
-    : io_context_(io_context), connection_(connection), handshake_timer_(io_context), ping_timer_(io_context),
-      inactivity_timer_(io_context), network_magic_(network_magic), is_inbound_(is_inbound),
-      connection_type_(conn_type), id_(-1),
-      local_nonce_(process_nonce_.load() != 0 ? process_nonce_.load() : generate_ping_nonce()),
-      local_start_height_(start_height), target_address_(target_address), target_port_(target_port),
-      state_(connection && connection->is_open()
+Peer::Peer(
+    PrivateTag,
+    asio::io_context& io_context,
+    TransportConnectionPtr connection,
+    uint32_t network_magic,
+    bool is_inbound,
+    int32_t start_height,
+    const std::string& target_address,
+    uint16_t target_port,
+    ConnectionType conn_type)
+    : io_context_(io_context)
+    , connection_(connection)
+    , handshake_timer_(io_context)
+    , ping_timer_(io_context)
+    , inactivity_timer_(io_context)
+    , network_magic_(network_magic)
+    , is_inbound_(is_inbound)
+    , connection_type_(conn_type)
+    , id_(-1)
+    , local_nonce_([]() {
+          auto n = process_nonce_.load();
+          return n != 0 ? n : generate_ping_nonce();
+      }())
+    , local_start_height_(start_height)
+    , target_address_(target_address)
+    , target_port_(target_port)
+    , state_(connection && connection->is_open()
                  ? PeerConnectionState::CONNECTED
-                 : (connection ? PeerConnectionState::CONNECTING : PeerConnectionState::DISCONNECTED)),
-      last_unknown_reset_(util::GetSteadyTime()) {}
+                 : (connection ? PeerConnectionState::CONNECTING
+                               : PeerConnectionState::DISCONNECTED))
+    , created_at_(std::chrono::steady_clock::now())
+{
+}
 
 Peer::~Peer() {
   try {
-    // Correct lifecycle: disconnect() is called -> callbacks cleared -> connection closed
+    //  disconnect() is called -> callbacks cleared -> connection closed
     // Then later: destructor runs on already-cleaned-up object
     if (state_ != PeerConnectionState::DISCONNECTED) {
       LOG_NET_ERROR("CRITICAL: Peer destructor called without prior disconnect() - "
                     "peer={}, state={}, address={}. This indicates a lifecycle bug. "
                     "disconnect() must be called while shared_ptr is alive.",
-                    id_, static_cast<int>(state_), address());
+                    id_, static_cast<int>(state_.load()), address());
     }
 
-    // Prevent UB if disconnect() was not called (bug logged above)
     cancel_all_timers();
   } catch (...) {
   }
 }
 
 // Factory methods enforce shared_ptr ownership (required by enable_shared_from_this)
-PeerPtr Peer::create_outbound(asio::io_context& io_context, TransportConnectionPtr connection, uint32_t network_magic,
-                              int32_t start_height, const std::string& target_address, uint16_t target_port,
-                              ConnectionType conn_type) {
-  return std::make_shared<Peer>(PrivateTag{}, io_context, connection, network_magic, false, start_height,
-                                target_address, target_port, conn_type);
+PeerPtr Peer::create_outbound(
+    asio::io_context& io_context,
+    TransportConnectionPtr connection,
+    uint32_t network_magic,
+    int32_t start_height,
+    const std::string& target_address,
+    uint16_t target_port,
+    ConnectionType conn_type)
+{
+  return std::make_shared<Peer>(
+      PrivateTag{},
+      io_context,
+      connection,
+      network_magic,
+      false,
+      start_height,
+      target_address,
+      target_port,
+      conn_type);
 }
 
-PeerPtr Peer::create_inbound(asio::io_context& io_context, TransportConnectionPtr connection, uint32_t network_magic,
-                             int32_t start_height) {
+PeerPtr Peer::create_inbound(
+    asio::io_context& io_context,
+    TransportConnectionPtr connection,
+    uint32_t network_magic,
+    int32_t start_height)
+{
   std::string addr = connection ? connection->remote_address() : "";
   uint16_t remote_port = connection ? connection->remote_port() : 0;
-  return std::make_shared<Peer>(PrivateTag{}, io_context, connection, network_magic, true, start_height, addr,
-                                remote_port, ConnectionType::INBOUND);
+  return std::make_shared<Peer>(
+      PrivateTag{},
+      io_context,
+      connection,
+      network_magic,
+      true,
+      start_height,
+      addr,
+      remote_port,
+      ConnectionType::INBOUND);
 }
 
 void Peer::start() {
   // Guard against double-start or restart after disconnect
   if (started_.exchange(true)) {
     if (state_ == PeerConnectionState::DISCONNECTED || state_ == PeerConnectionState::DISCONNECTING) {
-      LOG_NET_ERROR("Peer {} restart attempted; Peer objects are single-use", id_);
+      LOG_NET_ERROR("peer {} restart attempted; Peer objects are single-use", id_);
     }
     return;
   }
@@ -109,9 +157,6 @@ void Peer::start() {
   }
 
   // Initialize connection timestamps for RPC reporting and inactivity detection.
-  // GetSteadyTime() returns a time_point (absolute moment in time).
-  // time_since_epoch() converts to duration (elapsed time since clock's reference point).
-  // We store durations rather than time_points because atomic<duration> is simpler.
   auto now_tp = util::GetSteadyTime();
   auto now_secs = std::chrono::duration_cast<std::chrono::seconds>(now_tp.time_since_epoch());
   stats_.connected_time.store(now_secs, std::memory_order_relaxed);
@@ -141,7 +186,6 @@ void Peer::disconnect() {
   // SECURITY: Thread-safe disconnect() via io_context serialization
   // If called from external thread (RPC, background tasks), post to io_context
   // If already on io_context thread (timers, callbacks), execute directly
-  // This serializes all disconnect operations on the single-threaded networking reactor
   if (io_context_.get_executor().running_in_this_thread()) {
     // Already on io_context thread - safe to execute directly
     do_disconnect();
@@ -153,21 +197,18 @@ void Peer::disconnect() {
 }
 
 void Peer::do_disconnect() {
-  // Simple state check - no atomics needed, we're on single-threaded io_context
   if (state_ == PeerConnectionState::DISCONNECTED || state_ == PeerConnectionState::DISCONNECTING) {
     return;
   }
 
   state_ = PeerConnectionState::DISCONNECTING;
-  LOG_NET_DEBUG("disconnecting peer={}", id_);
+  LOG_NET_DEBUG("disconnecting peer={} ({}:{})", id_, address(), port());
 
   // Cancel all timers first
   cancel_all_timers();
 
   if (connection_) {
-    // SECURITY: Clear callbacks BEFORE closing connection to prevent use-after-free
-    // If we close first, pending async operations might invoke callbacks during/after
-    // this object's destruction. Clear callbacks while shared_ptr is still alive.
+    // Clear callbacks before closing connection
     connection_->set_receive_callback({});
     connection_->set_disconnect_callback({});
 
@@ -181,8 +222,13 @@ void Peer::do_disconnect() {
 }
 
 void Peer::post_disconnect() {
-  // SECURITY: Post disconnect() to io_context to prevent use-after-free
-  // By posting, we defer disconnect until after the current call finishes.
+  // We use this when we need to disconnect while inside a message handler.
+  // 1. We post the disconnect() call to run LATER (next loop cycle). This allows the 
+  //    current function (e.g., handle_version) to return safely without crashes.
+  // 2. We set disconnect_posted_ = true immediately. This tells the loop in 
+  //    process_received_data() to STOP processing any more messages in the buffer.
+  //    (Otherwise, we might process valid messages from a peer we just banned).
+  disconnect_posted_ = true;
   auto self = shared_from_this();
   asio::post(io_context_, [self]() { self->disconnect(); });
 }
@@ -194,7 +240,6 @@ void Peer::send_message(std::unique_ptr<message::Message> msg) {
     return;
   }
 
-  // Fast-fail before doing work if transport is already closed
   if (!connection_ || !connection_->is_open()) {
     post_disconnect();
     return;
@@ -217,6 +262,7 @@ void Peer::send_message(std::unique_ptr<message::Message> msg) {
   bool send_result = connection_ && connection_->send(full_message);
 
   if (send_result) {
+    LOG_NET_TRACE("sending {} ({} bytes) peer={}", command, full_message.size(), id_);
     stats_.messages_sent.fetch_add(1, std::memory_order_relaxed);
     stats_.bytes_sent.fetch_add(full_message.size(), std::memory_order_relaxed);
     auto now_tp = util::GetSteadyTime();
@@ -243,11 +289,20 @@ void Peer::set_local_addr_learned_handler(LocalAddrLearnedHandler handler) {
 }
 
 std::string Peer::address() const {
+  std::string addr;
   if (connection_)
-    return connection_->remote_address();
-  if (!target_address_.empty())
-    return target_address_;
-  return "unknown";
+    addr = connection_->remote_address();
+  else if (!target_address_.empty())
+    addr = target_address_;
+  else
+    return "unknown";
+
+  // Strip IPv4-mapped IPv6 prefix for cleaner display (e.g., "::ffff:1.2.3.4" -> "1.2.3.4")
+  static const std::string ipv4_mapped_prefix = "::ffff:";
+  if (addr.rfind(ipv4_mapped_prefix, 0) == 0) {
+    addr = addr.substr(ipv4_mapped_prefix.size());
+  }
+  return addr;
 }
 
 uint16_t Peer::port() const {
@@ -260,19 +315,15 @@ uint16_t Peer::port() const {
 
 // Private methods
 
-void Peer::on_connected() {
-  state_ = PeerConnectionState::CONNECTED;
-}
-
 void Peer::on_disconnect() {
   state_ = PeerConnectionState::DISCONNECTED;
 }
 
 void Peer::on_transport_receive(const std::vector<uint8_t>& data) {
-  // SECURITY: Check incoming chunk size FIRST before any allocation
+  // Check incoming chunk size first before any allocation
   // This prevents a single oversized chunk from bypassing flood protection
   if (data.size() > protocol::DEFAULT_RECV_FLOOD_SIZE) {
-    LOG_NET_WARN_RL("Oversized chunk received ({} bytes, limit: {} bytes), "
+    LOG_NET_WARN_RL("oversized chunk received ({} bytes, limit: {} bytes), "
                     "disconnecting from {}",
                     data.size(), protocol::DEFAULT_RECV_FLOOD_SIZE, address());
     post_disconnect();
@@ -280,8 +331,6 @@ void Peer::on_transport_receive(const std::vector<uint8_t>& data) {
   }
 
   // Enforce DEFAULT_RECV_FLOOD_SIZE to prevent unbounded receive buffer DoS
-  // Check total buffer size (including already processed data)
-  // Defense-in-depth: verify invariant that offset <= size (should always hold)
   if (recv_buffer_offset_ > recv_buffer_.size()) {
     LOG_NET_ERROR("Buffer invariant violation: offset {} > size {}, disconnecting {}", recv_buffer_offset_,
                   recv_buffer_.size(), address());
@@ -290,7 +339,7 @@ void Peer::on_transport_receive(const std::vector<uint8_t>& data) {
   }
   size_t usable_bytes = recv_buffer_.size() - recv_buffer_offset_;
   if (usable_bytes + data.size() > protocol::DEFAULT_RECV_FLOOD_SIZE) {
-    LOG_NET_WARN_RL("Receive buffer overflow (usable: {} bytes, incoming: {} "
+    LOG_NET_WARN_RL("receive buffer overflow (usable: {} bytes, incoming: {} "
                     "bytes, limit: {} bytes), disconnecting from {}",
                     usable_bytes, data.size(), protocol::DEFAULT_RECV_FLOOD_SIZE, address());
     post_disconnect();
@@ -303,11 +352,9 @@ void Peer::on_transport_receive(const std::vector<uint8_t>& data) {
     recv_buffer_.erase(recv_buffer_.begin(), recv_buffer_.begin() + recv_buffer_offset_);
     recv_buffer_offset_ = 0;
 
-    // SECURITY: Shrink capacity if buffer is empty or very small to prevent
+    // Shrink capacity if buffer is empty or very small to prevent
     // permanent memory waste after processing large messages
     // Example: 5MB burst → buffer grows to 5MB → consumed → shrink to 0
-    // This prevents each peer from wasting up to 5MB indefinitely
-    // With 125 inbound peers, this saves up to 625MB memory
     if (recv_buffer_.empty() || recv_buffer_.size() < 1024) {
       recv_buffer_.shrink_to_fit();
     }
@@ -331,17 +378,12 @@ void Peer::on_transport_receive(const std::vector<uint8_t>& data) {
 }
 
 void Peer::on_transport_disconnect() {
-  // SECURITY: Remote close path - must break reference cycle to prevent leak
-  // Reference cycle: Peer → connection_ → callbacks → Peer (via captured shared_ptr)
-  //
-  // Transport already closed connection, but we must:
-  // 1. Clear callbacks to break cycle (callbacks capture shared_ptr)
-  // 2. Release connection_ to decrement refcount
-  // 3. Cancel timers and mark disconnected
+  // Remote close path.
+  // We must break the reference cycle (Peer -> Connection -> Callback -> Peer)
+  // by clearing callbacks, which releases the captured shared_ptr<Peer>.
   if (state_ != PeerConnectionState::DISCONNECTED) {
     cancel_all_timers();
 
-    // Break reference cycle: clear callbacks and release connection
     if (connection_) {
       connection_->set_receive_callback({});
       connection_->set_disconnect_callback({});
@@ -353,7 +395,6 @@ void Peer::on_transport_disconnect() {
 }
 
 void Peer::send_version() {
-  // Precondition: must have a connection to send VERSION
   assert(connection_ && "send_version called without connection");
   if (!connection_) {
     LOG_NET_ERROR("send_version called without connection");
@@ -366,9 +407,11 @@ void Peer::send_version() {
   version_msg->timestamp = util::GetTime();
 
   // addr_recv: The network address of the remote peer
+  // Only send routable addresses
   std::string peer_addr = connection_->remote_address();
   uint16_t peer_port = connection_->remote_port();
-  version_msg->addr_recv = protocol::NetworkAddress::from_string(peer_addr, peer_port);
+  auto addr = protocol::NetworkAddress::from_string(peer_addr, peer_port);
+  version_msg->addr_recv = addr.is_routable() ? addr : protocol::NetworkAddress();
   std::string them_addr = peer_addr + ":" + std::to_string(peer_port);
 
   // addr_from: Our address as seen by the peer
@@ -396,7 +439,7 @@ void Peer::handle_version(const message::VersionMessage& msg) {
 
   // Reject obsolete protocol versions
   if (msg.version < static_cast<int32_t>(protocol::MIN_PROTOCOL_VERSION)) {
-    LOG_NET_DEBUG("peer={} using obsolete version {}; disconnecting", id_, msg.version);
+    LOG_NET_DEBUG("peer={} ({}:{}) using obsolete version {}; disconnecting", id_, address(), port(), msg.version);
     post_disconnect();
     return;
   }
@@ -410,8 +453,8 @@ void Peer::handle_version(const message::VersionMessage& msg) {
   // Feelers are just testing liveness, not for sync - no service requirements
   if (!is_inbound_ && !is_feeler()) {
     if ((peer_services_ & protocol::NODE_NETWORK) == 0) {
-      LOG_NET_DEBUG("peer={} missing required NODE_NETWORK service flag (services={}); disconnecting", id_,
-                    peer_services_);
+      LOG_NET_DEBUG("peer={} ({}:{}) missing required NODE_NETWORK service flag (services={}); disconnecting", id_,
+                    address(), port(), peer_services_);
       post_disconnect();
       return;
     }
@@ -443,68 +486,47 @@ void Peer::handle_version(const message::VersionMessage& msg) {
   LOG_NET_DEBUG("receive version message: {}: version {}, blocks={}, peer={}", sanitized_ua, msg.version,
                 msg.start_height, id_);
 
-  // SECURITY: Self-connection detection
-  // Checks nonce for BOTH inbound and outbound connections to prevent:
-  // - Wasting connection slots
-  // - Resource exhaustion from connecting to ourselves
-  // - Potential protocol confusion
-  //
-  // Defense-in-depth: This is a FAST self-connection check at Peer level.
-  // NetworkManager also performs COMPREHENSIVE nonce checking including:
-  //   1. Self-connection (same check as here)
-  //   2. Duplicate connection detection (checks against ALL existing peers' nonces)
-  // This layered approach provides:
-  //   - Early rejection at Peer level (no NetworkManager overhead)
-  //   - Peer works standalone (e.g., in unit tests without NetworkManager)
-  //   - NetworkManager catches duplicate connections that Peer can't detect
+  // Self-connection detection:
+  // If the peer's nonce matches our own, we connected to ourselves.
+  // This is a fast, local check. NetworkManager performs a more comprehensive
+  // check against all other connected peers to detect duplicates.
   if (peer_nonce_ == local_nonce_) {
-    LOG_NET_WARN_RL("self connection detected, disconnecting peer={}", id_);
+    LOG_NET_WARN_RL("connected to self at {}:{}, disconnecting peer={}", address(), port(), id_);
     post_disconnect();
     return;
   }
 
-  // SECURITY: Clamp negative timestamps to prevent overflow
-  // After clamping, both values are non-negative, making overflow impossible
-  int64_t nTime = msg.timestamp;
-  if (nTime < 0) {
-    nTime = 0;
+  // Clamp negative timestamps to prevent overflow
+  int64_t peer_time = msg.timestamp;
+  if (peer_time < 0) {
+    peer_time = 0;
   }
 
   int64_t now = util::GetTime();
-  int64_t time_offset = nTime - now;
+  int64_t time_offset = peer_time - now;
 
-  // Only sample time from outbound peers (reduces skew risk)
+  // Only sample time from outbound peers 
   if (!is_inbound_) {
     protocol::NetworkAddress net_addr = protocol::NetworkAddress::from_string(address(), port(),
                                                                               protocol::NODE_NETWORK);
     chain::AddTimeData(net_addr, time_offset);
   }
 
-  // Local address discovery from peer feedback
-  // Both inbound and outbound peers tell us what IP they see us as via addr_recv.
-  // - Inbound: peer connected to our listen port, addr_recv has our public IP:port
-  // - Outbound: peer sees our outgoing connection IP (same as listen IP for public servers)
-  // This enables self-advertisement for nodes that only make outbound connections.
+  // Local address discovery:
+  // Peers report the IP they see us as in 'addr_recv'. This helps us discover
+  // our public IP (especially behind NAT).
   if (local_addr_learned_handler_) {
     auto our_addr_str = msg.addr_recv.to_string();
     if (our_addr_str.has_value()) {
-      // Extract just the IP (strip port) since we know our own listen port
-      std::string ip = *our_addr_str;
-      auto colon_pos = ip.rfind(':');
-      if (colon_pos != std::string::npos) {
-        ip.resize(colon_pos);
-      }
-      local_addr_learned_handler_(ip);
+      local_addr_learned_handler_(*our_addr_str);
     }
   }
 
-  // FEELER connections: disconnect immediately after receiving VERSION
-  // Address is proven reachable as soon as we get a valid VERSION response.
-  // Note: We do NOT set successfully_connected_ here - that flag is for full handshake
-  // completion (VERACK). Feeler success is determined by receiving VERSION, which
-  // is checked via peer_version() > 0 in remove_peer().
+  // FEELER connections:
+  // Disconnect immediately after receiving VERSION. The address is now proven 
+  // reachable, which is all we wanted to know.
   if (is_feeler()) {
-    LOG_NET_DEBUG("feeler connection completed peer={}; disconnecting", id_);
+    LOG_NET_DEBUG("feeler connection completed peer={} ({}:{}); disconnecting", id_, address(), port());
     post_disconnect();
     return;
   }
@@ -520,9 +542,13 @@ void Peer::handle_version(const message::VersionMessage& msg) {
 }
 
 void Peer::handle_verack() {
+  if (is_feeler()) {
+    return;
+  }
+
   // Reject duplicate VERACK messages
   if (successfully_connected_) {
-    LOG_NET_WARN_RL("Duplicate VERACK from peer {}, ignoring", address());
+    LOG_NET_WARN_RL("duplicate verack from peer {}, ignoring", address());
     return;
   }
 
@@ -537,20 +563,23 @@ void Peer::handle_verack() {
 
   // Announce tip immediately after handshake completes
   // This allows newly connected peers to discover our chain tip without waiting
-  // for the periodic announcement timer
   if (verack_complete_handler_) {
     verack_complete_handler_(shared_from_this());
   }
 
   std::string conn_dir = is_inbound_ ? "inbound" : "outbound";
   std::string conn_subtype = is_block_relay_only() ? "block-relay-only" : (is_feeler() ? "feeler" : "full-relay");
-  LOG_NET_INFO("New {} {} peer connected: version: {}, blocks={}, peer={}", conn_dir, conn_subtype, peer_version_,
-               peer_start_height_, id_);
+  if (is_feeler()) {
+    LOG_NET_DEBUG("new {} {} peer connected: {}:{}, version: {}, blocks={}, peer={}", conn_dir, conn_subtype,
+                  address(), port(), peer_version_, peer_start_height_, id_);
+  } else {
+    LOG_NET_INFO("new {} {} peer connected: {}:{}, version: {}, blocks={}, peer={}", conn_dir, conn_subtype,
+                 address(), port(), peer_version_, peer_start_height_, id_);
+  }
 }
 
 void Peer::process_received_data() {
   // Process as many complete messages as we have in the buffer
-  // Uses read offset to avoid O(n²) erase-from-front
   if (recv_buffer_offset_ > recv_buffer_.size()) {
     LOG_NET_ERROR("process_received_data: invariant violation offset {} > size {}", recv_buffer_offset_,
                   recv_buffer_.size());
@@ -558,6 +587,13 @@ void Peer::process_received_data() {
     return;
   }
   while (recv_buffer_.size() - recv_buffer_offset_ >= protocol::MESSAGE_HEADER_SIZE) {
+    // Stop processing if a handler requested disconnect (deferred via post_disconnect())
+    // or if disconnect() was called synchronously (e.g., by NetworkManager).
+    if (disconnect_posted_ || state_ == PeerConnectionState::DISCONNECTING ||
+        state_ == PeerConnectionState::DISCONNECTED) {
+      return;
+    }
+
     const uint8_t* read_ptr = recv_buffer_.data() + recv_buffer_offset_;
     size_t available = recv_buffer_.size() - recv_buffer_offset_;
 
@@ -590,7 +626,7 @@ void Peer::process_received_data() {
       return;
     }
 
-    // Extract payload (avoid copy by passing pointer and size to deserializer)
+    // Extract payload
     const uint8_t* payload_ptr = read_ptr + protocol::MESSAGE_HEADER_SIZE;
     std::vector<uint8_t> payload(payload_ptr, payload_ptr + header.length);
 
@@ -615,55 +651,31 @@ void Peer::process_message(const protocol::MessageHeader& header, const std::vec
 
   std::string command = header.get_command();
 
-  LOG_NET_TRACE("Received {} from {} (payload size: {} bytes, peer_version: {})", command, address(), payload.size(),
-                peer_version_);
+  LOG_NET_TRACE("received: {} ({} bytes) peer={}", command, payload.size(), id_);
 
   // Enforce VERSION must be first message
+  // ignore non-version messages before handshake (no disconnect)
   if (peer_version_ == 0 && command != protocol::commands::VERSION) {
-    LOG_NET_DEBUG("non-version message before version handshake. Message \"{}\" from peer={}", command, id_);
-    post_disconnect();
+    LOG_NET_DEBUG("non-version message before version handshake. Message \"{}\" from peer={}, ignoring", command, id_);
     return;
   }
 
   // Create message object
   auto msg = ::unicity::message::create_message(command);
   if (!msg) {
-    // Unknown command - ignore with rate limiting
-    // This provides forward compatibility (new protocol versions can add commands)
-    // while protecting against DoS via excessive unknown command spam
-
-    auto now = util::GetSteadyTime();
-    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_unknown_reset_).count();
-
-    if (elapsed > 60) {
-      // Reset counter every 60 seconds
-      unknown_command_count_.store(0, std::memory_order_relaxed);
-      last_unknown_reset_ = now;
-    }
-
-    int count = unknown_command_count_.fetch_add(1, std::memory_order_relaxed) + 1;
-
-    // Log unknown commands (rate-limited to prevent spam)
-    LOG_NET_WARN_RL("unknown message type: {} peer={} (count: {}/60s)", command, id_, count);
-
-    // Disconnect if excessive unknown commands (likely attack or broken client)
-    if (count > static_cast<int>(protocol::MAX_UNKNOWN_COMMANDS_PER_MINUTE)) {
-      LOG_NET_ERROR_RL("excessive unknown commands from peer={} ({}/60s), "
-                       "disconnecting (possible attack)",
-                       id_, count);
-      post_disconnect();
-    }
+    // Unknown command - silently ignore 
+    LOG_NET_DEBUG("ignoring unknown message type: {} peer={}", command, id_);
     return;
   }
 
-  // SECURITY: Validate zero-length payloads for KNOWN commands
   // Only VERACK and GETADDR are allowed to have empty payloads
   // PING/PONG must include 8-byte nonce
-  // All other known messages (VERSION, ADDR, INV, GETHEADERS, HEADERS) must have data
-  // Unknown commands are not checked here (handled above with rate limiting)
-  if (payload.size() == 0) {
+  // All other known messages (VERSION, ADDR, GETHEADERS, HEADERS) must have data
+  // Unknown commands are ignored
+  if (payload.empty()) {
     if (command != protocol::commands::VERACK && command != protocol::commands::GETADDR) {
-      LOG_NET_ERROR("unexpected zero-length payload for known message {} peer={}", command, id_);
+      LOG_NET_ERROR("unexpected zero-length payload for known message {} peer={} ({}:{})", command, id_, address(),
+                    port());
       post_disconnect();
       return;
     }
@@ -671,8 +683,8 @@ void Peer::process_message(const protocol::MessageHeader& header, const std::vec
 
   // Deserialize
   if (!msg->deserialize(payload.data(), payload.size())) {
-    LOG_NET_ERROR("failed to deserialize message: {} - disconnecting (protocol violation) peer={}", command, id_);
-    // Malformed messages indicate protocol violation or malicious peer
+    LOG_NET_ERROR("failed to deserialize message: {} - disconnecting (protocol violation) peer={} ({}:{})", command,
+                  id_, address(), port());
     post_disconnect();
     return;
   }
@@ -693,7 +705,7 @@ void Peer::process_message(const protocol::MessageHeader& header, const std::vec
   } else if (command == protocol::commands::PING) {
     // Only respond to PING after handshake is complete
     if (!successfully_connected_) {
-      LOG_NET_DEBUG("Received PING before handshake complete from peer={}, ignoring", id_);
+      LOG_NET_DEBUG("received ping before handshake complete from peer={}, ignoring", id_);
       return;
     }
     auto& ping = static_cast<const ::unicity::message::PingMessage&>(*msg);
@@ -703,7 +715,7 @@ void Peer::process_message(const protocol::MessageHeader& header, const std::vec
   } else if (command == protocol::commands::PONG) {
     // Only process PONG after handshake is complete
     if (!successfully_connected_) {
-      LOG_NET_DEBUG("Received PONG before handshake complete from peer={}, ignoring", id_);
+      LOG_NET_DEBUG("received pong before handshake complete from peer={}, ignoring", id_);
       return;
     }
     handle_pong(static_cast<const message::PongMessage&>(*msg));
@@ -711,24 +723,13 @@ void Peer::process_message(const protocol::MessageHeader& header, const std::vec
   } else {
     // Only process non-handshake messages after handshake is complete
     if (!successfully_connected_) {
-      LOG_NET_DEBUG("Received {} before handshake complete from peer={}, ignoring", command, id_);
+      LOG_NET_DEBUG("received {} before handshake complete from peer={}, ignoring", command, id_);
       return;
     }
-    // Pass to handler
     if (message_handler_) {
       message_handler_(shared_from_this(), std::move(msg));
     }
   }
-}
-
-void Peer::SetTimeoutsForTest(std::chrono::milliseconds handshake_ms, std::chrono::milliseconds inactivity_ms) {
-  handshake_timeout_override_ms_.store(handshake_ms, std::memory_order_relaxed);
-  inactivity_timeout_override_ms_.store(inactivity_ms, std::memory_order_relaxed);
-}
-
-void Peer::ResetTimeoutsForTest() {
-  handshake_timeout_override_ms_.store(std::chrono::milliseconds{0}, std::memory_order_relaxed);
-  inactivity_timeout_override_ms_.store(std::chrono::milliseconds{0}, std::memory_order_relaxed);
 }
 
 void Peer::schedule_ping() {
@@ -736,7 +737,7 @@ void Peer::schedule_ping() {
   ping_timer_.expires_after(std::chrono::seconds(protocol::PING_INTERVAL_SEC));
   ping_timer_.async_wait([self](const asio::error_code& ec) {
     if (!ec) {
-      // Check if disconnected BEFORE accessing any members
+      // Check if disconnected before accessing any members
       if (self->state_ == PeerConnectionState::DISCONNECTED || self->state_ == PeerConnectionState::DISCONNECTING) {
         return;
       }
@@ -772,15 +773,38 @@ void Peer::send_ping() {
 }
 
 void Peer::handle_pong(const message::PongMessage& msg) {
-  if (msg.nonce == last_ping_nonce_) {
-    auto now = util::GetSteadyTime();
-    auto ping_time = std::chrono::duration_cast<std::chrono::milliseconds>(now - ping_sent_time_);
-    stats_.ping_time_ms.store(ping_time, std::memory_order_relaxed);
-    LOG_NET_TRACE("Ping time for {}: {}ms", address(), ping_time.count());
-
-    // Clear nonce to indicate we received the PONG
+  if (msg.nonce == 0) {
+    LOG_NET_DEBUG("pong peer={}: nonce zero (bug in peer implementation), canceling ping", id_);
     last_ping_nonce_ = 0;
+    return;
   }
+
+  if (last_ping_nonce_ == 0) {
+    // No outstanding ping - unsolicited pong
+    LOG_NET_DEBUG("pong peer={}: unsolicited (no outstanding ping)", id_);
+    return;
+  }
+
+  if (msg.nonce != last_ping_nonce_) {
+    LOG_NET_DEBUG("pong peer={}: nonce mismatch (expected {:x}, got {:x})", id_, last_ping_nonce_, msg.nonce);
+    return;
+  }
+
+  // Matching pong received
+  auto now = util::GetSteadyTime();
+  auto ping_time = std::chrono::duration_cast<std::chrono::milliseconds>(now - ping_sent_time_);
+  stats_.ping_time_ms.store(ping_time, std::memory_order_relaxed);
+
+  // Track min ping for eviction decisions
+  auto current_min = stats_.min_ping_time_ms.load(std::memory_order_relaxed);
+  if (current_min.count() < 0 || ping_time < current_min) {
+    stats_.min_ping_time_ms.store(ping_time, std::memory_order_relaxed);
+  }
+
+  LOG_NET_TRACE("Ping time for {}: {}ms", address(), ping_time.count());
+
+  // Clear nonce to indicate we received the PONG
+  last_ping_nonce_ = 0;
 }
 
 void Peer::start_handshake_timeout() {
@@ -795,13 +819,14 @@ void Peer::start_handshake_timeout() {
   }
   handshake_timer_.async_wait([self](const asio::error_code& ec) {
     if (!ec) {
-      // SECURITY: Check if disconnected BEFORE accessing any members
+      // Check if disconnected before accessing any members
       if (self->state_ == PeerConnectionState::DISCONNECTED || self->state_ == PeerConnectionState::DISCONNECTING) {
         return;
       }
 
       if (self->state_ != PeerConnectionState::READY) {
         LOG_NET_DEBUG("version handshake timeout peer={}", self->id_);
+        // Safe to call disconnect() directly in timer callback (no loop to break)
         self->disconnect();
       }
     }
@@ -816,8 +841,7 @@ void Peer::start_inactivity_timeout() {
   if (ov.count() > 0) {
     inactivity_timer_.expires_after(ov);
   } else {
-    constexpr int CHECK_INTERVAL_SEC = 60;
-    inactivity_timer_.expires_after(std::chrono::seconds(CHECK_INTERVAL_SEC));
+    inactivity_timer_.expires_after(std::chrono::seconds(protocol::INACTIVITY_CHECK_INTERVAL_SEC));
   }
   inactivity_timer_.async_wait([self](const asio::error_code& ec) {
     if (!ec) {
@@ -849,16 +873,9 @@ void Peer::start_inactivity_timeout() {
         }
       }
       if (idle_time.count() > protocol::INACTIVITY_TIMEOUT_SEC) {
-        if (last_send.count() == 0 && last_recv.count() == 0) {
-          LOG_NET_DEBUG("socket no message in first {} seconds, {} {} peer={}", protocol::INACTIVITY_TIMEOUT_SEC,
-                        last_recv.count() != 0 ? 1 : 0, last_send.count() != 0 ? 1 : 0, self->id_);
-        } else if ((now_duration - last_send).count() > protocol::INACTIVITY_TIMEOUT_SEC) {
-          LOG_NET_DEBUG("socket sending timeout: {}s peer={}", (now_duration - last_send).count(), self->id_);
-        } else if ((now_duration - last_recv).count() > protocol::INACTIVITY_TIMEOUT_SEC) {
-          LOG_NET_DEBUG("socket receive timeout: {}s peer={}", (now_duration - last_recv).count(), self->id_);
-        } else {
-          LOG_NET_WARN("Inactivity timeout (idle {}s)", idle_time.count());
-        }
+        LOG_NET_DEBUG("inactivity timeout: {}s idle (last_send={}s ago, last_recv={}s ago) peer={}",
+                      idle_time.count(), (now_duration - last_send).count(), (now_duration - last_recv).count(),
+                      self->id_);
         self->disconnect();
       } else {
         // Still active, reschedule check

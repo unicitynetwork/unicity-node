@@ -1,8 +1,10 @@
 // Copyright (c) 2025 The Unicity Foundation
 // Tests for Sybil attack resistance via connection flooding
 //
-// These tests verify current protections and document gaps in
-// defending against connection flooding attacks.
+// Protection model (Bitcoin Core parity):
+// - All inbound connections accepted up to max_inbound limit
+// - When at capacity, netgroup-aware eviction protects diversity
+// - Eviction targets the netgroup with the most connections
 
 #include "catch_amalgamated.hpp"
 #include "../infra/peer_factory.hpp"
@@ -13,7 +15,7 @@
 using namespace unicity::test;
 
 // =============================================================================
-// CURRENT PROTECTIONS
+// CONNECTION ACCEPTANCE TESTS
 // =============================================================================
 
 TEST_CASE("Sybil - Connection limit protection", "[network][sybil][unit]") {
@@ -33,7 +35,7 @@ TEST_CASE("Sybil - Connection limit protection", "[network][sybil][unit]") {
 
         REQUIRE(orch.WaitForPeerCount(*victim, 5));
 
-        // All should connect (5 < 125 default limit, and all in different netgroups)
+        // All should connect (5 < 125 default limit)
         REQUIRE(victim->GetInboundPeerCount() == 5);
     }
 
@@ -70,15 +72,15 @@ TEST_CASE("Sybil - Per-IP protection", "[network][sybil][unit]") {
 }
 
 // =============================================================================
-// PER-NETGROUP INBOUND LIMITS (Bitcoin Core parity)
+// NETGROUP BEHAVIOR TESTS (Core parity: eviction-based, not connection-time)
 // =============================================================================
 
-TEST_CASE("Sybil - Per-netgroup limit enforced", "[network][sybil][security][unit]") {
+TEST_CASE("Sybil - All connections from same netgroup accepted", "[network][sybil][security][unit]") {
     SimulatedNetwork network;
     PeerFactory factory(&network);
     TestOrchestrator orch(&network);
 
-    SECTION("Multiple IPs from same /16 subnet limited to 4") {
+    SECTION("Multiple IPs from same /16 subnet all connect (no connection-time limit)") {
         auto victim = factory.CreateNode(0);
 
         // Create 10 attackers all in same /16 subnet but different IPs
@@ -97,22 +99,22 @@ TEST_CASE("Sybil - Per-netgroup limit enforced", "[network][sybil][security][uni
             a->ConnectTo(victim->GetId(), victim->GetAddress());
         }
 
-        // Only 4 should connect (MAX_INBOUND_PER_NETGROUP = 4)
-        REQUIRE(orch.WaitForPeerCount(*victim, 4));
+        // All 10 should connect (Core behavior: no connection-time netgroup limit)
+        REQUIRE(orch.WaitForPeerCount(*victim, 10));
 
         size_t connected = victim->GetInboundPeerCount();
-        REQUIRE(connected == 4);
-        INFO("Per-netgroup limit enforced: only " << connected << " of 10 attackers connected");
+        REQUIRE(connected == 10);
+        INFO("All " << connected << " attackers from same /16 connected (eviction protects at capacity)");
     }
 
-    SECTION("Attacker cannot dominate victim's peer table from single /16") {
+    SECTION("Diverse peers connect alongside same-netgroup peers") {
         auto victim = factory.CreateNode(0);
 
         // Honest peers from diverse subnets (4 different /16s)
         auto honest = factory.CreateDiversePeers(4, 1);
 
-        // Attackers from same subnet (12 attackers, but only 4 can connect)
-        auto attackers = factory.CreateSybilCluster(12, 100, "10.99.0.0");
+        // Attackers from same subnet (all can connect)
+        auto attackers = factory.CreateSybilCluster(8, 100, "10.99.0.0");
 
         // Connect honest first - all 4 should succeed
         for (auto& h : honest) {
@@ -120,92 +122,55 @@ TEST_CASE("Sybil - Per-netgroup limit enforced", "[network][sybil][security][uni
         }
         REQUIRE(orch.WaitForPeerCount(*victim, 4));
 
-        // Connect attackers - only 4 should succeed due to per-netgroup limit
+        // Connect attackers - all 8 should connect (no connection-time limit)
         for (auto& a : attackers) {
             a->ConnectTo(victim->GetId(), victim->GetAddress());
         }
-        REQUIRE(orch.WaitForPeerCount(*victim, 8));  // 4 honest + 4 attackers
+        REQUIRE(orch.WaitForPeerCount(*victim, 12));  // 4 honest + 8 attackers
 
         size_t total = victim->GetInboundPeerCount();
-        REQUIRE(total == 8);
+        REQUIRE(total == 12);
 
-        size_t attacker_count = 4;  // Limited by per-netgroup
-        double attacker_ratio = 100.0 * attacker_count / total;
-
-        // Attacker ratio is 50%, not 75% as it would be without protection
-        REQUIRE(attacker_ratio == 50.0);
-        INFO("Attacker ratio limited to " << attacker_ratio << "% by per-netgroup limit");
+        INFO("All peers connected: " << total << " (4 honest + 8 attackers)");
+        INFO("Protection comes from eviction when at capacity, not connection-time limits");
     }
 }
 
-TEST_CASE("Sybil - Per-netgroup limits prevent rapid churn", "[network][sybil][security][unit]") {
+TEST_CASE("Sybil - Eviction protects netgroup diversity", "[network][sybil][security][unit]") {
     SimulatedNetwork network;
     PeerFactory factory(&network);
     TestOrchestrator orch(&network);
 
-    // Bitcoin Core parity: no per-IP connection throttling
-    // Protection comes from per-netgroup inbound limits (MAX_INBOUND_PER_NETGROUP = 4)
-    // and netgroup-based eviction
-
-    SECTION("Rapid connections from same netgroup - limited by netgroup") {
+    SECTION("Eviction targets largest netgroup") {
         auto victim = factory.CreateNode(0);
 
-        // Create 5 attackers from same /16 - only 4 can connect due to netgroup limit
-        auto attackers = factory.CreateSybilCluster(5, 100, "8.99.0.0");
+        // Connect 4 honest peers from diverse netgroups
+        auto honest = factory.CreateDiversePeers(4, 1);
+        for (auto& h : honest) {
+            h->ConnectTo(victim->GetId(), victim->GetAddress());
+        }
+        REQUIRE(orch.WaitForPeerCount(*victim, 4));
 
-        // Connect all 5 - only 4 succeed due to per-netgroup limit
+        // Connect 5 attackers from same netgroup
+        auto attackers = factory.CreateSybilCluster(5, 100, "10.50.0.0");
         for (auto& a : attackers) {
             a->ConnectTo(victim->GetId(), victim->GetAddress());
         }
+        REQUIRE(orch.WaitForPeerCount(*victim, 9));
 
-        REQUIRE(orch.WaitForPeerCount(*victim, 4));
-        REQUIRE(victim->GetInboundPeerCount() == 4);
-
-        INFO("Per-netgroup limit enforced: 4 of 5 attackers connected");
-    }
-
-    SECTION("Diverse peers not affected by netgroup limits") {
-        auto victim = factory.CreateNode(0);
-
-        // Create 4 diverse peers (each different IP/netgroup)
-        auto peers = factory.CreateDiversePeers(4, 100);
-
-        // All 4 should connect (different netgroups)
-        for (auto& p : peers) {
-            p->ConnectTo(victim->GetId(), victim->GetAddress());
+        // Let peers accrue uptime (exits protection window)
+        for (int i = 0; i < 10; i++) {
+            orch.AdvanceTime(std::chrono::seconds(1));
         }
 
-        REQUIRE(orch.WaitForPeerCount(*victim, 4));
-        REQUIRE(victim->GetInboundPeerCount() == 4);
+        // Trigger eviction
+        bool evicted = victim->GetNetworkManager().peer_manager().evict_inbound_peer();
+        REQUIRE(evicted);
 
-        INFO("4 diverse peers connected - different netgroups not limited");
-    }
-
-    SECTION("Netgroup limit persistent even after time") {
-        auto victim = factory.CreateNode(0);
-
-        // Create cluster of attackers from same /16
-        auto attackers = factory.CreateSybilCluster(4, 100, "8.88.0.0");
-
-        // Connect all 4 (at per-netgroup limit)
-        for (auto& a : attackers) {
-            a->ConnectTo(victim->GetId(), victim->GetAddress());
-        }
-        REQUIRE(orch.WaitForPeerCount(*victim, 4));
-
-        // Advance time
-        orch.AdvanceTime(std::chrono::seconds(61));
-        victim->ProcessPeriodic();
-
-        // 5th attacker from same /16 should still be rejected due to netgroup limit
-        auto extra = factory.CreateSybilCluster(1, 200, "8.88.0.0");
-        extra[0]->ConnectTo(victim->GetId(), victim->GetAddress());
-        orch.AdvanceTime(std::chrono::milliseconds(500));
-
-        // Still 4 (netgroup limit is persistent while connections exist)
-        REQUIRE(victim->GetInboundPeerCount() == 4);
-
-        INFO("Per-netgroup limit is persistent while connections exist");
+        // Eviction should target the attacker netgroup (largest with 5 peers)
+        // Honest peers from diverse netgroups should be protected
+        REQUIRE(victim->GetInboundPeerCount() == 8);
+        INFO("Eviction selected from largest netgroup (attackers)");
     }
 }
 
@@ -218,10 +183,10 @@ TEST_CASE("Sybil - Multiple /16 subnets behavior", "[network][sybil][security][u
     PeerFactory factory(&network);
     TestOrchestrator orch(&network);
 
-    SECTION("Attacker with multiple /16 subnets - each limited to 4") {
+    SECTION("Attacker with multiple /16 subnets - all connect") {
         auto victim = factory.CreateNode(0);
 
-        // Attackers from multiple /16 subnets (3 each, all should connect since < 4 per netgroup)
+        // Attackers from multiple /16 subnets
         auto attackers1 = factory.CreateSybilCluster(3, 100, "192.168.0.0");
         auto attackers2 = factory.CreateSybilCluster(3, 200, "10.10.0.0");
         auto attackers3 = factory.CreateSybilCluster(3, 300, "172.16.0.0");
@@ -233,7 +198,7 @@ TEST_CASE("Sybil - Multiple /16 subnets behavior", "[network][sybil][security][u
         REQUIRE_FALSE(AddressFactory::SameNetgroup(
             attackers1[0]->GetAddress(), attackers2[0]->GetAddress()));
 
-        // Connect all attackers - all 9 should connect (3 per netgroup, under limit of 4)
+        // Connect all attackers - all 9 should connect
         for (auto& a : attackers1) {
             a->ConnectTo(victim->GetId(), victim->GetAddress());
         }
@@ -249,33 +214,8 @@ TEST_CASE("Sybil - Multiple /16 subnets behavior", "[network][sybil][security][u
         size_t total = victim->GetInboundPeerCount();
         REQUIRE(total == 9);
 
-        // Note: Attacker with multiple /16s can still get significant presence
-        // This is expected - full eclipse requires many diverse /16s
-        // The protection limits damage from single-subnet attacks
-        INFO("Attacker with 3 diverse /16s connected " << total << " peers (3 per netgroup)");
-    }
-
-    SECTION("Attacker with multiple /16 subnets - excess per netgroup rejected") {
-        auto victim = factory.CreateNode(0);
-
-        // Attackers: 6 from each /16, but only 4 per netgroup should connect
-        auto attackers1 = factory.CreateSybilCluster(6, 100, "192.168.0.0");
-        auto attackers2 = factory.CreateSybilCluster(6, 200, "10.10.0.0");
-
-        // Connect all attackers
-        for (auto& a : attackers1) {
-            a->ConnectTo(victim->GetId(), victim->GetAddress());
-        }
-        for (auto& a : attackers2) {
-            a->ConnectTo(victim->GetId(), victim->GetAddress());
-        }
-
-        // Only 8 should connect (4 per netgroup)
-        REQUIRE(orch.WaitForPeerCount(*victim, 8));
-
-        size_t total = victim->GetInboundPeerCount();
-        REQUIRE(total == 8);
-        INFO("Per-netgroup limit enforced: 8 of 12 attackers connected (4 per /16)");
+        INFO("Attacker with 3 diverse /16s connected " << total << " peers");
+        INFO("Protection via eviction when at capacity");
     }
 }
 

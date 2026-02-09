@@ -214,15 +214,15 @@ TEST_CASE("BlockManager - AddToBlockIndex", "[chain][block_manager][unit]") {
         REQUIRE(bm.GetBlockCount() == 2);  // Still only 2 blocks
     }
 
-    SECTION("Add orphan block (parent not found) - rejected") {
-        // Test defensive behavior: orphans are rejected by BlockManager
+    SECTION("Add block with unknown parent - rejected") {
+        // Test defensive behavior: blocks with unknown parents are rejected by BlockManager
         uint256 unknown_parent;
         unknown_parent.SetHex("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
 
-        CBlockHeader orphan = CreateChildHeader(unknown_parent);
-        CBlockIndex* pindex = bm.AddToBlockIndex(orphan);
+        CBlockHeader unconnecting = CreateChildHeader(unknown_parent);
+        CBlockIndex* pindex = bm.AddToBlockIndex(unconnecting);
 
-        // Orphans are now rejected (defensive fix)
+        // Blocks with unknown parents are rejected
         REQUIRE(pindex == nullptr);
         REQUIRE(bm.GetBlockCount() == 1);  // Only genesis
     }
@@ -626,10 +626,9 @@ TEST_CASE("BlockManager - Edge Cases", "[chain][block_manager][unit]") {
         REQUIRE(bm.GetBlockCount() == 3);  // Genesis + 2 forks
     }
 
-    SECTION("Out of order block addition - orphans rejected") {
-        // Test defensive behavior: orphans (blocks with missing parents) are rejected
-        // This is correct - ChainstateManager handles orphans via AddOrphanHeader,
-        // not BlockManager::AddToBlockIndex
+    SECTION("Out of order block addition - unconnecting blocks rejected") {
+        // Test defensive behavior: blocks with missing parents are rejected.
+        // BlockManager only accepts blocks whose parent is already indexed.
         BlockManager bm;
         CBlockHeader genesis = CreateTestHeader();
         bm.Initialize(genesis);
@@ -638,14 +637,14 @@ TEST_CASE("BlockManager - Edge Cases", "[chain][block_manager][unit]") {
         CBlockHeader block2 = CreateChildHeader(block1.GetHash());
         CBlockHeader block3 = CreateChildHeader(block2.GetHash());
 
-        // Try to add block 3 first (orphan) - should be rejected
+        // Try to add block 3 first (parent unknown) - should be rejected
         CBlockIndex* p3 = bm.AddToBlockIndex(block3);
-        REQUIRE(p3 == nullptr);  // Orphan rejected
+        REQUIRE(p3 == nullptr);  // Rejected - parent not found
         REQUIRE(bm.GetBlockCount() == 1);  // Only genesis
 
-        // Try to add block 2 (still orphan) - should also be rejected
+        // Try to add block 2 (parent still unknown) - should also be rejected
         CBlockIndex* p2 = bm.AddToBlockIndex(block2);
-        REQUIRE(p2 == nullptr);  // Orphan rejected
+        REQUIRE(p2 == nullptr);  // Rejected - parent not found
         REQUIRE(bm.GetBlockCount() == 1);  // Still only genesis
 
         // Add block 1 (connects to genesis) - should succeed
@@ -668,132 +667,6 @@ TEST_CASE("BlockManager - Edge Cases", "[chain][block_manager][unit]") {
         REQUIRE(p3->pprev == p2);
         REQUIRE(p3->nHeight == 3);
         REQUIRE(bm.GetBlockCount() == 4);  // Complete chain
-    }
-}
-
-TEST_CASE("BlockManager - PruneStaleSideChains", "[chain][block_manager][unit][prune]") {
-    BlockManager bm;
-    CBlockHeader genesis = CreateTestHeader();
-    bm.Initialize(genesis);
-
-    SECTION("No pruning when chain is short") {
-        // Build a short chain (5 blocks)
-        CBlockHeader prev = genesis;
-        for (int i = 0; i < 5; i++) {
-            CBlockHeader block = CreateChildHeader(prev.GetHash(), 1000 + i);
-            CBlockIndex* pindex = bm.AddToBlockIndex(block);
-            bm.SetActiveTip(*pindex);
-            prev = block;
-        }
-
-        // Try to prune with max_depth=10 (chain height=5, cutoff would be negative)
-        size_t pruned = bm.PruneStaleSideChains(10);
-        REQUIRE(pruned == 0);
-        REQUIRE(bm.GetBlockCount() == 6);  // Genesis + 5 blocks
-    }
-
-    SECTION("Prunes stale side-chain leaves") {
-        // Build main chain: genesis -> block1 -> block2 -> ... -> block20
-        CBlockHeader prev = genesis;
-        std::vector<CBlockIndex*> main_chain;
-        for (int i = 0; i < 20; i++) {
-            CBlockHeader block = CreateChildHeader(prev.GetHash(), 1000 + i);
-            CBlockIndex* pindex = bm.AddToBlockIndex(block);
-            main_chain.push_back(pindex);
-            prev = block;
-        }
-        bm.SetActiveTip(*main_chain.back());
-
-        // Create a side chain at height 5: block5 -> side1 -> side2
-        CBlockHeader side1 = CreateChildHeader(main_chain[4]->GetBlockHash(), 5001);
-        CBlockHeader side2 = CreateChildHeader(side1.GetHash(), 5002);
-        bm.AddToBlockIndex(side1);
-        bm.AddToBlockIndex(side2);
-
-        REQUIRE(bm.GetBlockCount() == 23);  // Genesis + 20 main + 2 side
-
-        // Prune with max_depth=10 (cutoff = 20 - 10 = 10)
-        // Side chain at height 6-7 (block indices at height 6 and 7) should be pruned
-        size_t pruned = bm.PruneStaleSideChains(10);
-
-        REQUIRE(pruned == 2);  // Both side chain blocks pruned
-        REQUIRE(bm.GetBlockCount() == 21);  // Genesis + 20 main
-        REQUIRE(bm.LookupBlockIndex(side1.GetHash()) == nullptr);
-        REQUIRE(bm.LookupBlockIndex(side2.GetHash()) == nullptr);
-    }
-
-    SECTION("Does not prune active chain") {
-        // Build main chain
-        CBlockHeader prev = genesis;
-        for (int i = 0; i < 20; i++) {
-            CBlockHeader block = CreateChildHeader(prev.GetHash(), 1000 + i);
-            CBlockIndex* pindex = bm.AddToBlockIndex(block);
-            bm.SetActiveTip(*pindex);
-            prev = block;
-        }
-
-        size_t initial_count = bm.GetBlockCount();
-        size_t pruned = bm.PruneStaleSideChains(5);
-
-        REQUIRE(pruned == 0);
-        REQUIRE(bm.GetBlockCount() == initial_count);
-    }
-
-    SECTION("Does not prune headers with children") {
-        // Build main chain: genesis -> block1 -> ... -> block20
-        CBlockHeader prev = genesis;
-        std::vector<CBlockIndex*> main_chain;
-        for (int i = 0; i < 20; i++) {
-            CBlockHeader block = CreateChildHeader(prev.GetHash(), 1000 + i);
-            CBlockIndex* pindex = bm.AddToBlockIndex(block);
-            main_chain.push_back(pindex);
-            prev = block;
-        }
-        bm.SetActiveTip(*main_chain.back());
-
-        // Create side chain at height 3 with a long branch
-        // side1 (height 4) -> side2 (height 5) -> ... -> side10 (height 13)
-        CBlockHeader side_prev = CreateChildHeader(main_chain[2]->GetBlockHash(), 3001);
-        uint256 first_side_hash = side_prev.GetHash();  // Save hash before adding
-        bm.AddToBlockIndex(side_prev);
-        for (int i = 0; i < 9; i++) {
-            CBlockHeader side_block = CreateChildHeader(side_prev.GetHash(), 3002 + i);
-            bm.AddToBlockIndex(side_block);
-            side_prev = side_block;
-        }
-
-        size_t before_count = bm.GetBlockCount();  // Genesis + 20 + 10 = 31
-
-        // Prune with max_depth=10 (cutoff = 20 - 10 = 10)
-        // Side chain headers at height 4-9 have children, should NOT be pruned
-        // Side chain headers at height 10-13 are above cutoff, should NOT be pruned
-        // Only leaf at height 13 is above cutoff
-        size_t pruned = bm.PruneStaleSideChains(10);
-
-        // The side chain has internal nodes that shouldn't be pruned
-        // Leaf (height 13) is above cutoff (10), not pruned
-        // Headers 4-9 have children, not pruned
-        REQUIRE(pruned == 0);  // No pruning expected (all protected)
-        REQUIRE(bm.GetBlockCount() == before_count);
-
-        // Now prune with max_depth=5 (cutoff = 20 - 5 = 15)
-        // Leaf at height 13 is now below cutoff and should be pruned
-        // After that, height 12 becomes leaf and should be pruned, etc.
-        pruned = bm.PruneStaleSideChains(5);
-
-        // Should prune from leaf backwards until height >= cutoff or on active chain
-        // Heights 4-14 are below cutoff 15, all 10 side chain blocks pruned
-        REQUIRE(pruned == 10);
-        REQUIRE(bm.LookupBlockIndex(first_side_hash) == nullptr);
-    }
-
-    SECTION("Handles zero and negative max_depth") {
-        CBlockHeader block1 = CreateChildHeader(genesis.GetHash(), 1000);
-        bm.AddToBlockIndex(block1);
-        bm.SetActiveTip(*bm.LookupBlockIndex(block1.GetHash()));
-
-        REQUIRE(bm.PruneStaleSideChains(0) == 0);
-        REQUIRE(bm.PruneStaleSideChains(-1) == 0);
     }
 }
 
@@ -1330,11 +1203,11 @@ TEST_CASE("BlockManager Defensive - Performance", "[chain][block_manager][defens
 }
 
 //==============================================================================
-// Defensive Tests - Orphan Handling
+// Defensive Tests - Unknown Parent Handling
 //==============================================================================
 
-TEST_CASE("BlockManager Defensive - Orphan Rejection", "[chain][block_manager][defensive]") {
-    SECTION("AddToBlockIndex rejects orphan with unknown parent") {
+TEST_CASE("BlockManager Defensive - Unknown Parent Rejection", "[chain][block_manager][defensive]") {
+    SECTION("AddToBlockIndex rejects block with unknown parent") {
         BlockManager bm;
         CBlockHeader genesis = CreateTestHeader();
         bm.Initialize(genesis);
@@ -1342,10 +1215,10 @@ TEST_CASE("BlockManager Defensive - Orphan Rejection", "[chain][block_manager][d
         // Create header with unknown parent
         uint256 unknown;
         unknown.SetHex("4444444444444444444444444444444444444444444444444444444444444444");
-        CBlockHeader orphan = CreateChildHeader(unknown);
+        CBlockHeader unconnecting = CreateChildHeader(unknown);
 
-        // Should reject (orphans belong in ChainstateManager, not BlockManager)
-        CBlockIndex* pindex = bm.AddToBlockIndex(orphan);
+        // Should reject - BlockManager only accepts blocks whose parent is indexed
+        CBlockIndex* pindex = bm.AddToBlockIndex(unconnecting);
         REQUIRE(pindex == nullptr);
         REQUIRE(bm.GetBlockCount() == 1);  // Only genesis
     }
@@ -1358,7 +1231,7 @@ TEST_CASE("BlockManager Defensive - Orphan Rejection", "[chain][block_manager][d
         CBlockHeader block1 = CreateChildHeader(genesis.GetHash());
         CBlockHeader block2 = CreateChildHeader(block1.GetHash());
 
-        // Try to add block2 first (orphan) - rejected
+        // Try to add block2 first (parent not indexed) - rejected
         CBlockIndex* p2 = bm.AddToBlockIndex(block2);
         REQUIRE(p2 == nullptr);
 

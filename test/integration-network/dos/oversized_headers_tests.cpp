@@ -1,4 +1,15 @@
 // DoS: Oversized HEADERS message triggers disconnect
+//
+// CORE PARITY NOTE - MAX_HEADERS_SIZE DIFFERS:
+// - Unicity: MAX_HEADERS_SIZE = 80000 (80KB, ~1000 headers at 80 bytes each)
+// - Bitcoin Core: MAX_HEADERS_RESULTS = 2000 (headers per message)
+//
+// This is intentional for Unicity's headers-only chain design where we may
+// need larger header batches during initial sync. The limit is still bounded
+// to prevent memory exhaustion attacks.
+//
+// Core Reference: src/net_processing.cpp MAX_HEADERS_RESULTS
+// Unicity: include/network/protocol.hpp MAX_HEADERS_SIZE
 
 #include "catch_amalgamated.hpp"
 #include "infra/simulated_network.hpp"

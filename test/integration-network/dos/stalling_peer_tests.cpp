@@ -7,9 +7,14 @@
 #include "test_orchestrator.hpp"
 #include "network_observer.hpp"
 #include "chain/chainparams.hpp"
+#include "chain/block.hpp"
+#include "network/protocol.hpp"
+#include "network/message.hpp"
+#include "util/hash.hpp"
 
 using namespace unicity;
 using namespace unicity::chain;
+using namespace unicity::network;
 using namespace unicity::test;
 
 static struct TestSetup {
@@ -72,9 +77,9 @@ TEST_CASE("DoS: Stall causes sync peer switch", "[dos][network]") {
     SimulatedNode p2(3, &net); // healthy peer
     p1.ConnectTo(miner.GetId());
     p2.ConnectTo(miner.GetId());
-    uint64_t t = 1000; net.AdvanceTime(t);
-    for (int i = 0; i < 20 && p1.GetTipHeight() < 30; ++i) { t += 200; net.AdvanceTime(t); p1.GetNetworkManager().test_hook_check_initial_sync(); }
-    for (int i = 0; i < 20 && p2.GetTipHeight() < 30; ++i) { t += 200; net.AdvanceTime(t); p2.GetNetworkManager().test_hook_check_initial_sync(); }
+    net.AdvanceTime(1000);
+    for (int i = 0; i < 20 && p1.GetTipHeight() < 30; ++i) { net.AdvanceTime(200); p1.CheckInitialSync(); }
+    for (int i = 0; i < 20 && p2.GetTipHeight() < 30; ++i) { net.AdvanceTime(200); p2.CheckInitialSync(); }
     REQUIRE(p1.GetTipHeight() == 30);
     REQUIRE(p2.GetTipHeight() == 30);
 
@@ -82,11 +87,11 @@ TEST_CASE("DoS: Stall causes sync peer switch", "[dos][network]") {
     SimulatedNode victim(4, &net);
     victim.ConnectTo(p1.GetId());
     victim.ConnectTo(p2.GetId());
-    t += 200; net.AdvanceTime(t);
+    net.AdvanceTime(200);
 
     // Start initial sync (single sync peer policy)
-    victim.GetNetworkManager().test_hook_check_initial_sync();
-    t += 200; net.AdvanceTime(t);
+    victim.CheckInitialSync();
+    net.AdvanceTime(200);
 
     // Record initial GETHEADERS counts
     int gh_p1_before = net.CountCommandSent(victim.GetId(), p1.GetId(), protocol::commands::GETHEADERS);
@@ -96,19 +101,19 @@ TEST_CASE("DoS: Stall causes sync peer switch", "[dos][network]") {
     SimulatedNetwork::NetworkConditions drop; drop.packet_loss_rate = 1.0;
     net.SetLinkConditions(p1.GetId(), victim.GetId(), drop);
 
-    // Advance beyond stall timeout and process timers
-    for (int i = 0; i < 5; ++i) {
-        t += 60 * 1000;
-        net.AdvanceTime(t);
-        victim.GetNetworkManager().test_hook_header_sync_process_timers();
+    // Advance beyond stall timeout (5 min base + expected headers time) and process timers
+    // With 30 blocks and regtest 2-min spacing, we're only ~1 hour behind, so timeout is ~5 min
+    for (int i = 0; i < 6; ++i) {  // 6 minutes to exceed 5-min base timeout
+        net.AdvanceTime(60 * 1000);
+        victim.ProcessHeaderSyncTimers();
     }
 
     // Give more time for stall disconnect to complete and state to stabilize
-    t += 2000; net.AdvanceTime(t);
+    net.AdvanceTime(2000);
 
     // Re-select sync peer
-    victim.GetNetworkManager().test_hook_check_initial_sync();
-    t += 2000; net.AdvanceTime(t);  // Allow sync peer selection to complete fully
+    victim.CheckInitialSync();
+    net.AdvanceTime(2000);  // Allow sync peer selection to complete fully
 
     // Verify new GETHEADERS went to p2 (the healthy peer)
     int gh_p1_after = net.CountCommandSent(victim.GetId(), p1.GetId(), protocol::commands::GETHEADERS);
@@ -117,10 +122,9 @@ TEST_CASE("DoS: Stall causes sync peer switch", "[dos][network]") {
     CHECK(gh_p1_after >= gh_p1_before);
 
     // Sync completes - allow more time for sync to finish
-    // Don't call test_hook_check_initial_sync() repeatedly as it interferes with ongoing sync
-    for (int i = 0; i < 20 && victim.GetTipHeight() < 30; ++i) {
-        t += 500;
-        net.AdvanceTime(t);
+    for (int i = 0; i < 40 && victim.GetTipHeight() < 30; ++i) {
+        net.AdvanceTime(500);
+        victim.CheckInitialSync();
     }
     CHECK(victim.GetTipHeight() == 30);
 }
@@ -142,14 +146,12 @@ TEST_CASE("DoS: Stall timeout disabled post-IBD", "[dos][network][ibd]") {
 
     // Connect node2 and sync it
     node2.ConnectTo(node1.GetId());
-    uint64_t t = 1000;
-    net.AdvanceTime(t);
+    net.AdvanceTime(1000);
 
     // Wait for sync to complete
     for (int i = 0; i < 20 && node2.GetTipHeight() < 30; ++i) {
-        t += 1000;
-        net.AdvanceTime(t);
-        node2.GetNetworkManager().test_hook_check_initial_sync();
+        net.AdvanceTime(1000);
+        node2.CheckInitialSync();
     }
     REQUIRE(node2.GetTipHeight() == 30);
 
@@ -169,11 +171,10 @@ TEST_CASE("DoS: Stall timeout disabled post-IBD", "[dos][network][ibd]") {
     net.SetLinkConditions(node1.GetId(), node2.GetId(), drop);
 
     // Advance way beyond stall timeout (multiple timeout periods)
-    // Normal stall timeout is ~2min, we'll wait 10+ minutes
+    // Normal stall timeout is 5min base, we'll wait 10+ minutes
     for (int i = 0; i < 12; ++i) {
-        t += 60 * 1000;  // Advance 1 minute
-        net.AdvanceTime(t);
-        node2.GetNetworkManager().test_hook_header_sync_process_timers();
+        net.AdvanceTime(60 * 1000);  // Advance 1 minute
+        node2.ProcessHeaderSyncTimers();
     }
 
     // CRITICAL: Verify peer was NOT disconnected post-IBD

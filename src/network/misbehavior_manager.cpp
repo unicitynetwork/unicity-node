@@ -9,7 +9,7 @@
 namespace unicity {
 namespace network {
 
-MisbehaviorManager::MisbehaviorManager(util::ThreadSafeMap<int, PeerTrackingData>& peer_states)
+MisbehaviorManager::MisbehaviorManager(util::ThreadSafeMap<int, PeerPtr>& peer_states)
     : peer_states_(peer_states) {}
 
 void MisbehaviorManager::ReportInvalidPoW(int peer_id) {
@@ -32,10 +32,6 @@ void MisbehaviorManager::ReportInvalidHeader(int peer_id, const std::string& rea
   Misbehaving(peer_id, "invalid header: " + reason);
 }
 
-void MisbehaviorManager::ReportTooManyOrphans(int peer_id) {
-  Misbehaving(peer_id, "exceeded orphan header limit");
-}
-
 void MisbehaviorManager::ReportPreVerackMessage(int peer_id) {
   Misbehaving(peer_id, "protocol message before handshake complete");
 }
@@ -43,20 +39,21 @@ void MisbehaviorManager::ReportPreVerackMessage(int peer_id) {
 bool MisbehaviorManager::Misbehaving(int peer_id, const std::string& reason) {
   bool should_disconnect = false;
 
-  peer_states_.Modify(peer_id, [&](PeerTrackingData& state) {
-    PeerMisbehaviorData& data = state.misbehavior;
+  peer_states_.Modify(peer_id, [&](PeerPtr& peer) {
+    PeerMisbehaviorData& data = peer->misbehavior();
 
-    // Mark for discouragement
+    // Mark for discouragement and increment lifetime counter
     data.should_discourage = true;
+    data.misbehavior_count++;
 
-    LOG_NET_INFO("Misbehaving: peer={} ({}) {}", peer_id, data.address, reason);
-
-    // Check if peer has NoBan permission
+    // NoBan peers are protected from disconnection (Manual peers get NoBan at grant time)
     if (HasPermission(data.permissions, NetPermissionFlags::NoBan)) {
-      LOG_NET_WARN("Not punishing noban peer {}", peer_id);
+      LOG_NET_WARN("misbehaving: peer={} ({}) {} (warning, not disconnecting due to noban)", peer_id, data.address,
+                   reason);
       return;
     }
 
+    LOG_NET_INFO("misbehaving: peer={} ({}) {} (disconnecting)", peer_id, data.address, reason);
     should_disconnect = true;
   });
 
@@ -65,75 +62,34 @@ bool MisbehaviorManager::Misbehaving(int peer_id, const std::string& reason) {
 
 bool MisbehaviorManager::ShouldDisconnect(int peer_id) const {
   bool result = false;
-  peer_states_.Read(peer_id, [&](const PeerTrackingData& state) {
-    // Never disconnect peers with NoBan permission
-    if (HasPermission(state.misbehavior.permissions, NetPermissionFlags::NoBan)) {
+  peer_states_.Read(peer_id, [&](const PeerPtr& peer) {
+    // NoBan peers are never disconnected (Manual peers get NoBan at grant time)
+    if (HasPermission(peer->permissions(), NetPermissionFlags::NoBan)) {
       return;
     }
-    result = state.misbehavior.should_discourage;
+    result = peer->misbehavior().should_discourage;
   });
   return result;
 }
 
 bool MisbehaviorManager::IsMisbehaving(int peer_id) const {
   bool result = false;
-  peer_states_.Read(peer_id, [&](const PeerTrackingData& state) { result = state.misbehavior.should_discourage; });
+  // Check lifetime misbehavior count (not the one-shot should_discourage flag)
+  peer_states_.Read(peer_id, [&](const PeerPtr& peer) { result = peer->misbehavior().misbehavior_count > 0; });
   return result;
 }
 
 void MisbehaviorManager::NoteInvalidHeaderHash(int peer_id, const uint256& hash) {
   peer_states_.Modify(peer_id,
-                      [&](PeerTrackingData& state) { state.misbehavior.invalid_header_hashes.insert(hash.GetHex()); });
+                      [&](PeerPtr& peer) { peer->misbehavior().invalid_header_hashes.insert(hash.GetHex()); });
 }
 
 bool MisbehaviorManager::HasInvalidHeaderHash(int peer_id, const uint256& hash) const {
   bool result = false;
-  peer_states_.Read(peer_id, [&](const PeerTrackingData& state) {
-    result = state.misbehavior.invalid_header_hashes.find(hash.GetHex()) !=
-             state.misbehavior.invalid_header_hashes.end();
+  peer_states_.Read(peer_id, [&](const PeerPtr& peer) {
+    result = peer->misbehavior().invalid_header_hashes.find(hash.GetHex()) !=
+             peer->misbehavior().invalid_header_hashes.end();
   });
-  return result;
-}
-
-void MisbehaviorManager::IncrementUnconnectingHeaders(int peer_id) {
-  bool threshold_exceeded = false;
-
-  peer_states_.Modify(peer_id, [&](PeerTrackingData& state) {
-    PeerMisbehaviorData& data = state.misbehavior;
-    if (data.unconnecting_penalized) {
-      return;  // already penalized; do nothing further
-    }
-    data.num_unconnecting_headers_msgs++;
-
-    LOG_NET_TRACE("IncrementUnconnectingHeaders: peer {} now has {} unconnecting msgs (threshold={})", peer_id,
-                  data.num_unconnecting_headers_msgs, MAX_UNCONNECTING_HEADERS);
-
-    if (data.num_unconnecting_headers_msgs >= MAX_UNCONNECTING_HEADERS) {
-      LOG_NET_TRACE("peer {} ({}) sent too many unconnecting headers ({} >= {})", peer_id, data.address,
-                    data.num_unconnecting_headers_msgs, MAX_UNCONNECTING_HEADERS);
-      data.unconnecting_penalized = true;  // latch to avoid repeated penalties
-      threshold_exceeded = true;
-    }
-  });
-
-  if (!peer_states_.Contains(peer_id)) {
-    LOG_NET_TRACE("IncrementUnconnectingHeaders: peer {} not found in misbehavior map", peer_id);
-    return;
-  }
-
-  if (threshold_exceeded) {
-    Misbehaving(peer_id, "too many unconnecting headers");
-  }
-}
-
-void MisbehaviorManager::ResetUnconnectingHeaders(int peer_id) {
-  peer_states_.Modify(peer_id, [](PeerTrackingData& state) { state.misbehavior.num_unconnecting_headers_msgs = 0; });
-}
-
-int MisbehaviorManager::GetUnconnectingHeadersCount(int peer_id) const {
-  int result = 0;
-  peer_states_.Read(peer_id,
-                    [&](const PeerTrackingData& state) { result = state.misbehavior.num_unconnecting_headers_msgs; });
   return result;
 }
 

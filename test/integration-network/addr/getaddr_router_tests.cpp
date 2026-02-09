@@ -1,17 +1,20 @@
 #include "catch_amalgamated.hpp"
 #include "infra/simulated_network.hpp"
 #include "infra/simulated_node.hpp"
+#include "infra/test_access.hpp"
 #include "network/network_manager.hpp"
 #include "network/message.hpp"
 #include "util/hash.hpp"
-#include "network/peer_discovery_manager.hpp"
+#include "network/addr_relay_manager.hpp"
 #include "test_orchestrator.hpp"
 #include <set>
 
 using namespace unicity;
+using unicity::test::AddrRelayManagerTestAccess;
 using namespace unicity::test;
 using namespace unicity::network;
 using namespace unicity::protocol;
+using unicity::test::NetworkManagerTestAccess;
 
 static std::vector<uint8_t> MakeWire(const std::string& cmd, const std::vector<uint8_t>& payload) {
     protocol::MessageHeader hdr(magic::REGTEST, cmd, static_cast<uint32_t>(payload.size()));
@@ -53,7 +56,7 @@ TEST_CASE("GETADDR ignored pre-VERACK (parity)", "[network][addr][parity][prever
     // so they never reach the handler stats. The test verifies the behavior (no response)
     // which is what matters from a protocol perspective.
     auto& nm = server.GetNetworkManager();
-    auto stats = nm.discovery_manager_for_test().GetGetAddrDebugStats();
+    auto stats = NetworkManagerTestAccess::GetDiscoveryManager(nm).GetGetAddrDebugStats();
     // Note: ignored_prehandshake counter is no longer incremented since gating happens at router
     // The important check is that no ADDR response was sent (verified above)
     REQUIRE(payloads.empty());  // Verify pre-VERACK gating works
@@ -68,27 +71,27 @@ TEST_CASE("GETADDR router counters: served, repeat, outbound ignored", "[network
     SimulatedNode client(2, &net);
 
     auto& srv_nm = server.GetNetworkManager();
-    auto base0 = srv_nm.discovery_manager_for_test().GetGetAddrDebugStats();
+    auto base0 = NetworkManagerTestAccess::GetDiscoveryManager(srv_nm).GetGetAddrDebugStats();
 
     REQUIRE(client.ConnectTo(server.GetId()));
     REQUIRE(orch.WaitForConnection(server, client));
     for (int i = 0; i < 12; ++i) orch.AdvanceTime(std::chrono::milliseconds(100));
 
     // Served once due to client's auto GETADDR after handshake
-    auto after_conn = srv_nm.discovery_manager_for_test().GetGetAddrDebugStats();
+    auto after_conn = NetworkManagerTestAccess::GetDiscoveryManager(srv_nm).GetGetAddrDebugStats();
     REQUIRE(after_conn.served == base0.served + 1);
 
     // Repeat ignored (explicit GETADDR on same connection)
     net.SendMessage(client.GetId(), server.GetId(), MakeWire(commands::GETADDR, {}));
     orch.AdvanceTime(std::chrono::milliseconds(200));
-    auto s2 = srv_nm.discovery_manager_for_test().GetGetAddrDebugStats();
+    auto s2 = NetworkManagerTestAccess::GetDiscoveryManager(srv_nm).GetGetAddrDebugStats();
     REQUIRE(s2.ignored_repeat >= 1);
 
     // Outbound ignored (server sends to client)
     net.SendMessage(server.GetId(), client.GetId(), MakeWire(commands::GETADDR, {}));
     orch.AdvanceTime(std::chrono::milliseconds(200));
     auto& cli_nm = client.GetNetworkManager();
-    auto cstats = cli_nm.discovery_manager_for_test().GetGetAddrDebugStats();
+    auto cstats = NetworkManagerTestAccess::GetDiscoveryManager(cli_nm).GetGetAddrDebugStats();
     REQUIRE(cstats.ignored_outbound >= 1);
 }
 
@@ -160,7 +163,7 @@ TEST_CASE("GETADDR must not include requester's own address", "[network][addr][p
     // Preload server AddrMan with client's address
     auto& am = server.GetNetworkManager().discovery_manager();
     auto client_addr = protocol::NetworkAddress::from_string(client.GetAddress(), client.GetPort());
-    am.addr_manager_for_test().add(client_addr);
+    AddrRelayManagerTestAccess::GetAddrManager(am).add(client_addr);
 
     REQUIRE(client.ConnectTo(server.GetId()));
     REQUIRE(orch.WaitForConnection(server, client));
