@@ -112,7 +112,7 @@ static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = 0;
@@ -132,7 +132,7 @@ static CBlockHeader MakeChild(const CBlockIndex* prev, uint32_t nTime, uint32_t 
     CBlockHeader h;
     h.nVersion = 1;
     h.hashPrevBlock = prev ? prev->GetBlockHash() : uint256();
-    h.minerAddress.SetNull();
+    h.payloadRoot.SetNull();
     h.nTime = nTime;
     h.nBits = nBits;
     h.nNonce = 0;
@@ -145,7 +145,7 @@ static CBlockHeader MineChild(const CBlockIndex* prev, const ChainParams& params
     CBlockHeader h;
     h.nVersion = 1;
     h.hashPrevBlock = prev ? prev->GetBlockHash() : uint256();
-    h.minerAddress.SetNull();
+    h.payloadRoot.SetNull();
     h.nTime = nTime;
     h.nBits = consensus::GetNextWorkRequired(prev, params);
     h.nNonce = 0;
@@ -675,7 +675,7 @@ TEST_CASE("Chainstate Load: revalidate fails on corrupted block", "[chain][chain
                 CBlockHeader h;
                 h.nVersion = blk["version"].get<int32_t>();
                 h.hashPrevBlock.SetHex(blk["prev_hash"].get<std::string>());
-                h.minerAddress.SetHex(blk["miner_address"].get<std::string>());
+                h.payloadRoot.SetHex(blk["payload_root"].get<std::string>());
                 h.nTime = blk["time"].get<uint32_t>();
                 h.nBits = blk["bits"].get<uint32_t>();
                 h.nNonce = blk["nonce"].get<uint32_t>();
@@ -693,7 +693,7 @@ TEST_CASE("Chainstate Load: revalidate fails on corrupted block", "[chain][chain
                 CBlockHeader h;
                 h.nVersion = blk["version"].get<int32_t>();
                 h.hashPrevBlock = new_A_hash;
-                h.minerAddress.SetHex(blk["miner_address"].get<std::string>());
+                h.payloadRoot.SetHex(blk["payload_root"].get<std::string>());
                 h.nTime = blk["time"].get<uint32_t>();
                 h.nBits = blk["bits"].get<uint32_t>();
                 h.nNonce = blk["nonce"].get<uint32_t>();
@@ -933,7 +933,7 @@ TEST_CASE("CChain::FindFork returns correct fork point", "[chain][findfork]") {
     CBlockHeader g;
     g.nVersion = 1;
     g.hashPrevBlock.SetNull();
-    g.minerAddress.SetNull();
+    g.payloadRoot.SetNull();
     g.nTime = 1000;
     g.nBits = 0x207fffff;
     g.nNonce = 0;
@@ -1760,7 +1760,7 @@ static CBlockHeader CreateTipsTestHeader(uint32_t nTime = 1234567890, uint32_t n
   CBlockHeader header;
   header.nVersion = 1;
   header.hashPrevBlock.SetNull();
-  header.minerAddress.SetNull();
+  header.payloadRoot.SetNull();
   header.nTime = nTime;
   header.nBits = nBits;
   header.nNonce = 0;

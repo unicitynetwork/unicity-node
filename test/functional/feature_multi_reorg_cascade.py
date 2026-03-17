@@ -26,10 +26,10 @@ from test_node import TestNode
 from util import pick_free_port
 
 
-def generate_chain(node, num_blocks, miner_address="0000000000000000000000000000000000000000"):
+def generate_chain(node, num_blocks, payload_root="0000000000000000000000000000000000000000"):
     """Generate a chain of blocks on a node."""
     print(f"  Generating {num_blocks} blocks...")
-    result = node.generate(num_blocks, miner_address, timeout=300)
+    result = node.generate(num_blocks, payload_root, timeout=300)
     return result
 
 

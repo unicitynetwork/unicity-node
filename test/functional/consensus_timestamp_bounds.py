@@ -40,7 +40,7 @@ def hex_to_20(hex_str: str) -> bytes:
 
 
 def build_header_hex(prev_hash_hex_be: str, n_time: int, n_bits_u32: int, n_nonce: int = 0, version: int = 1, miner_addr_hex: str | None = None) -> str:
-    # Fields: nVersion(4) | prevhash(32 LE raw) | minerAddress(20) | nTime(4 LE) | nBits(4 LE) | nNonce(4 LE) | hashRandomX(32)
+    # Fields: nVersion(4) | prevhash(32 LE raw) | payloadRoot(20) | nTime(4 LE) | nBits(4 LE) | nNonce(4 LE) | hashRandomX(32)
     prev_le = hex_to_le32(prev_hash_hex_be)
     miner = hex_to_20(miner_addr_hex) if miner_addr_hex else (b"\x00" * 20)
     rx = b"\x00" * 32

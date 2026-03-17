@@ -222,7 +222,7 @@ BlockTemplate CPUMiner::CreateBlockTemplate() {
   // Fill header
   tmpl.header.nVersion = 1;
   tmpl.header.hashPrevBlock = tmpl.hashPrevBlock;
-  tmpl.header.minerAddress = GetMiningAddress();  // Thread-safe access via mutex
+  tmpl.header.payloadRoot = GetMiningAddress();  // Thread-safe access via mutex
   tmpl.header.nTime = static_cast<uint32_t>(util::GetTime());
   tmpl.header.nBits = tmpl.nBits;
   tmpl.header.nNonce = 0;

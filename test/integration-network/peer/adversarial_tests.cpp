@@ -685,7 +685,7 @@ TEST_CASE("Adversarial - MessageSizeLimits", "[adversarial][malformed][dos]") {
             std::array<uint8_t, 32> prev_hash{};
             s.write_bytes(prev_hash.data(), 32);  // hashPrevBlock (32)
             std::array<uint8_t, 20> miner_addr{};
-            s.write_bytes(miner_addr.data(), 20);  // minerAddress (20)
+            s.write_bytes(miner_addr.data(), 20);  // payloadRoot (20)
             s.write_uint32(1234567890);  // timestamp (4)
             s.write_uint32(0x1d00ffff);  // bits (4)
             s.write_uint32(i);  // nonce (4)
@@ -1309,7 +1309,7 @@ static std::vector<uint8_t> create_headers_message(uint32_t magic) {
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = 1234567890;
     header.nBits = 0x1d00ffff;
     header.nNonce = 0;
@@ -1863,7 +1863,7 @@ TEST_CASE("Handshake Security - Large message before VERACK", "[adversarial][han
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = 1234567890 + i;
         header.nBits = 0x1d00ffff;
         header.nNonce = i;

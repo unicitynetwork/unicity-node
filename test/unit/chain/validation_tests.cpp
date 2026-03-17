@@ -38,7 +38,7 @@ static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = nNonce;
@@ -554,7 +554,7 @@ TEST_CASE("CheckHeadersPoW - Direct validation function tests", "[validation][po
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = 1234567890;
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -580,7 +580,7 @@ TEST_CASE("CheckHeadersPoW - Direct validation function tests", "[validation][po
             CBlockHeader header;
             header.nVersion = 1;
             header.hashPrevBlock.SetNull();
-            header.minerAddress.SetNull();
+            header.payloadRoot.SetNull();
             header.nTime = 1234567890;
             header.nBits = 0x207fffff;
             header.nNonce = 0;

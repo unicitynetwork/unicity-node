@@ -125,7 +125,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock = prev_hash;
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x00000001;  // Impossible difficulty
         header.nNonce = 0;
@@ -156,7 +156,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -190,7 +190,7 @@ public:
         CBlockHeader header1;
         header1.nVersion = 1;
         header1.hashPrevBlock = prev_hash;
-        header1.minerAddress.SetNull();
+        header1.payloadRoot.SetNull();
         header1.nTime = std::time(nullptr);
         header1.nBits = 0x207fffff;
         header1.nNonce = 1;
@@ -199,7 +199,7 @@ public:
         CBlockHeader header2;
         header2.nVersion = 1;
         header2.hashPrevBlock.SetNull();  // Wrong! Doesn't connect to header1
-        header2.minerAddress.SetNull();
+        header2.payloadRoot.SetNull();
         header2.nTime = std::time(nullptr);
         header2.nBits = 0x207fffff;
         header2.nNonce = 2;
@@ -403,7 +403,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -704,7 +704,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr) + 3600;  // 1 hour in future (exceeds 10 min limit)
         header.nBits = 0x207fffff;  // Regtest difficulty
         header.nNonce = 0;
@@ -727,7 +727,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = 0;  // Invalid - timestamp zero
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -750,7 +750,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0;  // Invalid - impossible difficulty
         header.nNonce = 0;
@@ -773,7 +773,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0xFFFFFFFF;  // Invalid - trivial difficulty
         header.nNonce = 0;
@@ -797,7 +797,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x207fffff;
         header.nNonce = 12345;
@@ -828,7 +828,7 @@ public:
         // Create header A pointing to a fake "B" hash
         CBlockHeader headerA;
         headerA.nVersion = 1;
-        headerA.minerAddress.SetNull();
+        headerA.payloadRoot.SetNull();
         headerA.nTime = std::time(nullptr);
         headerA.nBits = 0x207fffff;
         headerA.nNonce = 1;
@@ -837,7 +837,7 @@ public:
         // Create header B
         CBlockHeader headerB;
         headerB.nVersion = 1;
-        headerB.minerAddress.SetNull();
+        headerB.payloadRoot.SetNull();
         headerB.nTime = std::time(nullptr);
         headerB.nBits = 0x207fffff;
         headerB.nNonce = 2;
@@ -870,7 +870,7 @@ public:
         CBlockHeader header;
         header.nVersion = 0;  // Invalid version
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -893,7 +893,7 @@ public:
         CBlockHeader header;
         header.nVersion = -1;  // Negative version (will be interpreted as large unsigned)
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -927,7 +927,7 @@ public:
                 std::memcpy(random_prev.begin() + j * 8, &r, 8);
             }
             header.hashPrevBlock = random_prev;
-            header.minerAddress.SetNull();
+            header.payloadRoot.SetNull();
             header.nTime = std::time(nullptr);
             header.nBits = 0x207fffff;
             header.nNonce = static_cast<uint32_t>(i);

@@ -196,7 +196,7 @@ bool BlockManager::Save(const std::string& filepath) const {
 
       // Header fields
       block_data["version"] = block_index->nVersion;
-      block_data["miner_address"] = block_index->minerAddress.ToString();
+      block_data["payload_root"] = block_index->payloadRoot.ToString();
       block_data["time"] = block_index->nTime;
       block_data["bits"] = block_index->nBits;
       block_data["nonce"] = block_index->nNonce;
@@ -324,7 +324,7 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
 
     // Required fields for each block entry 
     static const std::vector<std::string> required_fields = {
-        "hash", "prev_hash", "version", "miner_address", "time",
+        "hash", "prev_hash", "version", "payload_root", "time",
         "bits", "nonce",     "hash_randomx", "height", "chainwork", "status"};
 
     for (const auto& block_data : blocks) {
@@ -352,7 +352,7 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
       // Create header
       CBlockHeader header;
       header.nVersion = block_data["version"].get<int32_t>();
-      header.minerAddress.SetHex(block_data["miner_address"].get<std::string>());
+      header.payloadRoot.SetHex(block_data["payload_root"].get<std::string>());
       header.nTime = block_data["time"].get<uint32_t>();
       header.nBits = block_data["bits"].get<uint32_t>();
       header.nNonce = block_data["nonce"].get<uint32_t>();

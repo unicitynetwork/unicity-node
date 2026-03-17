@@ -80,12 +80,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     }
     memcpy(header.hashPrevBlock.begin(), prevHash, 32);
 
-    // minerAddress (20 bytes)
-    uint8_t minerAddr[20];
+    // payloadRoot (20 bytes)
+    uint8_t payloadRoot[20];
     for (int i = 0; i < 20; i++) {
-        minerAddr[i] = input.read<uint8_t>();
+        payloadRoot[i] = input.read<uint8_t>();
     }
-    memcpy(header.minerAddress.begin(), minerAddr, 20);
+    memcpy(header.payloadRoot.begin(), payloadRoot, 20);
 
     header.nTime = input.read<uint32_t>();
     header.nBits = input.read<uint32_t>();

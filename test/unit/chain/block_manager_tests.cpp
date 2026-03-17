@@ -40,7 +40,7 @@ static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = nNonce;
@@ -63,7 +63,7 @@ static CBlockHeader MakeChild(const CBlockIndex *parent, uint32_t nTime, uint32_
     child.nTime = nTime;
     child.nBits = nBits;
     child.nNonce = 0;
-    child.minerAddress.SetNull();
+    child.payloadRoot.SetNull();
     child.hashRandomX.SetNull();
     return child;
 }
@@ -112,7 +112,7 @@ public:
             json block_data;
             block_data["hash"] = hash.ToString();
             block_data["version"] = block_index.nVersion;
-            block_data["miner_address"] = block_index.minerAddress.ToString();
+            block_data["payload_root"] = block_index.payloadRoot.ToString();
             block_data["time"] = block_index.nTime;
             block_data["bits"] = block_index.nBits;
             block_data["nonce"] = block_index.nNonce;
@@ -1333,7 +1333,7 @@ TEST_CASE("BlockManager - Corruption Recovery", "[chain][block_manager][corrupti
         json blocks = json::array();
         json block;
         block["hash"] = CreateTestHeader().GetHash().ToString();
-        // Missing: prev_hash, version, miner_address, time, bits, nonce, hash_randomx, height, chainwork, status
+        // Missing: prev_hash, version, payload_root, time, bits, nonce, hash_randomx, height, chainwork, status
         blocks.push_back(block);
         root["blocks"] = blocks;
 

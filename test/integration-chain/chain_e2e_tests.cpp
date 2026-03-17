@@ -21,7 +21,7 @@ CBlockHeader CreateTestHeader(const uint256& prevHash, uint32_t nTime, uint32_t 
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock = prevHash;
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = nTime;
     header.nBits = 0x207fffff;
     header.nNonce = nNonce;

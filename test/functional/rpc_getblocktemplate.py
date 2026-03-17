@@ -208,7 +208,7 @@ def test_submitblock_invalid_prevhash(node):
     fake_header = (
         "01000000" +                              # version = 1
         "ff" * 32 +                               # prevhash = all 0xff (doesn't exist)
-        "00" * 20 +                               # minerAddress = zeros
+        "00" * 20 +                               # payloadRoot = zeros
         "00000000" +                              # time = 0
         "ffff001d" +                              # bits (doesn't matter)
         "00000000" +                              # nonce = 0

@@ -69,19 +69,17 @@ All integers use little-endian byte order except where noted.
 | timestamp | 4 | uint32_t | Unix timestamp (LE) |
 | address | 26 | NetworkAddress | Network address |
 
-
-
 ### Block Header (100 bytes)
 
-| Field | Size | Type | Description |
-|-------|------|------|-------------|
-| nVersion | 4 | int32_t | Block version |
-| hashPrevBlock | 32 | uint256 | Previous block hash |
-| minerAddress | 20 | uint160 | Miner address |
-| nTime | 4 | uint32_t | Timestamp |
-| nBits | 4 | uint32_t | Difficulty target |
-| nNonce | 4 | uint32_t | Nonce |
-| hashRandomX | 32 | uint256 | RandomX hash |
+| Field         | Size | Type     | Description         |
+|---------------|------|----------|---------------------|
+| nVersion      | 4    | int32_t  | Block version       |
+| hashPrevBlock | 32   | uint256  | Previous block hash |
+| payloadRoot   | 20   | uint160  | Hash of payload     |
+| nTime         | 4    | uint32_t | Timestamp           |
+| nBits         | 4    | uint32_t | Difficulty target   |
+| nNonce        | 4    | uint32_t | Nonce               |
+| hashRandomX   | 32   | uint256  | RandomX hash        |
 
 ## Messages
 

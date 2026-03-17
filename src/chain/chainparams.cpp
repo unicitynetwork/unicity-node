@@ -35,7 +35,7 @@ CBlockHeader CreateGenesisBlock(uint32_t nTime, uint32_t nNonce, uint32_t nBits,
   CBlockHeader genesis;
   genesis.nVersion = nVersion;
   genesis.hashPrevBlock.SetNull();
-  genesis.minerAddress.SetNull();
+  genesis.payloadRoot.SetNull();
   genesis.nTime = nTime;
   genesis.nBits = nBits;
   genesis.nNonce = nNonce;

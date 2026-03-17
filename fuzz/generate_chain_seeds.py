@@ -29,7 +29,7 @@ def build_simple_chain():
     # Action 0: Extend main chain (repeat 10 times)
     for i in range(10):
         data.append(0)  # action = extend main chain
-        # Miner address (20 bytes)
+        # Payload root (20 bytes)
         data.extend([i] * 20)
         data.append(i * 10)  # time offset
         data.extend([0, 0, 0, i])  # nonce

@@ -25,7 +25,7 @@ from test_node import TestNode
 from util import pick_free_port
 
 
-def generate_chain(node, num_blocks, miner_address="0000000000000000000000000000000000000000"):
+def generate_chain(node, num_blocks, payload_root="0000000000000000000000000000000000000000"):
     """Generate blocks in batches."""
     print(f"    Generating {num_blocks} blocks...")
     batch_size = 1000
@@ -34,7 +34,7 @@ def generate_chain(node, num_blocks, miner_address="0000000000000000000000000000
     
     while remaining > 0:
         to_generate = min(remaining, batch_size)
-        node.generate(to_generate, miner_address, timeout=300)
+        node.generate(to_generate, payload_root, timeout=300)
         remaining -= to_generate
         if remaining > 0:
             elapsed = time.time() - start
@@ -135,7 +135,7 @@ def main():
         time.sleep(1)
         
         # Use different miner address to create different blocks
-        info = generate_chain(node, 3000, miner_address="1111111111111111111111111111111111111111")
+        info = generate_chain(node, 3000, payload_root="1111111111111111111111111111111111111111")
         tip_b = info["bestblockhash"]
         print(f"  Chain B tip: {tip_b[:16]}...\n")
         
@@ -161,7 +161,7 @@ def main():
         time.sleep(1)
         
         # Use yet another miner address to create different blocks
-        info = generate_chain(node, 4000, miner_address="2222222222222222222222222222222222222222")
+        info = generate_chain(node, 4000, payload_root="2222222222222222222222222222222222222222")
         tip_c = info["bestblockhash"]
         print(f"  Chain C tip: {tip_c[:16]}...\n")
         

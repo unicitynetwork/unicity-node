@@ -415,7 +415,7 @@ void SimulatedNode::DisconnectFrom(int peer_node_id) {
     }
 }
 
-uint256 SimulatedNode::MineBlock(const std::string& miner_address) {
+uint256 SimulatedNode::MineBlock(const std::string& payload_root) {
     // Create block header
     CBlockHeader header;
     header.nVersion = 1;
@@ -432,7 +432,7 @@ uint256 SimulatedNode::MineBlock(const std::string& miner_address) {
     // Random miner address
     std::uniform_int_distribution<uint8_t> dis_byte(0, 255);
     for (int i = 0; i < 20; i++) {
-        header.minerAddress.data()[i] = dis_byte(gen);
+        header.payloadRoot.data()[i] = dis_byte(gen);
     }
 
     // Set dummy RandomX hash (PoW bypass enabled by default)
@@ -460,9 +460,9 @@ auto* pindex = chainstate_->AcceptBlockHeader(header, state);
     return uint256();  // Failed
 }
 
-bool SimulatedNode::MineBlocks(int count, const std::string& miner_address) {
+bool SimulatedNode::MineBlocks(int count, const std::string& payload_root) {
     for (int i = 0; i < count; i++) {
-        uint256 hash = MineBlock(miner_address);
+        uint256 hash = MineBlock(payload_root);
         if (hash.IsNull()) {
             return false;
         }

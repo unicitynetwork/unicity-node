@@ -16,7 +16,7 @@
 
 // CBlockHeader - Block header structure (represents entire block in headers-only chain)
 // Based on Bitcoin's block header:
-// - Uses minerAddress (uint160) instead of hashMerkleRoot
+// - Uses payloadRoot (uint160) instead of hashMerkleRoot
 // - Includes hashRandomX for RandomX PoW algorithm
 // - No transaction data (headers-only chain)
 //
@@ -27,7 +27,7 @@ public:
   // Block header fields (initialized to zero/null for safety)
   int32_t nVersion{0};
   uint256 hashPrevBlock{};  // Hash of previous block header (copied byte-for-byte as stored, no endian swap)
-  uint160 minerAddress{};   // Miner's address (copied byte-for-byte as stored, no endian swap)
+  uint160 payloadRoot{};    // Root of block payload tree (Hash of rewardTokenId and UTB)
   uint32_t nTime{0};        // Unix timestamp
   uint32_t nBits{0};        // Difficulty target (compact format)
   uint32_t nNonce{0};       // Nonce for proof-of-work
@@ -40,7 +40,7 @@ public:
   // Serialized header size: 4 + 32 + 20 + 4 + 4 + 4 + 32 = 100 bytes
   static constexpr size_t HEADER_SIZE = 4 +              // nVersion (int32_t)
                                         UINT256_BYTES +  // hashPrevBlock
-                                        UINT160_BYTES +  // minerAddress
+                                        UINT160_BYTES +  // payloadRoot
                                         4 +              // nTime (uint32_t)
                                         4 +              // nBits (uint32_t)
                                         4 +              // nNonce (uint32_t)
@@ -49,8 +49,8 @@ public:
   // Field offsets within the 100-byte header (for serialization/deserialization)
   static constexpr size_t OFF_VERSION = 0;
   static constexpr size_t OFF_PREV = OFF_VERSION + 4;
-  static constexpr size_t OFF_MINER = OFF_PREV + UINT256_BYTES;
-  static constexpr size_t OFF_TIME = OFF_MINER + UINT160_BYTES;
+  static constexpr size_t OFF_PAYLOAD_ROOT = OFF_PREV + UINT256_BYTES;
+  static constexpr size_t OFF_TIME = OFF_PAYLOAD_ROOT + UINT160_BYTES;
   static constexpr size_t OFF_BITS = OFF_TIME + 4;
   static constexpr size_t OFF_NONCE = OFF_BITS + 4;
   static constexpr size_t OFF_RANDOMX = OFF_NONCE + 4;
@@ -73,7 +73,7 @@ public:
   void SetNull() noexcept {
     nVersion = 0;
     hashPrevBlock.SetNull();
-    minerAddress.SetNull();
+    payloadRoot.SetNull();
     nTime = 0;
     nBits = 0;
     nNonce = 0;
@@ -81,7 +81,7 @@ public:
   }
 
   [[nodiscard]] bool IsNull() const noexcept {
-    return nTime == 0 && nBits == 0 && nNonce == 0 && hashPrevBlock.IsNull() && minerAddress.IsNull() &&
+    return nTime == 0 && nBits == 0 && nNonce == 0 && hashPrevBlock.IsNull() && payloadRoot.IsNull() &&
            hashRandomX.IsNull();
   }
 
@@ -89,7 +89,7 @@ public:
   [[nodiscard]] uint256 GetHash() const noexcept;
 
   // Serialize to wire format
-  // Note: Hash blobs (hashPrevBlock, minerAddress, hashRandomX) are copied
+  // Note: Hash blobs (hashPrevBlock, payloadRoot, hashRandomX) are copied
   // byte-for-byte as stored (no endian swap). Scalar fields use little-endian.
   [[nodiscard]] HeaderBytes Serialize() const noexcept;
 

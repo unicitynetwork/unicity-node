@@ -61,7 +61,7 @@ def main():
                 "hash": header["hash"],
                 "version": header["version"],
                 "prev_hash": header.get("previousblockhash", "0" * 64),
-                "miner_address": "0" * 40,  # Not exposed by RPC, use zeros
+                "payload_root": "0" * 40,  # Not exposed by RPC, use zeros
                 "time": header["time"],
                 "bits": int(header["bits"], 16) if isinstance(header["bits"], str) else header["bits"],
                 "nonce": header["nonce"],

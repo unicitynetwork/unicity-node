@@ -305,7 +305,7 @@ TEST_CASE("CPUMiner - DebugCreateBlockTemplate and DebugShouldRegenerateTemplate
         CBlockHeader h;
         h.nVersion = 1;
         h.hashPrevBlock = params->GenesisBlock().GetHash();
-        h.minerAddress = uint160();
+        h.payloadRoot = uint160();
         h.nTime = tmpl1.header.nTime + 120;
         h.nBits = tmpl1.nBits;
         h.nNonce = 0;

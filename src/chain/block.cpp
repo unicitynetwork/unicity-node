@@ -15,7 +15,7 @@
 
 namespace {
 // Compile-time header size calculation
-constexpr size_t kHeaderSize = 4 /*nVersion*/ + 32 /*hashPrevBlock*/ + 20 /*minerAddress*/ + 4 /*nTime*/ +
+constexpr size_t kHeaderSize = 4 /*nVersion*/ + 32 /*hashPrevBlock*/ + 20 /*payloadRoot*/ + 4 /*nTime*/ +
                                4 /*nBits*/ + 4 /*nNonce*/ + 32 /*hashRandomX*/;
 static_assert(kHeaderSize == CBlockHeader::HEADER_SIZE, "HEADER_SIZE mismatch");
 }  // namespace
@@ -40,8 +40,8 @@ CBlockHeader::HeaderBytes CBlockHeader::Serialize() const noexcept {
   // hashPrevBlock (32 bytes, offset 4)
   std::copy(hashPrevBlock.begin(), hashPrevBlock.end(), data.begin() + OFF_PREV);
 
-  // minerAddress (20 bytes, offset 36)
-  std::copy(minerAddress.begin(), minerAddress.end(), data.begin() + OFF_MINER);
+  // payloadRoot (20 bytes, offset 36)
+  std::copy(payloadRoot.begin(), payloadRoot.end(), data.begin() + OFF_PAYLOAD_ROOT);
 
   // nTime (4 bytes, offset 56)
   endian::WriteLE32(data.data() + OFF_TIME, nTime);
@@ -70,8 +70,8 @@ bool CBlockHeader::Deserialize(const uint8_t* data, size_t size) noexcept {
   // hashPrevBlock (32 bytes, offset 4)
   std::copy(data + OFF_PREV, data + OFF_PREV + UINT256_BYTES, hashPrevBlock.begin());
 
-  // minerAddress (20 bytes, offset 36)
-  std::copy(data + OFF_MINER, data + OFF_MINER + UINT160_BYTES, minerAddress.begin());
+  // payloadRoot (20 bytes, offset 36)
+  std::copy(data + OFF_PAYLOAD_ROOT, data + OFF_PAYLOAD_ROOT + UINT160_BYTES, payloadRoot.begin());
 
   // nTime (4 bytes, offset 56)
   nTime = endian::ReadLE32(data + OFF_TIME);
@@ -93,7 +93,7 @@ std::string CBlockHeader::ToString() const {
   s << "CBlockHeader(\n";
   s << "  version=" << nVersion << "\n";
   s << "  hashPrevBlock=" << hashPrevBlock.GetHex() << "\n";
-  s << "  minerAddress=" << minerAddress.GetHex() << "\n";
+  s << "  payloadRoot=" << payloadRoot.GetHex() << "\n";
   s << "  nTime=" << nTime << "\n";
   s << "  nBits=0x" << std::hex << nBits << std::dec << "\n";
   s << "  nNonce=" << nNonce << "\n";

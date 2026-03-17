@@ -31,7 +31,7 @@ static CBlockHeader CreateTestHeader(const uint256& hashPrevBlock,
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock = hashPrevBlock;
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = 0;

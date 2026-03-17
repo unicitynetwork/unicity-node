@@ -93,7 +93,7 @@ public:
 
   // Block header fields (stored inline)
   int32_t nVersion{0};
-  uint160 minerAddress{};  // Default-initialized (SetNull())
+  uint160 payloadRoot{};  // Default-initialized (SetNull())
   uint32_t nTime{0};
   uint32_t nBits{0};
   uint32_t nNonce{0};
@@ -108,7 +108,7 @@ public:
   CBlockIndex() = default;
 
   explicit CBlockIndex(const CBlockHeader& block)
-      : nVersion{block.nVersion}, minerAddress{block.minerAddress}, nTime{block.nTime}, nBits{block.nBits},
+      : nVersion{block.nVersion}, payloadRoot{block.payloadRoot}, nTime{block.nTime}, nBits{block.nBits},
         nNonce{block.nNonce}, hashRandomX{block.hashRandomX} {}
 
   // Returns block hash
@@ -120,7 +120,7 @@ public:
     block.nVersion = nVersion;
     if (pprev)
       block.hashPrevBlock = pprev->GetBlockHash();
-    block.minerAddress = minerAddress;
+    block.payloadRoot = payloadRoot;
     block.nTime = nTime;
     block.nBits = nBits;
     block.nNonce = nNonce;

@@ -115,7 +115,7 @@ CBlockHeader BuildFuzzHeader(FuzzInput& input, const uint256& prevHash, uint32_t
 
     // Fuzz miner address (just use random bytes)
     for (size_t i = 0; i < 20; i++) {
-        header.minerAddress.data()[i] = input.ReadByte();
+        header.payloadRoot.data()[i] = input.ReadByte();
     }
 
     // Time: base + small offset to keep roughly increasing

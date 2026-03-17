@@ -62,7 +62,7 @@ static CBlockHeader MakeBaselineHeader() {
         base.hashRandomX.begin()[i]   = static_cast<uint8_t>(255 - i);
     }
     for (int i = 0; i < 20; ++i) {
-        base.minerAddress.begin()[i] = static_cast<uint8_t>(0xAA + i);
+        base.payloadRoot.begin()[i] = static_cast<uint8_t>(0xAA + i);
     }
     return base;
 }
@@ -101,9 +101,9 @@ TEST_CASE("CBlockHeader corrupted-field cases flip single byte in each field", "
         REQUIRE(h2.hashPrevBlock != base.hashPrevBlock);
     });
 
-    // minerAddress (first byte)
-    mutate_and_check(CBlockHeader::OFF_MINER, "minerAddress", [&](const CBlockHeader& h2){
-        REQUIRE(h2.minerAddress != base.minerAddress);
+    // payloadRoot (first byte)
+    mutate_and_check(CBlockHeader::OFF_PAYLOAD_ROOT, "payloadRoot", [&](const CBlockHeader& h2){
+        REQUIRE(h2.payloadRoot != base.payloadRoot);
     });
 
     // nTime
@@ -147,7 +147,7 @@ TEST_CASE("CBlockHeader extreme/invalid scalar values (nVersion/nBits) round-tri
             h.nBits = bits;
             h.nNonce = 0xAABBCCDDu;
             h.hashPrevBlock.SetNull();
-            h.minerAddress.SetNull();
+            h.payloadRoot.SetNull();
             h.hashRandomX.SetNull();
 
             auto bytes = h.Serialize();

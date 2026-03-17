@@ -9,7 +9,7 @@ TEST_CASE("CBlockHeader serialization and deserialization", "[block]") {
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = 1234567890;
     header.nBits = 0x1d00ffff;
     header.nNonce = 42;
@@ -45,7 +45,7 @@ TEST_CASE("CBlockHeader hashing", "[block]") {
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = 1234567890;
     header.nBits = 0x1d00ffff;
     header.nNonce = 42;
@@ -120,7 +120,7 @@ TEST_CASE("CBlockHeader golden vector", "[block]") {
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = 1234567890;
         header.nBits = 0x1d00ffff;
         header.nNonce = 42;
@@ -173,7 +173,7 @@ TEST_CASE("CBlockHeader endianness verification", "[block]") {
         header.nBits = 3;
         header.nNonce = 4;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.hashRandomX.SetNull();
 
         auto serialized = header.Serialize();
@@ -210,7 +210,7 @@ TEST_CASE("CBlockHeader endianness verification", "[block]") {
         header.nBits = 0x090A0B0C;
         header.nNonce = 0x0D0E0F10;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.hashRandomX.SetNull();
 
         auto serialized = header.Serialize();
@@ -269,7 +269,7 @@ TEST_CASE("CBlockHeader round-trip with random data", "[block]") {
             header1.hashRandomX.begin()[i] = static_cast<uint8_t>(255 - i);
         }
         for (int i = 0; i < 20; i++) {
-            header1.minerAddress.begin()[i] = static_cast<uint8_t>(i * 2);
+            header1.payloadRoot.begin()[i] = static_cast<uint8_t>(i * 2);
         }
 
         // Serialize
@@ -287,7 +287,7 @@ TEST_CASE("CBlockHeader round-trip with random data", "[block]") {
         REQUIRE(header2.nBits == header1.nBits);
         REQUIRE(header2.nNonce == header1.nNonce);
         REQUIRE(header2.hashPrevBlock == header1.hashPrevBlock);
-        REQUIRE(header2.minerAddress == header1.minerAddress);
+        REQUIRE(header2.payloadRoot == header1.payloadRoot);
         REQUIRE(header2.hashRandomX == header1.hashRandomX);
 
         // Verify hashes match
@@ -300,7 +300,7 @@ TEST_CASE("CBlockHeader Serialize returns fixed-size array", "[block]") {
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = 1234567890;
         header.nBits = 0x1d00ffff;
         header.nNonce = 42;
@@ -320,7 +320,7 @@ TEST_CASE("CBlockHeader Serialize returns fixed-size array", "[block]") {
         header.nBits = 3;
         header.nNonce = 4;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.hashRandomX.SetNull();
 
         auto fixed = header.Serialize();
@@ -346,7 +346,7 @@ TEST_CASE("CBlockHeader span-based Deserialize", "[block]") {
             header1.hashRandomX.begin()[i] = static_cast<uint8_t>(255 - i);
         }
         for (int i = 0; i < 20; i++) {
-            header1.minerAddress.begin()[i] = static_cast<uint8_t>(i * 2);
+            header1.payloadRoot.begin()[i] = static_cast<uint8_t>(i * 2);
         }
 
         auto serialized = header1.Serialize();
@@ -360,7 +360,7 @@ TEST_CASE("CBlockHeader span-based Deserialize", "[block]") {
         REQUIRE(header2.nBits == header1.nBits);
         REQUIRE(header2.nNonce == header1.nNonce);
         REQUIRE(header2.hashPrevBlock == header1.hashPrevBlock);
-        REQUIRE(header2.minerAddress == header1.minerAddress);
+        REQUIRE(header2.payloadRoot == header1.payloadRoot);
         REQUIRE(header2.hashRandomX == header1.hashRandomX);
     }
 }
@@ -373,7 +373,7 @@ TEST_CASE("CBlockHeader array-based Deserialize", "[block]") {
         header1.nBits = 0x1d00ffff;
         header1.nNonce = 42;
         header1.hashPrevBlock.SetNull();
-        header1.minerAddress.SetNull();
+        header1.payloadRoot.SetNull();
         header1.hashRandomX.SetNull();
 
         auto fixed = header1.Serialize();
@@ -406,7 +406,7 @@ TEST_CASE("CBlockHeader MainNet genesis block golden vector", "[block]") {
         CBlockHeader genesis;
         genesis.nVersion = 1;
         genesis.hashPrevBlock.SetNull();
-        genesis.minerAddress.SetNull();
+        genesis.payloadRoot.SetNull();
         genesis.nTime = 1761564252;      // Oct 27, 2025
         genesis.nBits = 0x1f06a000;      // Target: ~2.5 minutes at 50 H/s
         genesis.nNonce = 8497;           // Found by genesis miner
@@ -428,7 +428,7 @@ TEST_CASE("CBlockHeader MainNet genesis block golden vector", "[block]") {
             REQUIRE(serialized[i] == 0x00);
         }
 
-        // minerAddress is all zeros (offset 36-55)
+        // payloadRoot is all zeros (offset 36-55)
         for (size_t i = 36; i < 56; i++) {
             REQUIRE(serialized[i] == 0x00);
         }
@@ -469,7 +469,7 @@ TEST_CASE("CBlockHeader MainNet genesis block golden vector", "[block]") {
         CBlockHeader genesis;
         genesis.nVersion = 1;
         genesis.hashPrevBlock.SetNull();
-        genesis.minerAddress.SetNull();
+        genesis.payloadRoot.SetNull();
         genesis.nTime = 1761564252;
         genesis.nBits = 0x1f06a000;
         genesis.nNonce = 8497;
@@ -497,7 +497,7 @@ TEST_CASE("CBlockHeader comprehensive hex golden vector", "[block]") {
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = 1234567890;
         header.nBits = 0x1d00ffff;
         header.nNonce = 42;
@@ -510,7 +510,7 @@ TEST_CASE("CBlockHeader comprehensive hex golden vector", "[block]") {
         // Expected hex representation (for documentation/interop)
         // 01000000 (version=1)
         // 0000000000000000000000000000000000000000000000000000000000000000 (hashPrevBlock)
-        // 00000000000000000000000000000000000000000000 (minerAddress, 20 bytes)
+        // 00000000000000000000000000000000000000000000 (payloadRoot, 20 bytes)
         // d2029649 (nTime=1234567890)
         // ffff001d (nBits=0x1d00ffff)
         // 2a000000 (nNonce=42)
@@ -546,7 +546,7 @@ TEST_CASE("CBlockHeader ToString", "[block]") {
     h.nNonce = 42;
     h.hashPrevBlock.SetNull();
     h.hashRandomX.SetNull();
-    h.minerAddress.SetNull();
+    h.payloadRoot.SetNull();
 
     auto s = h.ToString();
     REQUIRE(s.find("version") != std::string::npos);
@@ -575,7 +575,7 @@ TEST_CASE("CBlockHeader alpha-release compatibility", "[block][alpha]") {
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = 1234567890;
         header.nBits = 0x1d00ffff;
         header.nNonce = 42;
@@ -603,7 +603,7 @@ TEST_CASE("CBlockHeader alpha-release compatibility", "[block][alpha]") {
         CBlockHeader genesis;
         genesis.nVersion = 1;
         genesis.hashPrevBlock.SetNull();
-        genesis.minerAddress.SetNull();
+        genesis.payloadRoot.SetNull();
         genesis.nTime = 1761564252;      // Oct 27, 2025
         genesis.nBits = 0x1f06a000;
         genesis.nNonce = 8497;
@@ -645,7 +645,7 @@ TEST_CASE("CBlockHeader alpha-release compatibility", "[block][alpha]") {
             CBlockHeader header;
             header.nVersion = vec.version;
             header.hashPrevBlock.SetNull();
-            header.minerAddress.SetNull();
+            header.payloadRoot.SetNull();
             header.nTime = vec.time;
             header.nBits = vec.bits;
             header.nNonce = vec.nonce;
@@ -674,7 +674,7 @@ TEST_CASE("CBlockHeader alpha-release compatibility", "[block][alpha]") {
         CBlockHeader genesis;
         genesis.nVersion = 1;
         genesis.hashPrevBlock.SetNull();
-        genesis.minerAddress.SetNull();
+        genesis.payloadRoot.SetNull();
         genesis.nTime = 1760549555;
         genesis.nBits = 0x207fffff;
         genesis.nNonce = 2;

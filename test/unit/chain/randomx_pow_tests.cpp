@@ -240,7 +240,7 @@ TEST_CASE("RandomX commitment calculation", "[randomx][security][commitment]") {
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock = uint256();
-    header.minerAddress = uint160();
+    header.payloadRoot = uint160();
     header.nTime = 1000000;
     header.nBits = 0x207fffff;
     header.nNonce = 0;
@@ -267,7 +267,7 @@ TEST_CASE("RandomX commitment calculation", "[randomx][security][commitment]") {
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock = uint256();
-    header.minerAddress = uint160();
+    header.payloadRoot = uint160();
     header.nTime = 1000000;
     header.nBits = 0x207fffff;
     header.nNonce = 0;
@@ -417,7 +417,7 @@ TEST_CASE("RandomX hash computation correctness", "[randomx][security][hash]") {
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = 1000000;
     header.nBits = params.GenesisBlock().nBits;
     header.hashRandomX.SetNull();
@@ -441,7 +441,7 @@ TEST_CASE("RandomX hash computation correctness", "[randomx][security][hash]") {
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = 1000000;
     header.nBits = params.GenesisBlock().nBits;
     header.hashRandomX.SetNull();
@@ -465,8 +465,8 @@ TEST_CASE("RandomX hash computation correctness", "[randomx][security][hash]") {
     header1.nVersion = header2.nVersion = 1;
     header1.hashPrevBlock.SetNull();
     header2.hashPrevBlock.SetNull();
-    header1.minerAddress.SetNull();
-    header2.minerAddress.SetNull();
+    header1.payloadRoot.SetNull();
+    header2.payloadRoot.SetNull();
     header1.nBits = header2.nBits = params.GenesisBlock().nBits;
     header1.hashRandomX.SetNull();
     header2.hashRandomX.SetNull();
@@ -486,7 +486,7 @@ TEST_CASE("RandomX hash computation correctness", "[randomx][security][hash]") {
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = 1000000;
     header.nBits = params.GenesisBlock().nBits;
     header.hashRandomX.SetNull();
@@ -673,7 +673,7 @@ TEST_CASE("RandomX commitment with inHash parameter", "[randomx][security][commi
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = 1000000;
     header.nBits = params.GenesisBlock().nBits;
     header.nNonce = 42;
@@ -703,7 +703,7 @@ TEST_CASE("RandomX commitment with inHash parameter", "[randomx][security][commi
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = 1000000;
     header.nBits = params.GenesisBlock().nBits;
     header.nNonce = 42;

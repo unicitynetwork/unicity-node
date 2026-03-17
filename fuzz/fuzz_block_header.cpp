@@ -18,7 +18,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
         // CRITICAL: Validate serialized size is exactly BLOCK_HEADER_SIZE (100 bytes)
         // Unicity headers: 4 + 32 + 20 + 4 + 4 + 4 + 32 = 100 bytes
-        // (version + prevHash + minerAddress + time + bits + nonce + hashRandomX)
+        // (version + prevHash + payloadRoot + time + bits + nonce + hashRandomX)
         if (serialized.size() != CBlockHeader::HEADER_SIZE) {
             // Serialize() produced wrong size - BUG!
             __builtin_trap();
@@ -45,8 +45,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             __builtin_trap();
         }
 
-        if (header.minerAddress != header2.minerAddress) {
-            // Miner address changed during round-trip - BUG!
+        if (header.payloadRoot != header2.payloadRoot) {
+            // Payload root changed during round-trip - BUG!
             __builtin_trap();
         }
 
