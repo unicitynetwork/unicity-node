@@ -5,9 +5,12 @@
 
 #include "chain/block.hpp"
 #include "chain/chainparams.hpp"
+#include "chain/trust_base_manager.hpp"
+#include "chain/mining/token_generator.hpp"
 #include "util/uint.hpp"
 
 #include <atomic>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -34,12 +37,13 @@ struct BlockTemplate {
   uint32_t nBits;
   int nHeight;
   uint256 hashPrevBlock;
+  uint256 rewardTokenId;
 };
 
 // Single-threaded CPU miner for regtest testing
 class CPUMiner {
 public:
-  CPUMiner(const chain::ChainParams& params, validation::ChainstateManager& chainstate);
+  CPUMiner(const chain::ChainParams& params, validation::ChainstateManager& chainstate, chain::TrustBaseManager& trust_base_manager, TokenGenerator& token_generator, const std::filesystem::path& datadir);
   ~CPUMiner();
 
   bool Start(int target_height = -1);  // -1 = mine forever
@@ -49,17 +53,6 @@ public:
   double GetHashrate() const;
   uint64_t GetTotalHashes() const { return total_hashes_.load(); }
   int GetBlocksFound() const { return blocks_found_.load(); }
-
-  // Set/get mining address (thread-safe, sticky across sessions)
-  void SetMiningAddress(const uint160& address) {
-    std::lock_guard<std::mutex> lock(address_mutex_);
-    mining_address_ = address;
-  }
-
-  uint160 GetMiningAddress() const {
-    std::lock_guard<std::mutex> lock(address_mutex_);
-    return mining_address_;
-  }
 
   // Invalidate current block template (called when chain tip changes)
   void InvalidateTemplate() { template_invalidated_.store(true); }
@@ -72,12 +65,14 @@ private:
   void MiningWorker();
   BlockTemplate CreateBlockTemplate();
   bool ShouldRegenerateTemplate(const uint256& prev_hash);
+  void RecordReward(const chain::CBlockIndex* tip, const uint256& blockHash, const uint256& tokenId);
 
   const chain::ChainParams& params_;
   validation::ChainstateManager& chainstate_;
-
-  uint160 mining_address_;
-  mutable std::mutex address_mutex_;
+  chain::TrustBaseManager& trust_base_manager_;
+  TokenGenerator& token_generator_;
+  
+  std::filesystem::path datadir_;
 
   std::atomic<bool> mining_{false};
   std::atomic<uint64_t> total_hashes_{0};

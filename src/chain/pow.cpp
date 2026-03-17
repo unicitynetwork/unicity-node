@@ -327,8 +327,9 @@ bool CheckProofOfWork(const CBlockHeader& block, uint32_t nBits, const chain::Ch
     CBlockHeader tmp(block);
     tmp.hashRandomX.SetNull();
 
-    // Calculate hash (thread-safe via thread-local VM)
-    randomx_calculate_hash(vmRef->vm, &tmp, sizeof(tmp), rx_hash);
+    // Calculate hash using only the 112-byte static header (thread-safe via thread-local VM)
+    const std::vector<uint8_t> bytes = tmp.Serialize(false);
+    randomx_calculate_hash(vmRef->vm, bytes.data(), bytes.size(), rx_hash);
 
     // If not mining, compare hash in block header with our computed value
     if (mode != crypto::POWVerifyMode::MINING) {

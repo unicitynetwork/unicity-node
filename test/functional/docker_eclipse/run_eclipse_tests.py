@@ -260,8 +260,8 @@ try:
     time.sleep(0.5)
 
     # Send invalid headers (all zeros = invalid PoW)
-    # Header is 100 bytes in Unicity: 4+32+20+4+4+4+32
-    fake_header = b"\\x00" * 100  # Block header with invalid PoW
+    # Header is 112 bytes in Unicity: 4+32+32+4+4+4+32
+    fake_header = b"\\x00" * 112  # Block header with invalid PoW
     headers_payload = b"\\x01" + fake_header  # count=1 + header
     s.sendall(create_msg("headers", headers_payload))
 
@@ -859,10 +859,10 @@ def create_version():
 
 def create_small_headers():
     # Create a minimal headers message with 1 header
-    # Header structure: version(4) + prevhash(32) + randomx(20) + timestamp(4) + bits(4) + nonce(4) + hash(32) = 100 bytes
+    # Header structure: version(4) + prevhash(32) + payloadRoot(32) + timestamp(4) + bits(4) + nonce(4) + hash(32) = 112 bytes
     header = b"\\x01\\x00\\x00\\x00"  # version
     header += b"\\x00" * 32  # prevhash (genesis)
-    header += b"\\x00" * 20  # randomx hash
+    header += b"\\x00" * 32  # payloadRoot
     header += struct.pack("<I", int(time.time()))  # timestamp
     header += b"\\xff\\xff\\x00\\x1f"  # bits (easy target for regtest)
     header += struct.pack("<I", random.randint(0, 0xFFFFFFFF))  # nonce

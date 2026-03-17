@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent / "test_framework"))
 from test_node import TestNode
 
 
-def generate_chain(node, num_blocks, payload_root="0000000000000000000000000000000000000000"):
+def generate_chain(node, num_blocks, payload_root="0000000000000000000000000000000000000000000000000000000000000000"):
     """Generate a chain of blocks on a node, in batches if needed."""
     print(f"  Generating {num_blocks} blocks...")
     

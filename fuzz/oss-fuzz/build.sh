@@ -38,7 +38,7 @@ cp fuzz/fuzz_lock_directory $OUT/
 
 # Create seed corpora for better fuzzing
 
-# Seed corpus for block headers (100 bytes each)
+# Seed corpus for block headers (112 bytes each)
 mkdir -p $OUT/fuzz_block_header_seed_corpus
 # Create a few valid block headers as seeds
 echo -n "0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" | xxd -r -p > $OUT/fuzz_block_header_seed_corpus/valid_header_1

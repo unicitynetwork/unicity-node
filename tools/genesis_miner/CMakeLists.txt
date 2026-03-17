@@ -52,12 +52,6 @@ include_directories(
 # Create genesis miner executable
 add_executable(genesis_miner
     genesis_miner.cpp
-    ${UNICITY_ROOT}/src/util/sha256.cpp
-    ${UNICITY_ROOT}/src/util/uint.cpp
-    ${UNICITY_ROOT}/src/util/arith_uint256.cpp
-    ${UNICITY_ROOT}/src/chain/randomx_pow.cpp
-    ${UNICITY_ROOT}/src/chain/block.cpp
-    ${UNICITY_ROOT}/src/util/logging.cpp
 )
 
 # Add randomx include directory
@@ -69,6 +63,8 @@ endif()
 target_compile_definitions(genesis_miner PRIVATE DISABLE_OPTIMIZED_SHA256)
 
 target_link_libraries(genesis_miner PRIVATE
+    chain
+    util
     Threads::Threads
     randomx
     spdlog::spdlog

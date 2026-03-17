@@ -571,8 +571,9 @@ std::vector<uint8_t> HeadersMessage::serialize() const {
   MessageSerializer s;
   s.write_varint(headers.size());
   for (const auto& header : headers) {
-    auto header_bytes = header.Serialize();
-    s.write_bytes(header_bytes.data(), header_bytes.size());
+    auto full_block = header.Serialize(true);
+    s.write_varint(full_block.size());
+    s.write_bytes(full_block.data(), full_block.size());
   }
   return s.data();
 }
@@ -594,17 +595,23 @@ bool HeadersMessage::deserialize(const uint8_t* data, size_t size) {
       headers.reserve(allocated);
     }
 
-    // Read header bytes
-    auto header_bytes = d.read_bytes(CBlockHeader::HEADER_SIZE);
-    if (header_bytes.size() != CBlockHeader::HEADER_SIZE)
-      return false;
-
-    CBlockHeader header;
-    if (!header.Deserialize(header_bytes.data(), header_bytes.size())) {
+    // Read total block size
+    const uint64_t block_size = d.read_varint();
+    if (block_size < CBlockHeader::HEADER_SIZE || block_size > protocol::MAX_PROTOCOL_MESSAGE_LENGTH) {
       return false;
     }
 
-    headers.push_back(header);
+    // Read block bytes
+    auto block_bytes = d.read_bytes(block_size);
+    if (block_bytes.size() != block_size)
+      return false;
+
+    CBlockHeader header;
+    if (!header.Deserialize(block_bytes.data(), block_bytes.size())) {
+      return false;
+    }
+
+    headers.push_back(std::move(header));
   }
   return !d.has_error();
 }

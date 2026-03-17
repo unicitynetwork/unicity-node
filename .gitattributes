@@ -1,3 +1,6 @@
 # Track prebuilt test chains via Git LFS
 
 test/functional/test_chains/** filter=lfs diff=lfs merge=lfs -text
+
+# keep bash scripts in LF
+*.sh text eol=lf

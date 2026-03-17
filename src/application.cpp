@@ -2,6 +2,7 @@
 // Distributed under the MIT software license
 
 #include "application.hpp"
+#include "chain/bft_client.hpp"
 #include "chain/randomx_pow.hpp"
 #include "network/addr_relay_manager.hpp"
 #include "util/fs_lock.hpp"
@@ -80,10 +81,17 @@ bool Application::initialize() {
     return false;
   }
 
+  // Initialize Trust Base Manager
+  if (!init_trustbase()) {
+    LOG_ERROR("Failed to initialize Trust Base Manager");
+    return false;
+  }
+
   // Initialize miner (after chainstate is ready)
   LOG_INFO("Initializing miner...");
-  miner_ =
-      std::make_unique<mining::CPUMiner>(*chain_params_, *chainstate_manager_);
+  token_generator_ = std::make_unique<mining::TokenGenerator>(config_.datadir);
+  miner_ = std::make_unique<mining::CPUMiner>(*chain_params_, *chainstate_manager_, *trust_base_manager_,
+                                              *token_generator_, config_.datadir);
 
   // Initialize network manager
   if (!init_network()) {
@@ -334,6 +342,33 @@ bool Application::init_randomx() {
   // IMPORTANT: This must be called early to enable SSE4/AVX2/SHANI optimizations
   std::string sha256_impl = SHA256AutoDetect();
   LOG_INFO("SHA256 implementation: {}", sha256_impl);
+
+  return true;
+}
+
+bool Application::init_trustbase() {
+  LOG_INFO("Initializing Trust Base Manager...");
+
+  std::shared_ptr<chain::BFTClient> bft_client;
+  if (config_.bftaddr.empty()) {
+      LOG_INFO("BFT integration disabled (bftaddr is empty)");
+      auto genesis_utb_span = chain_params_->GenesisBlock().GetUTB();
+      auto genesis_tb = chain::RootTrustBaseV1::FromCBOR(genesis_utb_span);
+      bft_client = std::make_shared<chain::RegtestBFTClient>(genesis_tb);
+  } else {
+      bft_client = std::make_shared<chain::HttpBFTClient>(config_.bftaddr);
+  }
+  trust_base_manager_ = std::make_unique<chain::TrustBaseManager>(config_.datadir, bft_client);
+
+  // Initialize with Genesis UTB
+  auto genesis_utb_span = chain_params_->GenesisBlock().GetUTB();
+  std::vector<uint8_t> genesis_utb(genesis_utb_span.begin(), genesis_utb_span.end());
+  try {
+      trust_base_manager_->Initialize(genesis_utb);
+  } catch (const std::exception& e) {
+      LOG_ERROR("Failed to initialize Trust Base Manager with Genesis UTB: {}", e.what());
+      return false;
+  }
 
   return true;
 }

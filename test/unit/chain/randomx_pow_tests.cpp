@@ -240,7 +240,7 @@ TEST_CASE("RandomX commitment calculation", "[randomx][security][commitment]") {
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock = uint256();
-    header.payloadRoot = uint160();
+    header.payloadRoot = uint256();
     header.nTime = 1000000;
     header.nBits = 0x207fffff;
     header.nNonce = 0;
@@ -267,7 +267,7 @@ TEST_CASE("RandomX commitment calculation", "[randomx][security][commitment]") {
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock = uint256();
-    header.payloadRoot = uint160();
+    header.payloadRoot = uint256();
     header.nTime = 1000000;
     header.nBits = 0x207fffff;
     header.nNonce = 0;

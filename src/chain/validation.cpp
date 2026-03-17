@@ -9,6 +9,7 @@
 #include "chain/chainparams.hpp"
 #include "chain/pow.hpp"
 #include "chain/randomx_pow.hpp"
+#include "util/hash.hpp"
 #include "util/logging.hpp"
 #include "util/time.hpp"
 #include "util/uint.hpp"
@@ -33,6 +34,31 @@ bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& para
   // 3. Check proof of work (RandomX)
   if (!consensus::CheckProofOfWork(header, header.nBits, params, crypto::POWVerifyMode::FULL)) {
     return state.Invalid("high-hash", "proof of work failed");
+  }
+
+  // 4. Validate Payload Integrity
+  // Since we don't implement pruning initially, all blocks must have their payloads.
+  // The first 32 bytes of the payload is the Token ID Hash (leaf_0).
+  if (header.vPayload.size() < 32) {
+    return state.Invalid("bad-payload-size", "block payload missing Token ID hash");
+  }
+
+  // Extract Token ID Hash (leaf_0) directly from payload
+  uint256 leaf_0;
+  std::memcpy(leaf_0.begin(), header.vPayload.data(), 32);
+
+  // If payload size > 32, the remainder is the CBOR-encoded UTB record.
+  // We compute leaf_1 by hashing these bytes.
+  // NB! Currently, we do not validate the actual UTB!
+  uint256 leaf_1 = uint256::ZERO;
+  if (header.vPayload.size() > 32) {
+    const std::span cbor_bytes(header.vPayload.data() + 32, header.vPayload.size() - 32);
+    leaf_1 = SingleHash(cbor_bytes);
+  }
+
+  const uint256 calculated_root = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+  if (calculated_root != header.payloadRoot) {
+    return state.Invalid("bad-payload-root", "calculated payload root does not match header commitment");
   }
 
   return true;

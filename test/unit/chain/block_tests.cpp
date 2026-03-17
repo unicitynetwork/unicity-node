@@ -128,7 +128,7 @@ TEST_CASE("CBlockHeader golden vector", "[block]") {
 
         // Serialize and verify exact bytes
         auto serialized = header.Serialize();
-        REQUIRE(serialized.size() == 100);
+        REQUIRE(serialized.size() == 112);
 
         // Verify specific byte offsets (little-endian)
         // nVersion = 1 at offset 0
@@ -137,23 +137,23 @@ TEST_CASE("CBlockHeader golden vector", "[block]") {
         REQUIRE(serialized[2] == 0x00);
         REQUIRE(serialized[3] == 0x00);
 
-        // nTime = 1234567890 (0x499602D2) at offset 56
-        REQUIRE(serialized[56] == 0xD2);
-        REQUIRE(serialized[57] == 0x02);
-        REQUIRE(serialized[58] == 0x96);
-        REQUIRE(serialized[59] == 0x49);
+        // nTime = 1234567890 (0x499602D2) at offset 68
+        REQUIRE(serialized[68] == 0xD2);
+        REQUIRE(serialized[69] == 0x02);
+        REQUIRE(serialized[70] == 0x96);
+        REQUIRE(serialized[71] == 0x49);
 
-        // nBits = 0x1d00ffff at offset 60
-        REQUIRE(serialized[60] == 0xFF);
-        REQUIRE(serialized[61] == 0xFF);
-        REQUIRE(serialized[62] == 0x00);
-        REQUIRE(serialized[63] == 0x1D);
+        // nBits = 0x1d00ffff at offset 72
+        REQUIRE(serialized[72] == 0xFF);
+        REQUIRE(serialized[73] == 0xFF);
+        REQUIRE(serialized[74] == 0x00);
+        REQUIRE(serialized[75] == 0x1D);
 
-        // nNonce = 42 (0x2A) at offset 64
-        REQUIRE(serialized[64] == 0x2A);
-        REQUIRE(serialized[65] == 0x00);
-        REQUIRE(serialized[66] == 0x00);
-        REQUIRE(serialized[67] == 0x00);
+        // nNonce = 42 (0x2A) at offset 76
+        REQUIRE(serialized[76] == 0x2A);
+        REQUIRE(serialized[77] == 0x00);
+        REQUIRE(serialized[78] == 0x00);
+        REQUIRE(serialized[79] == 0x00);
 
         // Compute hash and verify it's deterministic
         uint256 hash1 = header.GetHash();
@@ -184,23 +184,23 @@ TEST_CASE("CBlockHeader endianness verification", "[block]") {
         REQUIRE(serialized[2] == 0x00);
         REQUIRE(serialized[3] == 0x00);
 
-        // nTime = 2 at offset 56 (little-endian: 02 00 00 00)
-        REQUIRE(serialized[56] == 0x02);
-        REQUIRE(serialized[57] == 0x00);
-        REQUIRE(serialized[58] == 0x00);
-        REQUIRE(serialized[59] == 0x00);
+        // nTime = 2 at offset 68 (little-endian: 02 00 00 00)
+        REQUIRE(serialized[68] == 0x02);
+        REQUIRE(serialized[69] == 0x00);
+        REQUIRE(serialized[70] == 0x00);
+        REQUIRE(serialized[71] == 0x00);
 
-        // nBits = 3 at offset 60 (little-endian: 03 00 00 00)
-        REQUIRE(serialized[60] == 0x03);
-        REQUIRE(serialized[61] == 0x00);
-        REQUIRE(serialized[62] == 0x00);
-        REQUIRE(serialized[63] == 0x00);
+        // nBits = 3 at offset 72 (little-endian: 03 00 00 00)
+        REQUIRE(serialized[72] == 0x03);
+        REQUIRE(serialized[73] == 0x00);
+        REQUIRE(serialized[74] == 0x00);
+        REQUIRE(serialized[75] == 0x00);
 
-        // nNonce = 4 at offset 64 (little-endian: 04 00 00 00)
-        REQUIRE(serialized[64] == 0x04);
-        REQUIRE(serialized[65] == 0x00);
-        REQUIRE(serialized[66] == 0x00);
-        REQUIRE(serialized[67] == 0x00);
+        // nNonce = 4 at offset 76 (little-endian: 04 00 00 00)
+        REQUIRE(serialized[76] == 0x04);
+        REQUIRE(serialized[77] == 0x00);
+        REQUIRE(serialized[78] == 0x00);
+        REQUIRE(serialized[79] == 0x00);
     }
 
     SECTION("Big-endian values serialize correctly") {
@@ -222,10 +222,10 @@ TEST_CASE("CBlockHeader endianness verification", "[block]") {
         REQUIRE(serialized[3] == 0x01);
 
         // nTime = 0x05060708 (little-endian: 08 07 06 05)
-        REQUIRE(serialized[56] == 0x08);
-        REQUIRE(serialized[57] == 0x07);
-        REQUIRE(serialized[58] == 0x06);
-        REQUIRE(serialized[59] == 0x05);
+        REQUIRE(serialized[68] == 0x08);
+        REQUIRE(serialized[69] == 0x07);
+        REQUIRE(serialized[70] == 0x06);
+        REQUIRE(serialized[71] == 0x05);
     }
 }
 
@@ -296,7 +296,7 @@ TEST_CASE("CBlockHeader round-trip with random data", "[block]") {
 }
 
 TEST_CASE("CBlockHeader Serialize returns fixed-size array", "[block]") {
-    SECTION("Serialize produces exact 100-byte array") {
+    SECTION("Serialize produces exact 112-byte array") {
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
@@ -310,7 +310,7 @@ TEST_CASE("CBlockHeader Serialize returns fixed-size array", "[block]") {
 
         // Verify it's exactly HEADER_SIZE
         REQUIRE(fixed.size() == CBlockHeader::HEADER_SIZE);
-        REQUIRE(fixed.size() == 100);
+        REQUIRE(fixed.size() == 112);
     }
 
     SECTION("Serialize uses field offset constants") {
@@ -400,21 +400,21 @@ TEST_CASE("CBlockHeader array-based Deserialize", "[block]") {
 TEST_CASE("CBlockHeader MainNet genesis block golden vector", "[block]") {
     SECTION("MainNet genesis block from chainparams") {
         // This is the actual genesis block from chainparams.cpp
-        // Mined on: 2025-10-27
-        // Expected hash: 938f0a2ca374ea2fade1911b254269a82576d0c95a97807a2120e1e508f0d688
+        // Mined on: 2025-10-24
+        // Expected hash: 4d84216a9a2cf3854488f85a49d8331818e376cfe88c0f0883a81df2ffd86092
 
         CBlockHeader genesis;
         genesis.nVersion = 1;
         genesis.hashPrevBlock.SetNull();
         genesis.payloadRoot.SetNull();
-        genesis.nTime = 1761564252;      // Oct 27, 2025
+        genesis.nTime = 1761330012;      // Oct 24, 2025
         genesis.nBits = 0x1f06a000;      // Target: ~2.5 minutes at 50 H/s
         genesis.nNonce = 8497;           // Found by genesis miner
         genesis.hashRandomX.SetNull();
 
         // Serialize and verify exact size
         auto serialized = genesis.Serialize();
-        REQUIRE(serialized.size() == 100);
+        REQUIRE(serialized.size() == 112);
 
         // Verify the serialized header bytes match expected format
         // nVersion = 1 at offset 0 (little-endian: 01 00 00 00)
@@ -428,31 +428,31 @@ TEST_CASE("CBlockHeader MainNet genesis block golden vector", "[block]") {
             REQUIRE(serialized[i] == 0x00);
         }
 
-        // payloadRoot is all zeros (offset 36-55)
-        for (size_t i = 36; i < 56; i++) {
+        // payloadRoot is all zeros (offset 36-67)
+        for (size_t i = 36; i < 68; i++) {
             REQUIRE(serialized[i] == 0x00);
         }
 
-        // nTime = 1761564252 (0x68FF565C) at offset 56 (little-endian: 5C 56 FF 68)
-        REQUIRE(serialized[56] == 0x5C);
-        REQUIRE(serialized[57] == 0x56);
-        REQUIRE(serialized[58] == 0xFF);
-        REQUIRE(serialized[59] == 0x68);
+        // nTime = 1761330012 (0x68FBC35C) at offset 68 (little-endian: 5C C3 FB 68)
+        REQUIRE(static_cast<uint8_t>(serialized[68]) == 0x5C);
+        REQUIRE(static_cast<uint8_t>(serialized[69]) == 0xC3);
+        REQUIRE(static_cast<uint8_t>(serialized[70]) == 0xFB);
+        REQUIRE(static_cast<uint8_t>(serialized[71]) == 0x68);
 
-        // nBits = 0x1f06a000 at offset 60 (little-endian: 00 A0 06 1F)
-        REQUIRE(serialized[60] == 0x00);
-        REQUIRE(serialized[61] == 0xA0);
-        REQUIRE(serialized[62] == 0x06);
-        REQUIRE(serialized[63] == 0x1F);
+        // nBits = 0x1f06a000 at offset 72 (little-endian: 00 A0 06 1F)
+        REQUIRE(serialized[72] == 0x00);
+        REQUIRE(serialized[73] == 0xA0);
+        REQUIRE(serialized[74] == 0x06);
+        REQUIRE(serialized[75] == 0x1F);
 
-        // nNonce = 8497 (0x00002131) at offset 64 (little-endian: 31 21 00 00)
-        REQUIRE(serialized[64] == 0x31);
-        REQUIRE(serialized[65] == 0x21);
-        REQUIRE(serialized[66] == 0x00);
-        REQUIRE(serialized[67] == 0x00);
+        // nNonce = 8497 (0x00002131) at offset 76 (little-endian: 31 21 00 00)
+        REQUIRE(serialized[76] == 0x31);
+        REQUIRE(serialized[77] == 0x21);
+        REQUIRE(serialized[78] == 0x00);
+        REQUIRE(serialized[79] == 0x00);
 
-        // hashRandomX is all zeros (offset 68-99)
-        for (size_t i = 68; i < 100; i++) {
+        // hashRandomX is all zeros (offset 80-111)
+        for (size_t i = 80; i < 112; i++) {
             REQUIRE(serialized[i] == 0x00);
         }
 
@@ -460,9 +460,9 @@ TEST_CASE("CBlockHeader MainNet genesis block golden vector", "[block]") {
         uint256 hash = genesis.GetHash();
         std::string hashHex = hash.GetHex();
 
-        // Expected: 938f0a2ca374ea2fade1911b254269a82576d0c95a97807a2120e1e508f0d688
+        // Expected: 4d84216a9a2cf3854488f85a49d8331818e376cfe88c0f0883a81df2ffd86092
         // (This is the display format; GetHex() reverses bytes per Bitcoin convention)
-        REQUIRE(hashHex == "938f0a2ca374ea2fade1911b254269a82576d0c95a97807a2120e1e508f0d688");
+        REQUIRE(hashHex == "4d84216a9a2cf3854488f85a49d8331818e376cfe88c0f0883a81df2ffd86092");
     }
 
     SECTION("Genesis block round-trip preserves hash") {
@@ -470,7 +470,7 @@ TEST_CASE("CBlockHeader MainNet genesis block golden vector", "[block]") {
         genesis.nVersion = 1;
         genesis.hashPrevBlock.SetNull();
         genesis.payloadRoot.SetNull();
-        genesis.nTime = 1761564252;
+        genesis.nTime = 1761330012;
         genesis.nBits = 0x1f06a000;
         genesis.nNonce = 8497;
         genesis.hashRandomX.SetNull();
@@ -490,7 +490,7 @@ TEST_CASE("CBlockHeader MainNet genesis block golden vector", "[block]") {
 }
 
 TEST_CASE("CBlockHeader comprehensive hex golden vector", "[block]") {
-    SECTION("Complete 100-byte header with expected hash") {
+    SECTION("Complete 112-byte header with expected hash") {
         // Manually constructed test vector for interoperability testing
         // This serves as a reference for alternative implementations
 
@@ -505,12 +505,12 @@ TEST_CASE("CBlockHeader comprehensive hex golden vector", "[block]") {
 
         // Serialize to get exact hex bytes
         auto serialized = header.Serialize();
-        REQUIRE(serialized.size() == 100);
+        REQUIRE(serialized.size() == 112);
 
         // Expected hex representation (for documentation/interop)
         // 01000000 (version=1)
         // 0000000000000000000000000000000000000000000000000000000000000000 (hashPrevBlock)
-        // 00000000000000000000000000000000000000000000 (payloadRoot, 20 bytes)
+        // 0000000000000000000000000000000000000000000000000000000000000000 (payloadRoot, 32 bytes)
         // d2029649 (nTime=1234567890)
         // ffff001d (nBits=0x1d00ffff)
         // 2a000000 (nNonce=42)
@@ -565,134 +565,4 @@ TEST_CASE("CBlockLocator basic semantics", "[block]") {
 
     loc.SetNull();
     REQUIRE(loc.IsNull());
-}
-
-TEST_CASE("CBlockHeader alpha-release compatibility", "[block][alpha]") {
-    SECTION("Hash computation matches alpha-release (no byte reversal)") {
-        // Alpha-release uses HashWriter pattern: double SHA256 with NO byte reversal
-        // Our refactored code should produce identical hashes
-
-        CBlockHeader header;
-        header.nVersion = 1;
-        header.hashPrevBlock.SetNull();
-        header.payloadRoot.SetNull();
-        header.nTime = 1234567890;
-        header.nBits = 0x1d00ffff;
-        header.nNonce = 42;
-        header.hashRandomX.SetNull();
-
-        // Get hash from our implementation
-        uint256 our_hash = header.GetHash();
-
-        // Compute hash using alpha-release logic (copied from alpha-release src/hash.h)
-        // Alpha HashWriter::GetHash() does: double SHA256, NO byte reversal
-        auto serialized = header.Serialize();
-        uint256 alpha_hash;
-        CSHA256().Write(serialized.data(), serialized.size()).Finalize(alpha_hash.begin());
-        CSHA256().Write(alpha_hash.begin(), CSHA256::OUTPUT_SIZE).Finalize(alpha_hash.begin());
-
-        // Our hash MUST match alpha-release hash exactly
-        REQUIRE(our_hash == alpha_hash);
-
-        INFO("Our hash:   " << our_hash.GetHex());
-        INFO("Alpha hash: " << alpha_hash.GetHex());
-    }
-
-    SECTION("Genesis block hash matches alpha-release mainnet genesis") {
-        // Mainnet genesis from chainparams.cpp
-        CBlockHeader genesis;
-        genesis.nVersion = 1;
-        genesis.hashPrevBlock.SetNull();
-        genesis.payloadRoot.SetNull();
-        genesis.nTime = 1761564252;      // Oct 27, 2025
-        genesis.nBits = 0x1f06a000;
-        genesis.nNonce = 8497;
-        genesis.hashRandomX.SetNull();
-
-        // Our implementation
-        uint256 our_hash = genesis.GetHash();
-
-        // Alpha-release logic (double SHA256, no reversal)
-        auto serialized = genesis.Serialize();
-        uint256 alpha_hash;
-        CSHA256().Write(serialized.data(), serialized.size()).Finalize(alpha_hash.begin());
-        CSHA256().Write(alpha_hash.begin(), CSHA256::OUTPUT_SIZE).Finalize(alpha_hash.begin());
-
-        // Must match
-        REQUIRE(our_hash == alpha_hash);
-
-        // Also verify against the expected mainnet genesis hash (GetHex() displays in reversed byte order)
-        REQUIRE(our_hash.GetHex() == "938f0a2ca374ea2fade1911b254269a82576d0c95a97807a2120e1e508f0d688");
-    }
-
-    SECTION("Multiple test vectors match alpha-release") {
-        // Test several different headers to ensure consistency
-        struct TestVector {
-            int32_t version;
-            uint32_t time;
-            uint32_t bits;
-            uint32_t nonce;
-        };
-
-        TestVector vectors[] = {
-            {1, 0, 0x207fffff, 0},
-            {1, 1234567890, 0x1d00ffff, 42},
-            {1, 1761564252, 0x1f06a000, 8497},
-            {2, 9999999, 0x1a0fffff, 123456},
-        };
-
-        for (const auto& vec : vectors) {
-            CBlockHeader header;
-            header.nVersion = vec.version;
-            header.hashPrevBlock.SetNull();
-            header.payloadRoot.SetNull();
-            header.nTime = vec.time;
-            header.nBits = vec.bits;
-            header.nNonce = vec.nonce;
-            header.hashRandomX.SetNull();
-
-            // Our implementation
-            uint256 our_hash = header.GetHash();
-
-            // Alpha-release logic
-            auto serialized = header.Serialize();
-            uint256 alpha_hash;
-            CSHA256().Write(serialized.data(), serialized.size()).Finalize(alpha_hash.begin());
-            CSHA256().Write(alpha_hash.begin(), CSHA256::OUTPUT_SIZE).Finalize(alpha_hash.begin());
-
-            // Must match for every test vector
-            REQUIRE(our_hash == alpha_hash);
-
-            INFO("Test vector: version=" << vec.version << " time=" << vec.time
-                 << " bits=0x" << std::hex << vec.bits << " nonce=" << std::dec << vec.nonce);
-            INFO("Hash: " << our_hash.GetHex());
-        }
-    }
-
-    SECTION("Regtest genesis matches alpha-release") {
-        // Regtest genesis from chainparams.cpp
-        CBlockHeader genesis;
-        genesis.nVersion = 1;
-        genesis.hashPrevBlock.SetNull();
-        genesis.payloadRoot.SetNull();
-        genesis.nTime = 1760549555;
-        genesis.nBits = 0x207fffff;
-        genesis.nNonce = 2;
-        genesis.hashRandomX.SetNull();
-
-        // Our implementation
-        uint256 our_hash = genesis.GetHash();
-
-        // Alpha-release logic
-        auto serialized = genesis.Serialize();
-        uint256 alpha_hash;
-        CSHA256().Write(serialized.data(), serialized.size()).Finalize(alpha_hash.begin());
-        CSHA256().Write(alpha_hash.begin(), CSHA256::OUTPUT_SIZE).Finalize(alpha_hash.begin());
-
-        // Must match
-        REQUIRE(our_hash == alpha_hash);
-
-        // Verify against expected regtest genesis hash
-        REQUIRE(our_hash.GetHex() == "0555faa88836f4ce189235a28279af4614432234b6f7e2f350e4fc0dadb1ffa7");
-    }
 }

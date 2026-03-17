@@ -17,6 +17,9 @@ void print_usage(const char *program_name) {
       << "Options:\n"
       << "  --datadir=<path>     Data directory (default: ~/.unicity)\n"
       << "  --port=<port>        Listen port (default: 9590 mainnet, 19590 testnet, 29590 regtest)\n"
+      << "  --bftaddr=<url>      BFT rpc address (default: http://127.0.0.1:25866)\n"
+      << "                       Set to empty (e.g. --bftaddr=\"\") to disable BFT integration.\n"
+      << "                       Disabled by default in --regtest mode.\n"
       << "  --nolisten           Disable inbound connections (inbound is enabled by default)\n"
       << "  --connect=<n>        Maximum outbound connections (0 = disable automatic outbound)\n"
       << "  --maxinbound=<n>     Maximum inbound connections (default: 125)\n"
@@ -64,6 +67,15 @@ int main(int argc, char *argv[]) {
           return 1;
         }
         config.datadir = datadir;
+      } else if (arg.starts_with("--bftaddr=")) {
+        std::string bftaddr = arg.substr(10);
+        if (bftaddr.empty()) {
+            config.bftaddr = "";
+        } else if (!bftaddr.starts_with("http://") && !bftaddr.starts_with("https://")) {
+            config.bftaddr = "http://" + bftaddr;
+        } else {
+            config.bftaddr = bftaddr;
+        }
       } else if (arg.starts_with("--port=")) {
         auto port_opt = unicity::util::SafeParsePort(arg.substr(7));
         if (!port_opt) {
@@ -106,6 +118,8 @@ int main(int argc, char *argv[]) {
             unicity::protocol::magic::REGTEST;
         config.network_config.listen_port =
             unicity::protocol::ports::REGTEST;
+        // Disable BFT by default in regtest
+        config.bftaddr = "";
         // Disable NAT for regtest (localhost testing doesn't need UPnP)
         config.network_config.enable_nat = false;
       } else if (arg == "--testnet") {

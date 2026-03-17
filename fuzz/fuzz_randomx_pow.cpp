@@ -52,8 +52,8 @@ private:
 };
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    // Need at least 100 bytes for a block header
-    if (size < 100) return 0;
+    // Need at least 112 bytes for a block header
+    if (size < 112) return 0;
 
     FuzzInput input(data, size);
 
@@ -69,7 +69,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         }
     }
 
-    // Parse fuzzed block header (100 bytes for Unicity)
+    // Parse fuzzed block header (112 bytes for Unicity)
     CBlockHeader header;
     header.nVersion = input.read<int32_t>();
 
@@ -80,12 +80,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     }
     memcpy(header.hashPrevBlock.begin(), prevHash, 32);
 
-    // payloadRoot (20 bytes)
-    uint8_t payloadRoot[20];
-    for (int i = 0; i < 20; i++) {
+    // payloadRoot (32 bytes)
+    uint8_t payloadRoot[32];
+    for (int i = 0; i < 32; i++) {
         payloadRoot[i] = input.read<uint8_t>();
     }
-    memcpy(header.payloadRoot.begin(), payloadRoot, 20);
+    memcpy(header.payloadRoot.begin(), payloadRoot, 32);
 
     header.nTime = input.read<uint32_t>();
     header.nBits = input.read<uint32_t>();

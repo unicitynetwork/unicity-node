@@ -7,7 +7,7 @@
 #include <vector>
 #include <algorithm>
 
-TEST_CASE("CBlockHeader fuzz: random 100-byte round-trip preserves bytes", "[block][serialize][fuzz]") {
+TEST_CASE("CBlockHeader fuzz: random 112-byte round-trip preserves bytes", "[block][serialize][fuzz]") {
     std::mt19937 rng(0xC01DBA5Eu);
     std::uniform_int_distribution<int> dist(0, 255);
 
@@ -42,12 +42,13 @@ TEST_CASE("CBlockHeader deserialization strict size checks (truncated/oversized)
         REQUIRE(h.Deserialize(v.data(), v.size()));
     }
 
-    // Oversized buffers must be rejected regardless of content
-    const size_t oversizes[] = {101, 128, 256, 1000};
+    // Oversized buffers are now accepted (they populate vPayload)
+    const size_t oversizes[] = {113, 128, 256, 1000};
     for (size_t sz : oversizes) {
         std::vector<uint8_t> v(sz, 0xBB);
         CBlockHeader h;
-        REQUIRE_FALSE(h.Deserialize(v.data(), v.size()));
+        REQUIRE(h.Deserialize(v.data(), v.size()));
+        REQUIRE(h.vPayload.size() == (sz - CBlockHeader::HEADER_SIZE));
     }
 }
 
@@ -60,9 +61,7 @@ static CBlockHeader MakeBaselineHeader() {
     for (int i = 0; i < 32; ++i) {
         base.hashPrevBlock.begin()[i] = static_cast<uint8_t>(i);
         base.hashRandomX.begin()[i]   = static_cast<uint8_t>(255 - i);
-    }
-    for (int i = 0; i < 20; ++i) {
-        base.payloadRoot.begin()[i] = static_cast<uint8_t>(0xAA + i);
+        base.payloadRoot.begin()[i]   = static_cast<uint8_t>(0xAA + i);
     }
     return base;
 }

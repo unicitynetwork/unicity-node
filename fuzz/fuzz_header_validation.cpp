@@ -64,7 +64,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     FuzzInput input(data, size);
     uint8_t mode = input.read<uint8_t>();
 
-    // Parse fuzzed block header (100 bytes)
+    // Parse fuzzed block header (112 bytes)
     CBlockHeader header;
     header.nVersion = input.read<int32_t>();
 
@@ -75,12 +75,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     }
     memcpy(header.hashPrevBlock.begin(), prevHash, 32);
 
-    // payloadRoot (20 bytes)
-    uint8_t payloadRoot[20];
-    for (int i = 0; i < 20; i++) {
+    // payloadRoot (32 bytes)
+    uint8_t payloadRoot[32];
+    for (int i = 0; i < 32; i++) {
         payloadRoot[i] = input.read<uint8_t>();
     }
-    memcpy(header.payloadRoot.begin(), payloadRoot, 20);
+    memcpy(header.payloadRoot.begin(), payloadRoot, 32);
 
     header.nTime = input.read<uint32_t>();
     header.nBits = input.read<uint32_t>();
@@ -176,9 +176,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                 for (int j = 0; j < 32; j++) hash[j] = input.read<uint8_t>();
                 memcpy(h.hashPrevBlock.begin(), hash, 32);
 
-                uint8_t addr[20];
-                for (int j = 0; j < 20; j++) addr[j] = input.read<uint8_t>();
-                memcpy(h.payloadRoot.begin(), addr, 20);
+                uint8_t addr[32];
+                for (int j = 0; j < 32; j++) addr[j] = input.read<uint8_t>();
+                memcpy(h.payloadRoot.begin(), addr, 32);
 
                 h.nTime = input.read<uint32_t>();
                 h.nBits = input.read<uint32_t>();
@@ -224,9 +224,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                     memcpy(h.hashPrevBlock.begin(), hash, 32);
                 }
 
-                uint8_t addr[20];
-                for (int j = 0; j < 20; j++) addr[j] = input.read<uint8_t>();
-                memcpy(h.payloadRoot.begin(), addr, 20);
+                uint8_t addr[32];
+                for (int j = 0; j < 32; j++) addr[j] = input.read<uint8_t>();
+                memcpy(h.payloadRoot.begin(), addr, 32);
 
                 h.nTime = input.read<uint32_t>();
                 h.nBits = input.read<uint32_t>();
@@ -265,9 +265,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                 for (int j = 0; j < 32; j++) hash[j] = input.read<uint8_t>();
                 memcpy(h.hashPrevBlock.begin(), hash, 32);
 
-                uint8_t addr[20];
-                for (int j = 0; j < 20; j++) addr[j] = input.read<uint8_t>();
-                memcpy(h.payloadRoot.begin(), addr, 20);
+                uint8_t addr[32];
+                for (int j = 0; j < 32; j++) addr[j] = input.read<uint8_t>();
+                memcpy(h.payloadRoot.begin(), addr, 32);
 
                 h.nTime = input.read<uint32_t>();
                 h.nBits = input.read<uint32_t>();

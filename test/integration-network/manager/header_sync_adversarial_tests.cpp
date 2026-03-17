@@ -1055,7 +1055,7 @@ TEST_CASE("HeaderSync: Full batch of duplicate active-chain headers must NOT tri
     // Fix: Only request continuation when pindexLast->nHeight > tip_before->nHeight.
     // Duplicate headers from earlier in the chain will have pindexLast below tip, blocking continuation.
     //
-    // Cost to attacker: ~8 MB per iteration (80,000 headers x 100 bytes)
+    // Cost to attacker: ~9 MB per iteration (80,000 headers x 112 bytes)
     // Cost to victim: 80,000 hash lookups + CPU per iteration
 
     // Use a smaller batch for test speed. We override continuation_threshold_
@@ -1318,7 +1318,7 @@ public:
         consensus.nNetworkExpirationGracePeriod = 0;
         consensus.nSuspiciousReorgDepth = 100;
         nDefaultPort = 29590;
-        genesis = chain::CreateGenesisBlock(1296688602, 2, 0x207fffff, 1);
+        genesis = chain::CreateGenesisBlock(1296688602, 2, 0x207fffff, chain::GlobalChainParams::Get().GenesisBlock().GetUTB(), 1);
         consensus.hashGenesisBlock = genesis.GetHash();
     }
 };

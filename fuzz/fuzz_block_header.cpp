@@ -16,8 +16,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (success && !header.IsNull()) {
         auto serialized = header.Serialize();
 
-        // CRITICAL: Validate serialized size is exactly BLOCK_HEADER_SIZE (100 bytes)
-        // Unicity headers: 4 + 32 + 20 + 4 + 4 + 4 + 32 = 100 bytes
+        // CRITICAL: Validate serialized size is exactly BLOCK_HEADER_SIZE (112 bytes)
+        // Unicity headers: 4 + 32 + 32 + 4 + 4 + 4 + 32 = 112 bytes
         // (version + prevHash + payloadRoot + time + bits + nonce + hashRandomX)
         if (serialized.size() != CBlockHeader::HEADER_SIZE) {
             // Serialize() produced wrong size - BUG!

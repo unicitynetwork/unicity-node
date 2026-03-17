@@ -756,7 +756,7 @@ TEST_CASE("RPC Commands: submitblock", "[rpc][integration][mining]") {
     SECTION("Invalid hex length returns error") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        // 100 bytes = 200 hex chars expected
+        // 112 bytes = 224 hex chars expected
         std::string response = client.ExecuteCommand("submitblock", {"abcd1234"});
         REQUIRE(response.find("error") != std::string::npos);
         REQUIRE(response.find("length") != std::string::npos);
@@ -765,8 +765,8 @@ TEST_CASE("RPC Commands: submitblock", "[rpc][integration][mining]") {
     SECTION("Invalid hex characters returns error") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        // 200 chars but with invalid hex (contains 'g')
-        std::string invalid_hex(200, 'g');
+        // 224 chars but with invalid hex (contains 'g')
+        std::string invalid_hex(224, 'g');
         std::string response = client.ExecuteCommand("submitblock", {invalid_hex});
         REQUIRE(response.find("error") != std::string::npos);
     }

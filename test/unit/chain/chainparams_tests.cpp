@@ -62,7 +62,7 @@ TEST_CASE("Genesis block creation", "[chainparams]") {
     SECTION("Genesis block properties") {
         REQUIRE(genesis.nVersion == 1);
         REQUIRE(genesis.hashPrevBlock.IsNull());
-        REQUIRE(genesis.payloadRoot.IsNull());
+        REQUIRE_FALSE(genesis.payloadRoot.IsNull());
         REQUIRE(genesis.nTime > 0);
         REQUIRE(genesis.nBits > 0);
     }

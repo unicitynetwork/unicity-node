@@ -26,6 +26,7 @@
 #include "chain/randomx_pow.hpp"
 #include "chain/validation.hpp"
 #include "chain/notifications.hpp"
+#include "util/hash.hpp"
 #include "util/time.hpp"
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -112,7 +113,14 @@ static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.payloadRoot.SetNull();
+    
+    uint256 token_id;
+    token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+    uint256 leaf_0 = SingleHash(token_id);
+    uint256 leaf_1 = uint256::ZERO;
+    header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+    header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = 0;
@@ -132,7 +140,14 @@ static CBlockHeader MakeChild(const CBlockIndex* prev, uint32_t nTime, uint32_t 
     CBlockHeader h;
     h.nVersion = 1;
     h.hashPrevBlock = prev ? prev->GetBlockHash() : uint256();
-    h.payloadRoot.SetNull();
+    
+    uint256 token_id;
+    token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+    uint256 leaf_0 = SingleHash(token_id);
+    uint256 leaf_1 = uint256::ZERO;
+    h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+    h.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
     h.nTime = nTime;
     h.nBits = nBits;
     h.nNonce = 0;
@@ -145,7 +160,14 @@ static CBlockHeader MineChild(const CBlockIndex* prev, const ChainParams& params
     CBlockHeader h;
     h.nVersion = 1;
     h.hashPrevBlock = prev ? prev->GetBlockHash() : uint256();
-    h.payloadRoot.SetNull();
+    
+    uint256 token_id;
+    token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+    uint256 leaf_0 = SingleHash(token_id);
+    uint256 leaf_1 = uint256::ZERO;
+    h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+    h.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
     h.nTime = nTime;
     h.nBits = consensus::GetNextWorkRequired(prev, params);
     h.nNonce = 0;
@@ -1252,7 +1274,7 @@ public:
         consensus.nNetworkExpirationGracePeriod = 1;
         consensus.nSuspiciousReorgDepth = 100;
         nDefaultPort = 29590;
-        genesis = CreateGenesisBlock(1296688602, 2, 0x207fffff, 1);
+        genesis = CreateGenesisBlock(1296688602, 2, 0x207fffff, GlobalChainParams::Get().GenesisBlock().GetUTB(), 1);
         consensus.hashGenesisBlock = genesis.GetHash();
     }
 };
@@ -1760,7 +1782,14 @@ static CBlockHeader CreateTipsTestHeader(uint32_t nTime = 1234567890, uint32_t n
   CBlockHeader header;
   header.nVersion = 1;
   header.hashPrevBlock.SetNull();
-  header.payloadRoot.SetNull();
+  
+  uint256 token_id;
+  token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+  uint256 leaf_0 = SingleHash(token_id);
+  uint256 leaf_1 = uint256::ZERO;
+  header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+  header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
   header.nTime = nTime;
   header.nBits = nBits;
   header.nNonce = 0;

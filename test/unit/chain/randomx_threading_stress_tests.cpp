@@ -289,7 +289,7 @@ TEST_CASE("RandomX - CheckProofOfWork concurrent stress test", "[randomx][stress
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock = uint256();
-    header.payloadRoot = uint160();
+    header.payloadRoot = uint256();
     header.nTime = 1000000;
     header.nBits = 0x207fffff;
     header.nNonce = 0;
@@ -331,7 +331,7 @@ TEST_CASE("RandomX - CheckProofOfWork concurrent stress test", "[randomx][stress
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock = uint256();
-        header.payloadRoot = uint160();
+        header.payloadRoot = uint256();
         header.nTime = 1000000 + (i * 100000); // Different epoch per thread
         header.nBits = 0x207fffff;
         header.nNonce = 0;

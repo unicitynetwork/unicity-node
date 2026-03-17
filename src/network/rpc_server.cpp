@@ -737,6 +737,7 @@ std::string RPCServer::HandleGetBlockHeader(const std::vector<std::string>& para
       << "  \"difficulty\": " << difficulty << ",\n"
       << "  \"chainwork\": \"" << index->nChainWork.GetHex() << "\",\n"
       << "  \"previousblockhash\": \"" << (index->pprev ? index->pprev->GetBlockHash().GetHex() : "null") << "\",\n"
+      << "  \"payload_root\": \"" << index->payloadRoot.GetHex() << "\",\n"
       << "  \"rx_hash\": \"" << index->hashRandomX.GetHex() << "\"";
 
   // nextblockhash (if block has a successor on the active chain)
@@ -1593,23 +1594,6 @@ std::string RPCServer::HandleStartMining(const std::vector<std::string>& params)
     return util::JsonError("Already mining");
   }
 
-  // Parse optional mining address parameter
-  // Note: Address is "sticky" - if not provided, previous address is retained
-  if (!params.empty()) {
-    const std::string& address_str = params[0];
-
-    // Validate address is 40 hex characters (160 bits / 4 bits per hex char)
-    // Validate length and hex characters using centralized helper
-    if (address_str.length() != 40 || !util::IsValidHex(address_str)) {
-      return util::JsonError("Invalid mining address (must be 40 hex characters)");
-    }
-
-    // Parse and set mining address (persists across subsequent calls)
-    uint160 mining_address;
-    mining_address.SetHex(address_str);
-    miner_->SetMiningAddress(mining_address);
-  }
-
   bool started = miner_->Start();
   if (!started) {
     return util::JsonError("Failed to start mining");
@@ -1618,8 +1602,7 @@ std::string RPCServer::HandleStartMining(const std::vector<std::string>& params)
   std::ostringstream oss;
   oss << "{\n"
       << "  \"mining\": true,\n"
-      << "  \"message\": \"Mining started\",\n"
-      << "  \"address\": \"" << miner_->GetMiningAddress().GetHex() << "\"\n"
+      << "  \"message\": \"Mining started\"\n"
       << "}\n";
   return oss.str();
 }
@@ -1664,23 +1647,6 @@ std::string RPCServer::HandleGenerate(const std::vector<std::string>& params) {
   }
 
   int num_blocks = *num_blocks_opt;
-
-  // Parse optional mining address parameter (second parameter)
-  // Note: Address is "sticky" - if not provided, previous address is retained
-  if (params.size() >= 2) {
-    const std::string& address_str = params[1];
-
-    // Validate address is 40 hex characters (160 bits / 4 bits per hex char)
-    // Validate length and hex characters using centralized helper
-    if (address_str.length() != 40 || !util::IsValidHex(address_str)) {
-      return util::JsonError("Invalid mining address (must be 40 hex characters)");
-    }
-
-    // Parse and set mining address (persists across subsequent calls)
-    uint160 mining_address;
-    mining_address.SetHex(address_str);
-    miner_->SetMiningAddress(mining_address);
-  }
 
   // Get starting height and calculate target
   const chain::CBlockIndex* start_tip = chainstate_manager_.GetTip();
@@ -1777,7 +1743,7 @@ std::string RPCServer::HandleSubmitHeader(const std::vector<std::string>& params
   }
 
   if (params.empty()) {
-    return util::JsonError("Missing parameter: hex-encoded 100-byte header");
+    return util::JsonError("Missing parameter: hex-encoded 112-byte header");
   }
 
   const std::string& hex = params[0];
@@ -1796,14 +1762,14 @@ std::string RPCServer::HandleSubmitHeader(const std::vector<std::string>& params
     }
   }
 
-  // Expect exactly 200 hex chars (100 bytes)
-  if (hex.size() != 200) {
-    return util::JsonError("Invalid header length (expect 200 hex chars)");
+  // Expect exactly 224 hex chars (112 bytes)
+  if (hex.size() != 224) {
+    return util::JsonError("Invalid header length (expect 224 hex chars)");
   }
 
   // Decode hex
   std::vector<uint8_t> bytes;
-  bytes.reserve(100);
+  bytes.reserve(112);
   auto hex_to_nibble = [](char c) -> int {
     if (c >= '0' && c <= '9')
       return c - '0';
@@ -2133,9 +2099,9 @@ std::string RPCServer::HandleSubmitBlock(const std::vector<std::string>& params)
 
   const std::string& hex = params[0];
 
-  // Expect exactly 200 hex chars (100 bytes)
-  if (hex.size() != 200) {
-    return util::JsonError("Invalid header length (expect 200 hex chars for 100-byte header)");
+  // Expect exactly 224 hex chars (112 bytes)
+  if (hex.size() != 224) {
+    return util::JsonError("Invalid header length (expect 224 hex chars for 112-byte header)");
   }
 
   // Decode hex to bytes
@@ -2150,7 +2116,7 @@ std::string RPCServer::HandleSubmitBlock(const std::vector<std::string>& params)
   };
 
   std::vector<uint8_t> bytes;
-  bytes.reserve(100);
+  bytes.reserve(112);
   for (size_t i = 0; i < hex.size(); i += 2) {
     int hi = hex_to_nibble(hex[i]);
     int lo = hex_to_nibble(hex[i + 1]);

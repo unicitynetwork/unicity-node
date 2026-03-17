@@ -118,9 +118,9 @@ TEST_CASE("Adversarial - HeaderLengthMismatch", "[adversarial][malformed]") {
     peer->start();
     io_context.poll();
 
-    SECTION("Header claims 100 bytes, send 50 bytes") {
-        protocol::MessageHeader header(magic, protocol::commands::VERSION, 100);
-        header.checksum = [&](const auto& data) { uint256 hash = Hash(data); std::array<uint8_t, 4> checksum; std::memcpy(checksum.data(), hash.begin(), 4); return checksum; }(std::vector<uint8_t>(100, 0));
+    SECTION("Header claims 112 bytes, send 50 bytes") {
+        protocol::MessageHeader header(magic, protocol::commands::VERSION, 112);
+        header.checksum = [&](const auto& data) { uint256 hash = Hash(data); std::array<uint8_t, 4> checksum; std::memcpy(checksum.data(), hash.begin(), 4); return checksum; }(std::vector<uint8_t>(112, 0));
         auto header_bytes = message::serialize_header(header);
         std::vector<uint8_t> partial_payload(50, 0xAA);
         std::vector<uint8_t> malicious_msg;
@@ -132,11 +132,11 @@ TEST_CASE("Adversarial - HeaderLengthMismatch", "[adversarial][malformed]") {
         CHECK(peer->version() == 0);
     }
 
-    SECTION("Header claims 0 bytes, send 100 bytes") {
+    SECTION("Header claims 0 bytes, send 112 bytes") {
         protocol::MessageHeader header(magic, protocol::commands::VERSION, 0);
         header.checksum.fill(0);
         auto header_bytes = message::serialize_header(header);
-        std::vector<uint8_t> unexpected_payload(100, 0xBB);
+        std::vector<uint8_t> unexpected_payload(112, 0xBB);
         std::vector<uint8_t> malicious_msg;
         malicious_msg.insert(malicious_msg.end(), header_bytes.begin(), header_bytes.end());
         malicious_msg.insert(malicious_msg.end(), unexpected_payload.begin(), unexpected_payload.end());
@@ -678,14 +678,14 @@ TEST_CASE("Adversarial - MessageSizeLimits", "[adversarial][malformed][dos]") {
         // The rejection happens based on the count, not the actual data
         message::MessageSerializer s;
         s.write_varint(protocol::MAX_HEADERS_SIZE + 1);  // One more than MAX_HEADERS_SIZE
-        // Write just a few dummy headers (100 bytes each for Unicity)
+        // Write just a few dummy headers (112 bytes each for Unicity)
         for (int i = 0; i < 10; i++) {
-            // CBlockHeader: 100 bytes (version, prev_hash, miner_addr, timestamp, bits, nonce, randomx_hash)
+            // CBlockHeader: 112 bytes (version, prev_hash, miner_addr, timestamp, bits, nonce, randomx_hash)
             s.write_uint32(1);  // version (4)
             std::array<uint8_t, 32> prev_hash{};
             s.write_bytes(prev_hash.data(), 32);  // hashPrevBlock (32)
-            std::array<uint8_t, 20> miner_addr{};
-            s.write_bytes(miner_addr.data(), 20);  // payloadRoot (20)
+            std::array<uint8_t, 32> miner_addr{};
+            s.write_bytes(miner_addr.data(), 32);  // payloadRoot (32)
             s.write_uint32(1234567890);  // timestamp (4)
             s.write_uint32(0x1d00ffff);  // bits (4)
             s.write_uint32(i);  // nonce (4)
@@ -1858,7 +1858,7 @@ TEST_CASE("Handshake Security - Large message before VERACK", "[adversarial][han
 
     // Attack: Send large HEADERS message (near max size) before VERACK
     message::HeadersMessage msg;
-    // Add 2000 headers (2000 * 100 bytes = 200KB)
+    // Add 2000 headers (2000 * 112 bytes = 224KB)
     for (int i = 0; i < 2000; ++i) {
         CBlockHeader header;
         header.nVersion = 1;

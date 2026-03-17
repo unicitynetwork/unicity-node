@@ -85,19 +85,19 @@ The chain layer validates block headers and maintains the blockchain state:
 
 ### Data Structures
 
-#### Block Header (100 bytes)
+#### Block Header (112 bytes)
 
 The fundamental unit of the blockchain:
 
-| Field         | Size     | Description                                        |
-|---------------|----------|----------------------------------------------------|
-| nVersion      | 4 bytes  | Block version                                      |
-| hashPrevBlock | 32 bytes | Previous block hash                                |
-| payloadRoot   | 20 bytes | Payload hash (Hash of reward token ID and UTB)     |
-| nTime         | 4 bytes  | Unix timestamp                                     |
-| nBits         | 4 bytes  | Difficulty target (compact format)                 |
-| nNonce        | 4 bytes  | PoW nonce                                          |
-| hashRandomX   | 32 bytes | RandomX hash (PoW commitment)                      |
+| Field         | Size     | Description                                              |
+|---------------|----------|----------------------------------------------------------|
+| nVersion      | 4 bytes  | Block version                                            |
+| hashPrevBlock | 32 bytes | Previous block hash                                      |
+| payloadRoot   | 32 bytes | Payload hash (Hash of reward token id hash and UTB hash) |
+| nTime         | 4 bytes  | Unix timestamp                                           |
+| nBits         | 4 bytes  | Difficulty target (compact format)                       |
+| nNonce        | 4 bytes  | PoW nonce                                                |
+| hashRandomX   | 32 bytes | RandomX hash (PoW commitment)                            |
 
 #### Block Index
 
@@ -186,6 +186,14 @@ After Reorg:
 - **Memory-hard**: Requires ~2GB dataset per epoch
 - **Epoch-based**: Dataset changes periodically
 - **Two-phase verification**: Fast commitment check, then full RandomX
+
+#### BFT Integration
+
+Unicity integrates with the BFT layer to establish periodic checkpoints.
+- **Verification**: The node verifies the hardcoded genesis UTB against the epoch 1 trust base fetched from the BFT network.
+- **Requirement**: BFT integration is required for **testnet** and **mainnet**. The node will fail to start if it cannot connect to the BFT node at the configured `bftaddr`.
+- **Disabling**: Integration can be disabled by setting `bftaddr` to an empty string. This is the **default for regtest**.
+- **Epoch 1**: When disabled, the node assumes the hardcoded genesis UTB is valid without network verification.
 
 #### ASERT Difficulty Adjustment
 

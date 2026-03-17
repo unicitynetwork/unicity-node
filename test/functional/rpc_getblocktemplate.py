@@ -204,11 +204,11 @@ def test_submitblock_invalid_prevhash(node):
     print("  Testing submitblock rejects unknown prevhash...")
 
     # Construct a header with garbage prevhash (won't connect to chain)
-    # Header format: version(4) + prevhash(32) + mineraddr(20) + time(4) + bits(4) + nonce(4) + rxhash(32) = 100 bytes
+    # Header format: version(4) + prevhash(32) + mineraddr(32) + time(4) + bits(4) + nonce(4) + rxhash(32) = 112 bytes
     fake_header = (
         "01000000" +                              # version = 1
         "ff" * 32 +                               # prevhash = all 0xff (doesn't exist)
-        "00" * 20 +                               # payloadRoot = zeros
+        "00" * 32 +                               # payloadRoot = zeros
         "00000000" +                              # time = 0
         "ffff001d" +                              # bits (doesn't matter)
         "00000000" +                              # nonce = 0

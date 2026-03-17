@@ -20,6 +20,7 @@
 #include "chain/pow.hpp"
 #include "chain/randomx_pow.hpp"
 #include "network/protocol.hpp"
+#include "util/hash.hpp"
 #include "util/time.hpp"
 #include "common/test_chainstate_manager.hpp"
 #include <memory>
@@ -38,7 +39,14 @@ static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.payloadRoot.SetNull();
+    
+    uint256 token_id;
+    token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+    uint256 leaf_0 = SingleHash(token_id);
+    uint256 leaf_1 = uint256::ZERO;
+    header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+    header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = nNonce;
@@ -554,7 +562,14 @@ TEST_CASE("CheckHeadersPoW - Direct validation function tests", "[validation][po
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.payloadRoot.SetNull();
+        
+        uint256 token_id;
+        token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+        uint256 leaf_0 = SingleHash(token_id);
+        uint256 leaf_1 = uint256::ZERO;
+        header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+        header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
         header.nTime = 1234567890;
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -580,7 +595,14 @@ TEST_CASE("CheckHeadersPoW - Direct validation function tests", "[validation][po
             CBlockHeader header;
             header.nVersion = 1;
             header.hashPrevBlock.SetNull();
-            header.payloadRoot.SetNull();
+            
+            uint256 token_id;
+            token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+            uint256 leaf_0 = SingleHash(token_id);
+            uint256 leaf_1 = uint256::ZERO;
+            header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+            header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
             header.nTime = 1234567890;
             header.nBits = 0x207fffff;
             header.nNonce = 0;
@@ -611,7 +633,7 @@ TEST_CASE("Validation - integration test", "[validation]") {
         CBlockHeader header = CreateTestHeader();
 
         auto serialized = header.Serialize();
-        REQUIRE(serialized.size() == 100);
+        REQUIRE(serialized.size() == 112);
 
         CBlockHeader header2;
         REQUIRE(header2.Deserialize(serialized.data(), serialized.size()));

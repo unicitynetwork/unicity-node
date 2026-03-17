@@ -735,7 +735,7 @@ def test_oversized_headers_message():
     print("  Building oversized HEADERS message (80001 headers)...")
 
     # We'll build a fake HEADERS payload
-    # Each header is 100 bytes in Unicity
+    # Each header is 112 bytes in Unicity
     # We need to craft the message to claim 80001 headers
 
     # Simple approach: create payload that claims many headers
@@ -745,9 +745,9 @@ def test_oversized_headers_message():
     # 80001 = 0x13881, little-endian = 0x81 0x38 0x01 0x00
     count_bytes = b"\xfe\x81\x38\x01\x00"  # 80001 in varint
 
-    # Each header is 100 bytes in Unicity
+    # Each header is 112 bytes in Unicity
     # We'll just send garbage that looks like headers
-    fake_header = b"\x00" * 100
+    fake_header = b"\x00" * 112
     fake_headers_payload = count_bytes + (fake_header * 100)  # Only send 100, claim 80001
 
     # Create message

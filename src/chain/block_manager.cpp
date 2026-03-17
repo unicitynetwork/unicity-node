@@ -8,6 +8,7 @@
 #include "util/arith_uint256.hpp"
 #include "util/files.hpp"
 #include "util/logging.hpp"
+#include "util/string_parsing.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -201,6 +202,7 @@ bool BlockManager::Save(const std::string& filepath) const {
       block_data["bits"] = block_index->nBits;
       block_data["nonce"] = block_index->nNonce;
       block_data["hash_randomx"] = block_index->hashRandomX.ToString();
+      block_data["payload"] = util::ToHex(block_index->vPayload);
 
       // Chain metadata
       block_data["height"] = block_index->nHeight;
@@ -358,6 +360,11 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
       header.nNonce = block_data["nonce"].get<uint32_t>();
       header.hashRandomX.SetHex(block_data["hash_randomx"].get<std::string>());
       header.hashPrevBlock = prev_hash;
+
+      // Load payload if present
+      if (block_data.contains("payload") && block_data["payload"].is_string()) {
+        header.vPayload = util::ParseHex(block_data["payload"].get<std::string>());
+      }
 
       // Verify reconstructed header hash matches stored hash
       // This detects corruption, tampering, or missing fields in the JSON

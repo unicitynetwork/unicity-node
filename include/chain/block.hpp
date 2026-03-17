@@ -16,7 +16,7 @@
 
 // CBlockHeader - Block header structure (represents entire block in headers-only chain)
 // Based on Bitcoin's block header:
-// - Uses payloadRoot (uint160) instead of hashMerkleRoot
+// - Uses payloadRoot (uint256) instead of hashMerkleRoot
 // - Includes hashRandomX for RandomX PoW algorithm
 // - No transaction data (headers-only chain)
 //
@@ -27,30 +27,33 @@ public:
   // Block header fields (initialized to zero/null for safety)
   int32_t nVersion{0};
   uint256 hashPrevBlock{};  // Hash of previous block header (copied byte-for-byte as stored, no endian swap)
-  uint160 payloadRoot{};    // Root of block payload tree (Hash of rewardTokenId and UTB)
+  uint256 payloadRoot{};    // Root of block payload tree (Hash of reward token id hash and UTB hash)
   uint32_t nTime{0};        // Unix timestamp
   uint32_t nBits{0};        // Difficulty target (compact format)
   uint32_t nNonce{0};       // Nonce for proof-of-work
   uint256 hashRandomX{};    // RandomX hash for PoW verification (copied byte-for-byte as stored, no endian swap)
 
+  // Appended variable-length payload (not part of the 112-byte header hashing)
+  // Contains at least 32 bytes: hash of rewardTokenId and UTB_cbor (if UTB epoch changed)
+  std::vector<uint8_t> vPayload{};
+
   // Wire format constants
   static constexpr size_t UINT256_BYTES = 32;
-  static constexpr size_t UINT160_BYTES = 20;
 
-  // Serialized header size: 4 + 32 + 20 + 4 + 4 + 4 + 32 = 100 bytes
+  // Serialized header size: 4 + 32 + 32 + 4 + 4 + 4 + 32 = 112 bytes
   static constexpr size_t HEADER_SIZE = 4 +              // nVersion (int32_t)
                                         UINT256_BYTES +  // hashPrevBlock
-                                        UINT160_BYTES +  // payloadRoot
+                                        UINT256_BYTES +  // payloadRoot
                                         4 +              // nTime (uint32_t)
                                         4 +              // nBits (uint32_t)
                                         4 +              // nNonce (uint32_t)
                                         UINT256_BYTES;   // hashRandomX
 
-  // Field offsets within the 100-byte header (for serialization/deserialization)
+  // Field offsets within the 112-byte header (for serialization/deserialization)
   static constexpr size_t OFF_VERSION = 0;
   static constexpr size_t OFF_PREV = OFF_VERSION + 4;
   static constexpr size_t OFF_PAYLOAD_ROOT = OFF_PREV + UINT256_BYTES;
-  static constexpr size_t OFF_TIME = OFF_PAYLOAD_ROOT + UINT160_BYTES;
+  static constexpr size_t OFF_TIME = OFF_PAYLOAD_ROOT + UINT256_BYTES;
   static constexpr size_t OFF_BITS = OFF_TIME + 4;
   static constexpr size_t OFF_NONCE = OFF_BITS + 4;
   static constexpr size_t OFF_RANDOMX = OFF_NONCE + 4;
@@ -61,10 +64,9 @@ public:
 
   // Compile-time verification - hash/address types
   static_assert(sizeof(uint256) == UINT256_BYTES, "uint256 must be 32 bytes");
-  static_assert(sizeof(uint160) == UINT160_BYTES, "uint160 must be 20 bytes");
 
   // Compile-time verification - total header size and offset math
-  static_assert(HEADER_SIZE == 100, "Header size must be 100 bytes");
+  static_assert(HEADER_SIZE == 112, "Header size must be 112 bytes");
   static_assert(OFF_RANDOMX + UINT256_BYTES == HEADER_SIZE, "offset math must be correct");
 
   // Type alias for fixed-size header serialization
@@ -78,6 +80,7 @@ public:
     nBits = 0;
     nNonce = 0;
     hashRandomX.SetNull();
+    vPayload.clear();
   }
 
   [[nodiscard]] bool IsNull() const noexcept {
@@ -85,13 +88,20 @@ public:
            hashRandomX.IsNull();
   }
 
+  // Access UTB CBOR record from the payload
+  [[nodiscard]] std::span<const uint8_t> GetUTB() const noexcept;
+
   // Compute the hash of this header
   [[nodiscard]] uint256 GetHash() const noexcept;
 
+  // Compute payload root from two leaves (e.g. TokenID hash and UTB hash)
+  [[nodiscard]] static uint256 ComputePayloadRoot(const uint256& leaf_0, const uint256& leaf_1) noexcept;
+  
   // Serialize to wire format
   // Note: Hash blobs (hashPrevBlock, payloadRoot, hashRandomX) are copied
   // byte-for-byte as stored (no endian swap). Scalar fields use little-endian.
-  [[nodiscard]] HeaderBytes Serialize() const noexcept;
+  // Optional includePayload appends vPayload contents.
+  [[nodiscard]] std::vector<uint8_t> Serialize(bool includePayload = false) const noexcept;
 
   // Deserialize from wire format
   [[nodiscard]] bool Deserialize(const uint8_t* data, size_t size) noexcept;
@@ -102,10 +112,6 @@ public:
   // Human-readable string
   [[nodiscard]] std::string ToString() const;
 };
-
-// Verify no padding in struct (sanity check that field layout matches wire format)
-static_assert(sizeof(CBlockHeader) == CBlockHeader::HEADER_SIZE,
-              "CBlockHeader has unexpected padding - check field alignment");
 
 // CBlockLocator - Describes a position in the block chain (for finding common ancestor with peer)
 struct CBlockLocator {

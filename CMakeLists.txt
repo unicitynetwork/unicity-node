@@ -30,6 +30,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Enable PIC (Position Independent Code) for all targets
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # Default to Release build
 if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "")
     set(CMAKE_BUILD_TYPE "Release")
@@ -205,6 +208,31 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
+# cpp-httplib - Single header HTTP library
+FetchContent_Declare(
+    httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG        v0.38.0
+    GIT_SHALLOW    TRUE
+)
+set(HTTPLIB_COMPILE OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(httplib)
+
+# libsecp256k1 - Optimized C library for EC operations on curve secp256k1
+FetchContent_Declare(
+    libsecp256k1
+    GIT_REPOSITORY https://github.com/bitcoin-core/secp256k1.git
+    GIT_TAG        v0.7.1
+    GIT_SHALLOW    TRUE
+)
+set(SECP256K1_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_BUILD_EXHAUSTIVE_TESTS OFF CACHE BOOL "" FORCE)
+set(SECP256K1_ECMULT_WINDOW_SIZE 15 CACHE STRING "" FORCE)
+set(SECP256K1_ECMULT_GEN_WINDOW_SIZE 4 CACHE STRING "" FORCE)
+set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(libsecp256k1)
+
 # miniupnpc - UPnP NAT traversal
 FetchContent_Declare(
     miniupnpc
@@ -265,6 +293,10 @@ add_library(chain STATIC
     src/chain/chainstate_manager.cpp
     src/chain/timedata.cpp
     src/chain/miner.cpp
+    src/chain/token_generator.cpp
+    src/chain/trust_base.cpp
+    src/chain/bft_client.cpp
+    src/chain/trust_base_manager.cpp
 )
 
 target_include_directories(chain PUBLIC
@@ -277,10 +309,16 @@ if(randomx_POPULATED)
     target_include_directories(chain PUBLIC ${randomx_SOURCE_DIR}/src)
 endif()
 
+FetchContent_GetProperties(httplib)
+if(httplib_POPULATED)
+    target_include_directories(chain PUBLIC ${httplib_SOURCE_DIR})
+endif()
+
 target_link_libraries(chain PUBLIC
     util
     randomx
     nlohmann_json::nlohmann_json
+    secp256k1
 )
 
 # Network Library - P2P networking and RPC

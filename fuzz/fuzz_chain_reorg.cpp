@@ -124,6 +124,7 @@ CBlockHeader BuildFuzzHeader(FuzzInput& input, const uint256& prevHash, uint32_t
 
     // Difficulty: use easy target for fuzzing
     header.nBits = 0x207fffff; // Very easy target
+    header.payloadRoot.SetHex("00");
 
     // Nonce and RandomX hash (not validated in fuzz mode)
     header.nNonce = input.ReadUInt32();

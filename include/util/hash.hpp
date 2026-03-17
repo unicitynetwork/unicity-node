@@ -57,3 +57,10 @@ inline uint256 Hash(std::span<const uint8_t> data) {
   CHash256().Write(data.data(), data.size()).Finalize(result);
   return result;
 }
+
+/** Compute the single SHA-256 hash of a byte span. */
+inline uint256 SingleHash(std::span<const uint8_t> data) {
+  uint256 result;
+  CSHA256().Write(data.data(), data.size()).Finalize(result.begin());
+  return result;
+}

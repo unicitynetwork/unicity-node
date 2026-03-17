@@ -117,6 +117,7 @@ public:
             block_data["bits"] = block_index.nBits;
             block_data["nonce"] = block_index.nNonce;
             block_data["hash_randomx"] = block_index.hashRandomX.ToString();
+            block_data["payload"] = "";  // Empty payload for test blocks
             block_data["height"] = block_index.nHeight;
             block_data["chainwork"] = block_index.nChainWork.GetHex();
             block_data["status"] = {
