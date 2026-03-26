@@ -6,7 +6,6 @@
 #include "util/uint.hpp"
 
 #include <cctype>
-#include <format>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
