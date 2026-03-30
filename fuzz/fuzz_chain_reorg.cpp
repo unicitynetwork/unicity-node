@@ -177,7 +177,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             baseTime = header.nTime + 120;
 
             ValidationState state;
-            auto* pindex = chainstate.AcceptBlockHeader(header, state, true);
+            auto* pindex = chainstate.AcceptBlockHeader(header, state);
             if (pindex) {
                 chain_tips[0] = header.GetHash();
             }
@@ -199,7 +199,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             CBlockHeader header = BuildFuzzHeader(input, prevHash, baseTime);
 
             ValidationState state;
-            auto* pindex = chainstate.AcceptBlockHeader(header, state, true);
+            auto* pindex = chainstate.AcceptBlockHeader(header, state);
             if (pindex && chain_tips.size() < num_chains) {
                 chain_tips.push_back(header.GetHash());
             }
@@ -217,7 +217,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             baseTime = header.nTime + 120;
 
             ValidationState state;
-            auto* pindex = chainstate.AcceptBlockHeader(header, state, true);
+            auto* pindex = chainstate.AcceptBlockHeader(header, state);
             if (pindex) {
                 chain_tips[tip_idx] = header.GetHash();
             }
@@ -232,7 +232,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             CBlockHeader header = BuildFuzzHeader(input, fakeParent, baseTime);
 
             ValidationState state;
-            chainstate.AcceptBlockHeader(header, state, input.ReadByte());
+            chainstate.AcceptBlockHeader(header, state);
             // Might be orphaned or rejected
             break;
         }
