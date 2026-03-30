@@ -8,6 +8,7 @@
 #include "network/rpc_client.hpp"
 #include "network/rpc_server.hpp"
 #include "util/logging.hpp"
+#include <nlohmann/json.hpp>
 
 #include <thread>
 #include <chrono>
@@ -604,6 +605,28 @@ TEST_CASE("RPC Commands: getbestblockhash", "[rpc][integration][blockchain]") {
         std::string response = client.ExecuteCommand("getbestblockhash", {});
         // Empty chain should return null/zero hash or error
         REQUIRE(!response.empty());
+
+        auto j = nlohmann::json::parse(response);
+        REQUIRE(j.is_null());
+    }
+}
+
+TEST_CASE("RPC Commands: getblockhash", "[rpc][integration][blockchain]") {
+    RPCTestFixture fixture;
+    REQUIRE(fixture.StartServer());
+    std::this_thread::sleep_for(100ms);
+
+    rpc::RPCClient client(fixture.GetSocketPath());
+    REQUIRE_FALSE(client.Connect().has_value());
+
+    SECTION("Returns error for empty chain") {
+        std::string response = client.ExecuteCommand("getblockhash", {"0"});
+        REQUIRE(!response.empty());
+
+        auto j = nlohmann::json::parse(response);
+        REQUIRE(j.is_object());
+        REQUIRE(j.contains("error"));
+        REQUIRE(j["error"].get<std::string>().find("out of range") != std::string::npos);
     }
 }
 
