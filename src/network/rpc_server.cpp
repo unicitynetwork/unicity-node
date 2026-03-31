@@ -21,6 +21,7 @@
 #include "chain/chainparams.hpp"
 #include "chain/chainstate_manager.hpp"
 #include "chain/miner.hpp"
+#include "chain/token_manager.hpp"
 #include "chain/notifications.hpp"
 #include "chain/pow.hpp"
 #include "chain/timedata.hpp"
@@ -29,6 +30,7 @@
 #include "network/network_manager.hpp"
 #include "network/addr_relay_manager.hpp"
 #include "network/connection_manager.hpp"
+#include "util/hash.hpp"
 #include "util/logging.hpp"
 #include "util/netaddress.hpp"
 #include "util/string_parsing.hpp"
@@ -74,6 +76,8 @@ RPCServer::RPCServer(
     validation::ChainstateManager& chainstate_manager,
     network::NetworkManager& network_manager,
     mining::CPUMiner* miner,
+    mining::TokenManager& token_manager,
+    chain::TrustBaseManager& trust_base_manager,
     const chain::ChainParams& params,
     std::function<void()> shutdown_callback)
     : socket_path_(socket_path)
@@ -85,6 +89,8 @@ RPCServer::RPCServer(
     , server_fd_(-1)
     , running_(false)
     , shutting_down_(false)
+    , token_manager_(token_manager)
+    , trust_base_manager_(trust_base_manager)
 {
   RegisterHandlers();
 
@@ -2071,65 +2077,91 @@ std::string RPCServer::HandleGetBlockTemplate(const std::vector<std::string>& pa
     cur_time = tip->nTime + 1;
   }
 
+  // Calculate reward token
+  const uint256 rewardTokenId = token_manager_.GenerateNextTokenId();
+  const uint256 leaf_0 = SingleHash(std::span(rewardTokenId.begin(), rewardTokenId.size()));
+  uint256 leaf_1 = uint256::ZERO;
+  std::vector<uint8_t> utb_cbor;
+
+  auto new_tbs = trust_base_manager_.SyncTrustBases();
+  if (!new_tbs.empty()) {
+    utb_cbor = new_tbs.back().ToCBOR();
+    leaf_1 = SingleHash(utb_cbor);
+  }
+
+  const uint256 payload_root = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+
+  // Construct full payload (leaf_0 + UTB_cbor)
+  // This is what the miner actually puts into the block
+  std::vector<uint8_t> payload_bytes;
+  payload_bytes.assign(leaf_0.begin(), leaf_0.end());
+  if (!utb_cbor.empty()) {
+    payload_bytes.insert(payload_bytes.end(), utb_cbor.begin(), utb_cbor.end());
+  }
+
   // Build response JSON
   // Note: This is a simplified getblocktemplate for headers-only chain
   // No transactions, coinbase, or merkle tree - just header fields
   std::ostringstream oss;
   oss << "{\n"
-      << "  \"version\": 1,\n"
+      << "  \"version\": " << tip->nVersion << ",\n"
       << "  \"previousblockhash\": \"" << prev_hash.GetHex() << "\",\n"
       << "  \"height\": " << next_height << ",\n"
       << "  \"curtime\": " << cur_time << ",\n"
       << "  \"bits\": \"" << std::hex << std::setw(8) << std::setfill('0') << next_bits << std::dec << "\",\n"
       << "  \"target\": \"" << target.GetHex() << "\",\n"
+      << "  \"payloadroot\": \"" << payload_root.GetHex() << "\",\n"
       << "  \"longpollid\": \"" << prev_hash.GetHex() << "\",\n"
       << "  \"mintime\": " << (tip->nTime + 1) << ",\n"
       << "  \"mutable\": [\"time\", \"nonce\"],\n"
       << "  \"noncerange\": \"00000000ffffffff\",\n"
-      << "  \"capabilities\": [\"longpoll\"]\n"
+      << "  \"capabilities\": [\"longpoll\"],\n"
+      << "  \"payload\": \"" << util::ToHex(payload_bytes) << "\",\n"
+      << "  \"rewardtokenid\": \"" << rewardTokenId.GetHex() << "\"\n"
       << "}\n";
 
   return oss.str();
 }
 
 std::string RPCServer::HandleSubmitBlock(const std::vector<std::string>& params) {
-  if (params.empty()) {
-    return util::JsonError("Missing hex-encoded block header");
+  if (params.size() < 2) {
+    return util::JsonError("Usage: submitblock <blockhex> <rewardtokenid>");
   }
 
   const std::string& hex = params[0];
 
-  // Expect exactly 224 hex chars (112 bytes)
-  if (hex.size() != 224) {
-    return util::JsonError("Invalid header length (expect 224 hex chars for 112-byte header)");
+  // Expect at least 288 hex chars (112-byte header + 32-byte minimum payload)
+  if (hex.size() < 288) {
+    return util::JsonError("Invalid block data (expect at least 288 hex chars for 112-byte header + 32-byte payload)");
   }
 
   // Decode hex to bytes
-  auto hex_to_nibble = [](char c) -> int {
-    if (c >= '0' && c <= '9')
-      return c - '0';
-    if (c >= 'a' && c <= 'f')
-      return 10 + (c - 'a');
-    if (c >= 'A' && c <= 'F')
-      return 10 + (c - 'A');
-    return -1;
-  };
-
   std::vector<uint8_t> bytes;
-  bytes.reserve(112);
-  for (size_t i = 0; i < hex.size(); i += 2) {
-    int hi = hex_to_nibble(hex[i]);
-    int lo = hex_to_nibble(hex[i + 1]);
-    if (hi < 0 || lo < 0) {
-      return util::JsonError("Invalid hex character in header");
-    }
-    bytes.push_back(static_cast<uint8_t>((hi << 4) | lo));
+  try {
+    bytes = util::ParseHex(hex);
+  } catch (...) {
+    return util::JsonError("Invalid hex character in block data");
   }
 
   // Deserialize block header
   CBlockHeader header;
   if (!header.Deserialize(bytes.data(), bytes.size())) {
     return util::JsonError("Failed to deserialize block header");
+  }
+
+  // Sanity check: Token ID must match the payload
+  auto id_opt = util::SafeParseHash(params[1]);
+  if (!id_opt) {
+    return util::JsonError("Invalid rewardtokenid format (must be 64 hex characters)");
+  }
+  uint256 rewardTokenId = *id_opt;
+
+  if (header.vPayload.size() < 32) {
+    return util::JsonError("block payload too small to contain reward token ID commitment");
+  }
+  const uint256 providedHash = SingleHash(std::span(rewardTokenId.begin(), rewardTokenId.size()));
+  if (std::memcmp(providedHash.begin(), header.vPayload.data(), 32) != 0) {
+    return util::JsonError("rewardtokenid does not match the commitment in the block payload");
   }
 
   // Validate and process the block
@@ -2145,6 +2177,9 @@ std::string RPCServer::HandleSubmitBlock(const std::vector<std::string>& params)
         << "}\n";
     return oss.str();
   }
+
+  // Record reward token ID on success
+  token_manager_.RecordReward(header.GetHash(), rewardTokenId);
 
   // Success - return block hash
   std::ostringstream oss;

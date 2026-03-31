@@ -6,7 +6,6 @@
 #include "chain/block.hpp"
 #include "chain/chainparams.hpp"
 #include "chain/trust_base_manager.hpp"
-#include "chain/mining/token_generator.hpp"
 #include "util/uint.hpp"
 
 #include <atomic>
@@ -31,6 +30,8 @@ class ChainstateManager;
 
 namespace mining {
 
+class TokenManager;
+
 // Block template for mining
 struct BlockTemplate {
   CBlockHeader header;
@@ -43,7 +44,8 @@ struct BlockTemplate {
 // Single-threaded CPU miner for regtest testing
 class CPUMiner {
 public:
-  CPUMiner(const chain::ChainParams& params, validation::ChainstateManager& chainstate, chain::TrustBaseManager& trust_base_manager, TokenGenerator& token_generator, const std::filesystem::path& datadir);
+  CPUMiner(const chain::ChainParams& params, validation::ChainstateManager& chainstate,
+           chain::TrustBaseManager& trust_base_manager, TokenManager& token_manager);
   ~CPUMiner();
 
   bool Start(int target_height = -1);  // -1 = mine forever
@@ -65,14 +67,11 @@ private:
   void MiningWorker();
   BlockTemplate CreateBlockTemplate();
   bool ShouldRegenerateTemplate(const uint256& prev_hash);
-  void RecordReward(const chain::CBlockIndex* tip, const uint256& blockHash, const uint256& tokenId);
 
   const chain::ChainParams& params_;
   validation::ChainstateManager& chainstate_;
   chain::TrustBaseManager& trust_base_manager_;
-  TokenGenerator& token_generator_;
-  
-  std::filesystem::path datadir_;
+  TokenManager& token_manager_;
 
   std::atomic<bool> mining_{false};
   std::atomic<uint64_t> total_hashes_{0};

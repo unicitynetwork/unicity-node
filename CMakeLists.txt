@@ -294,6 +294,7 @@ add_library(chain STATIC
     src/chain/timedata.cpp
     src/chain/miner.cpp
     src/chain/token_generator.cpp
+    src/chain/token_manager.cpp
     src/chain/trust_base.cpp
     src/chain/bft_client.cpp
     src/chain/trust_base_manager.cpp

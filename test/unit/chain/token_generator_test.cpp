@@ -1,7 +1,7 @@
 // Copyright (c) 2025 The Unicity Foundation
 // Distributed under the MIT software license
 
-#include "chain/mining/token_generator.hpp"
+#include "chain/token_generator.hpp"
 #include "util/endian.hpp"
 #include "util/files.hpp"
 #include "util/sha256.hpp"

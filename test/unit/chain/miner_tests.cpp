@@ -9,6 +9,7 @@
 
 #include "catch_amalgamated.hpp"
 #include "chain/miner.hpp"
+#include "chain/token_manager.hpp"
 #include "chain/trust_base_manager.hpp"
 #include "chain/chainparams.hpp"
 #include "chain/chainstate_manager.hpp"
@@ -45,8 +46,8 @@ public:
         }
         
         tbm = std::make_unique<TrustBaseManager>(test_dir, std::make_shared<MockBFTClient>());
-        token_gen = std::make_unique<TokenGenerator>(test_dir);
-        miner = std::make_unique<CPUMiner>(*params, *chainstate, *tbm, *token_gen, test_dir);
+        token_manager = std::make_unique<TokenManager>(test_dir, *chainstate);
+        miner = std::make_unique<CPUMiner>(*params, *chainstate, *tbm, *token_manager);
     }
 
     ~MinerTestFixture() {
@@ -61,7 +62,7 @@ public:
     const ChainParams* params;
     std::unique_ptr<ChainstateManager> chainstate;
     std::unique_ptr<TrustBaseManager> tbm;
-    std::unique_ptr<TokenGenerator> token_gen;
+    std::unique_ptr<TokenManager> token_manager;
     std::unique_ptr<CPUMiner> miner;
     std::filesystem::path test_dir;
 };
@@ -99,8 +100,8 @@ TEST_CASE("CPUMiner - Start/Stop and idempotency", "[miner]") {
     std::strncpy(dir_template, test_dir.string().c_str(), sizeof(dir_template));
 
     TrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
-    TokenGenerator token_gen(test_dir);
-    CPUMiner miner(*params, csm, tbm, token_gen, test_dir);
+    TokenManager token_manager(test_dir, csm);
+    CPUMiner miner(*params, csm, tbm, token_manager);
 
     SECTION("Start spawns worker and Stop joins") {
         REQUIRE(miner.Start(/*target_height=*/-1));
@@ -139,8 +140,8 @@ TEST_CASE("CPUMiner - DebugCreateBlockTemplate and DebugShouldRegenerateTemplate
     }
 
     TrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
-    TokenGenerator token_gen(test_dir);
-    CPUMiner miner(*params, csm, tbm, token_gen, test_dir);
+    TokenManager token_manager(test_dir, csm);
+    CPUMiner miner(*params, csm, tbm, token_manager);
 
     SECTION("Template reflects tip and MTP constraint") {
         auto tmpl1 = miner.DebugCreateBlockTemplate();

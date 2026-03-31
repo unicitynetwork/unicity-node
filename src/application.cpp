@@ -89,9 +89,10 @@ bool Application::initialize() {
 
   // Initialize miner (after chainstate is ready)
   LOG_INFO("Initializing miner...");
-  token_generator_ = std::make_unique<mining::TokenGenerator>(config_.datadir);
+  token_manager_ = std::make_unique<mining::TokenManager>(config_.datadir, *chainstate_manager_);
   miner_ = std::make_unique<mining::CPUMiner>(*chain_params_, *chainstate_manager_, *trust_base_manager_,
-                                              *token_generator_, config_.datadir);
+                                              *token_manager_);
+
 
   // Initialize network manager
   if (!init_network()) {
@@ -465,7 +466,7 @@ bool Application::init_rpc() {
 
   rpc_server_ = std::make_unique<rpc::RPCServer>(
       socket_path, *chainstate_manager_, *network_manager_, miner_.get(),
-      *chain_params_, shutdown_callback);
+      *token_manager_, *trust_base_manager_, *chain_params_, shutdown_callback);
 
   return true;
 }

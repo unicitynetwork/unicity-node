@@ -8,6 +8,7 @@
 #include "chain/miner.hpp"
 #include "chain/trust_base_manager.hpp"
 #include "network/network_manager.hpp"
+#include "chain/token_manager.hpp"
 #include "chain/notifications.hpp"
 #include "network/rpc_server.hpp"
 #include "util/files.hpp"
@@ -96,7 +97,7 @@ private:
   std::unique_ptr<chain::ChainParams> chain_params_;
   std::unique_ptr<validation::ChainstateManager> chainstate_manager_;
   std::unique_ptr<chain::TrustBaseManager> trust_base_manager_;
-  std::unique_ptr<mining::TokenGenerator> token_generator_;
+  std::unique_ptr<mining::TokenManager> token_manager_;
   std::unique_ptr<network::NetworkManager> network_manager_;
   std::unique_ptr<mining::CPUMiner> miner_;
   std::unique_ptr<rpc::RPCServer> rpc_server_;

@@ -7,6 +7,7 @@
 #include "chain/miner.hpp"
 
 #include "chain/chainstate_manager.hpp"
+#include "chain/token_manager.hpp"
 #include "chain/pow.hpp"
 #include "chain/randomx_pow.hpp"
 #include "chain/validation.hpp"
@@ -24,11 +25,15 @@
 namespace unicity {
 namespace mining {
 
-CPUMiner::CPUMiner(const chain::ChainParams& params, validation::ChainstateManager& chainstate,
-                   chain::TrustBaseManager& trust_base_manager, TokenGenerator& token_generator,
-                   const std::filesystem::path& datadir)
-    : params_(params), chainstate_(chainstate), trust_base_manager_(trust_base_manager),
-      token_generator_(token_generator), datadir_(datadir) {}
+CPUMiner::CPUMiner(const chain::ChainParams& params,
+                   validation::ChainstateManager& chainstate, 
+                   chain::TrustBaseManager& trust_base_manager,
+                   TokenManager& token_manager)
+    : params_(params)
+    , chainstate_(chainstate)
+    , trust_base_manager_(trust_base_manager)
+    , token_manager_(token_manager)
+{}
 
 CPUMiner::~CPUMiner() {
   try {
@@ -170,7 +175,7 @@ void CPUMiner::MiningWorker() {
       // Only record if the block was successfully accepted as the active tip (ignores stale blocks)
       const chain::CBlockIndex* new_tip = chainstate_.GetTip();
       if (new_tip && new_tip->GetBlockHash() == found_header.GetHash()) {
-        RecordReward(new_tip, new_tip->GetBlockHash(), local_template.rewardTokenId);
+        token_manager_.RecordReward(found_header.GetHash(), local_template.rewardTokenId);
       }
 
       // Check if we've reached target height
@@ -232,15 +237,15 @@ BlockTemplate CPUMiner::CreateBlockTemplate() {
   tmpl.nBits = consensus::GetNextWorkRequired(tip, params_);
 
   // Calculate reward token
-  const uint256 rewardTokenId = token_generator_.GenerateNextTokenId();
-  const uint256 rewardTokenIdHash = SingleHash(std::span(rewardTokenId.begin(), rewardTokenId.size()));
-  const uint256 leaf_0 = rewardTokenIdHash; // leaf_0 is the hash of the reward token ID
-  uint256 leaf_1 = uint256::ZERO; // leaf_1 is the latest UTB hash (or zero hash if no new UTB)
+  const uint256 rewardTokenId = token_manager_.GenerateNextTokenId();
+  const uint256 leaf_0 = SingleHash(std::span(rewardTokenId.begin(), rewardTokenId.size()));
+  uint256 leaf_1 = uint256::ZERO;
+  std::vector<uint8_t> utb_cbor;
+
   auto new_tbs = trust_base_manager_.SyncTrustBases();
   if (!new_tbs.empty()) {
-      leaf_1 = uint256(new_tbs.back().Hash());
-  } else {
-      leaf_1 = uint256::ZERO;
+    utb_cbor = new_tbs.back().ToCBOR();
+    leaf_1 = SingleHash(utb_cbor);
   }
 
   const uint256 root = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
@@ -256,12 +261,11 @@ BlockTemplate CPUMiner::CreateBlockTemplate() {
   tmpl.header.hashRandomX.SetNull();
 
   // Append physical payload
-  // Store the hash of the reward token ID in the payload
-  tmpl.header.vPayload.assign(rewardTokenIdHash.begin(), rewardTokenIdHash.end());
+  // Store the hash of the reward token ID in the payload (leaf_0)
+  tmpl.header.vPayload.assign(leaf_0.begin(), leaf_0.end());
   
   // Store new UTB in the payload (if we found a new one)
-  if (!new_tbs.empty()) {
-      std::vector<uint8_t> utb_cbor = new_tbs.back().ToCBOR();
+  if (!utb_cbor.empty()) {
       tmpl.header.vPayload.insert(tmpl.header.vPayload.end(), utb_cbor.begin(), utb_cbor.end());
   }
 
@@ -291,24 +295,6 @@ bool CPUMiner::ShouldRegenerateTemplate(const uint256& prev_hash) {
   }
 
   return tip->GetBlockHash() != prev_hash;
-}
-
-void CPUMiner::RecordReward(const chain::CBlockIndex* tip, const uint256& blockHash, const uint256& tokenId) {
-  std::filesystem::path reward_file = datadir_ / "reward_tokens.csv";
-
-  // Check if file is new BEFORE opening the stream (which would create it)
-  bool is_new_file = !std::filesystem::exists(reward_file);
-
-  std::ofstream out(reward_file, std::ios::app);
-  if (!out) {
-    LOG_CHAIN_ERROR("Miner: Failed to open reward log file {}", reward_file.string());
-    return;
-  }
-
-  if (is_new_file) {
-    out << "Height,BlockHash,TokenID\n";
-  }
-  out << tip->nHeight << "," << blockHash.GetHex() << "," << tokenId.GetHex() << "\n";
 }
 
 }  // namespace mining
