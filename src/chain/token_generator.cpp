@@ -14,45 +14,22 @@
 #include <cstdint>
 #include <stdexcept>
 #include <nlohmann/json.hpp>
-
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#include <bcrypt.h>
-#else
-#include <sys/random.h>
-#include <unistd.h>
-#endif
+#include <random>
 
 namespace unicity::mining {
 
 namespace {
 
 /**
- * Fill a buffer with cryptographically secure random bytes using OS-native primitives.
- * - Linux: getrandom(2)
- * - Windows: BCryptGenRandom
+ * Fill a buffer with random bytes using OS-native primitives.
+ * On modern systems, std::random_device is typically non-deterministic and 
+ * backed by /dev/urandom or equivalent (like BCryptGenRandom on Windows).
  */
-void SecureRandomBytes(uint8_t* data, size_t len) {
-#if defined(_WIN32)
-  if (!BCRYPT_SUCCESS(BCryptGenRandom(nullptr, static_cast<PUCHAR>(data), static_cast<ULONG>(len),
-                                      BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
-    throw std::runtime_error("BCryptGenRandom failed");
+void RandomBytes(uint8_t* data, size_t len) {
+  std::random_device rd;
+  for (size_t i = 0; i < len; ++i) {
+    data[i] = static_cast<uint8_t>(rd() & 0xFF);
   }
-#else
-  size_t offset = 0;
-  while (offset < len) {
-    const ssize_t ret = getrandom(data + offset, len - offset, 0);
-    if (ret < 0) {
-      if (errno == EINTR)
-        continue;
-      throw std::runtime_error("getrandom failed");
-    }
-    offset += static_cast<size_t>(ret);
-  }
-#endif
 }
 
 }  // namespace
@@ -122,7 +99,7 @@ bool TokenGenerator::SaveState() const {
 
 void TokenGenerator::InitializeFreshState() {
   // Generate secure seed and reset counter
-  SecureRandomBytes(seed_.begin(), seed_.size());
+  RandomBytes(seed_.begin(), seed_.size());
   counter_ = 0;
 
   if (!WriteStateFile({seed_, counter_})) {
