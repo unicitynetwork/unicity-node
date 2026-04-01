@@ -1,9 +1,12 @@
+#include "chain/bft_client.hpp"
 #include "chain/trust_base_manager.hpp"
 #include "util/string_parsing.hpp"
 
 #include "catch_amalgamated.hpp"
 #include "common/test_util.hpp"
 
+#include <httplib.h>
+#include <thread>
 #include <vector>
 
 using namespace unicity;
@@ -99,4 +102,23 @@ TEST_CASE("BFTClient tests", "[chain][bftclient]") {
     CHECK(tbs[0].network_id == 3);
     CHECK(tbs[0].root_nodes.size() == 3);
   }
+}
+
+TEST_CASE("HttpBFTClient size limit", "[chain][bftclient]") {
+  httplib::Server svr;
+
+  svr.Get("/api/v1/trustbases", [](const httplib::Request&, httplib::Response& res) {
+    res.set_content(std::string(HttpBFTClient::MAX_BFT_RESPONSE_SIZE + 1, 'A'), "application/octet-stream");
+  });
+
+  int port = svr.bind_to_any_port("127.0.0.1");
+  std::thread svr_thread([&svr]() { svr.listen_after_bind(); });
+
+  std::string addr = "http://127.0.0.1:" + std::to_string(port);
+  HttpBFTClient client(addr);
+
+  CHECK_THROWS_WITH(client.FetchTrustBases(1), Catch::Matchers::ContainsSubstring("BFT response too large"));
+
+  svr.stop();
+  svr_thread.join();
 }

@@ -58,6 +58,9 @@ std::vector<RootTrustBaseV1> HttpBFTClient::ParseTrustBasesResponse(const std::v
 
 std::vector<uint8_t> HttpBFTClient::FetchHttp(const std::string& target) {
   if (auto res = cli_.Get(target)) {
+    if (res->body.size() > MAX_BFT_RESPONSE_SIZE) {
+      throw std::runtime_error("BFT response too large: " + std::to_string(res->body.size()));
+    }
     if (res->status == 200) {
       return std::vector<uint8_t>(res->body.begin(), res->body.end());
     }
