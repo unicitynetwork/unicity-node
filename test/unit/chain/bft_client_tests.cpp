@@ -1,9 +1,7 @@
 #include "chain/bft_client.hpp"
-#include "chain/trust_base_manager.hpp"
 #include "util/string_parsing.hpp"
 
 #include "catch_amalgamated.hpp"
-#include "common/test_util.hpp"
 
 #include <httplib.h>
 #include <thread>
@@ -75,49 +73,58 @@ const std::string epoch1_single =
 
 }  // namespace
 
-TEST_CASE("BFTClient tests", "[chain][bftclient]") {
-  SECTION("ParseTrustBasesResponse: valid response with 3 trust bases") {
-    auto data = util::ParseHex(epochs_1_to_3);
-    auto tbs = HttpBFTClient::ParseTrustBasesResponse(data);
-
-    REQUIRE(tbs.size() == 3);
-    CHECK(tbs[0].epoch == 1);
-    CHECK(tbs[1].epoch == 2);
-    CHECK(tbs[2].epoch == 3);
-
-    // Verify some details for the first one
-    CHECK(tbs[0].version == 1);
-    CHECK(tbs[0].network_id == 3);
-    CHECK(tbs[0].quorum_threshold == 3);
-    CHECK(tbs[0].root_nodes.size() == 3);
-  }
-
-  SECTION("ParseTrustBasesResponse: valid response with 1 trust base") {
-    auto data = util::ParseHex(epoch1_single);
-    auto tbs = HttpBFTClient::ParseTrustBasesResponse(data);
-
-    REQUIRE(tbs.size() == 1);
-    CHECK(tbs[0].epoch == 1);
-    CHECK(tbs[0].version == 1);
-    CHECK(tbs[0].network_id == 3);
-    CHECK(tbs[0].root_nodes.size() == 3);
-  }
-}
-
-TEST_CASE("HttpBFTClient size limit", "[chain][bftclient]") {
+TEST_CASE("HttpBFTClient tests", "[chain][bftclient]") {
   httplib::Server svr;
-
-  svr.Get("/api/v1/trustbases", [](const httplib::Request&, httplib::Response& res) {
-    res.set_content(std::string(HttpBFTClient::MAX_BFT_RESPONSE_SIZE + 1, 'A'), "application/octet-stream");
-  });
-
   int port = svr.bind_to_any_port("127.0.0.1");
   std::thread svr_thread([&svr]() { svr.listen_after_bind(); });
 
   std::string addr = "http://127.0.0.1:" + std::to_string(port);
   HttpBFTClient client(addr);
 
-  CHECK_THROWS_WITH(client.FetchTrustBases(1), Catch::Matchers::ContainsSubstring("BFT response too large"));
+  SECTION("FetchTrustBases: valid response with 3 trust bases") {
+    svr.Get("/api/v1/trustbases", [](const httplib::Request&, httplib::Response& res) {
+      std::vector<uint8_t> data = util::ParseHex(epochs_1_to_3);
+      res.set_content(reinterpret_cast<const char*>(data.data()), data.size(), "application/octet-stream");
+    });
+
+    auto tbs = client.FetchTrustBases(1);
+
+    REQUIRE(tbs.size() == 3);
+    CHECK(tbs[0].epoch == 1);
+    CHECK(tbs[1].epoch == 2);
+    CHECK(tbs[2].epoch == 3);
+  }
+
+  SECTION("FetchTrustBase: valid response with 1 trust base") {
+    svr.Get("/api/v1/trustbases", [](const httplib::Request&, httplib::Response& res) {
+      std::vector<uint8_t> data = util::ParseHex(epoch1_single);
+      res.set_content(reinterpret_cast<const char*>(data.data()), data.size(), "application/octet-stream");
+    });
+
+    auto tb = client.FetchTrustBase(1);
+
+    REQUIRE(tb.has_value());
+    CHECK(tb->epoch == 1);
+    CHECK(tb->version == 1);
+    CHECK(tb->network_id == 3);
+  }
+
+  SECTION("Size limit: response too large") {
+    svr.Get("/api/v1/trustbases", [](const httplib::Request&, httplib::Response& res) {
+      res.set_content(std::string(HttpBFTClient::MAX_BFT_RESPONSE_SIZE + 1, 'A'), "application/octet-stream");
+    });
+
+    CHECK_THROWS_WITH(client.FetchTrustBases(1), Catch::Matchers::ContainsSubstring("BFT response too large"));
+  }
+
+  SECTION("Error handling: HTTP error code") {
+    svr.Get("/api/v1/trustbases", [](const httplib::Request&, httplib::Response& res) {
+      res.status = 500;
+      res.set_content("Internal Server Error", "text/plain");
+    });
+
+    CHECK_THROWS_WITH(client.FetchTrustBases(1), Catch::Matchers::ContainsSubstring("HTTP request failed with status code 500"));
+  }
 
   svr.stop();
   svr_thread.join();

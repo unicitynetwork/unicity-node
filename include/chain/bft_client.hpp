@@ -45,12 +45,12 @@ public:
   std::optional<RootTrustBaseV1> FetchTrustBase(uint64_t epoch) override;
   std::vector<RootTrustBaseV1> FetchTrustBases(uint64_t from_epoch) override;
 
-  static std::vector<RootTrustBaseV1> ParseTrustBasesResponse(const std::vector<uint8_t>& data);
-
   // Maximum size for an HTTP response from the BFT server.
   static constexpr size_t MAX_BFT_RESPONSE_SIZE = 1024 * 1024;  // 1 MB
 
 private:
+  static std::vector<RootTrustBaseV1> ParseTrustBasesResponse(const std::vector<uint8_t>& data);
+
   std::string bftaddr_;
   httplib::Client cli_;
 
