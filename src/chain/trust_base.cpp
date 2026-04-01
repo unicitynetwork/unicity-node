@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <limits>
 
 #include <secp256k1.h>
 
@@ -177,6 +178,19 @@ bool RootTrustBaseV1::IsValid(const RootTrustBaseV1* prev) const {
     return false;
   }
 
+  // Check for stake overflow and quorum_threshold consistency
+  uint64_t total_possible_stake = 0;
+  for (const auto& node : root_nodes) {
+    if (total_possible_stake > std::numeric_limits<uint64_t>::max() - node.stake) {
+      return false;  // overflow
+    }
+    total_possible_stake += node.stake;
+  }
+
+  if (quorum_threshold > total_possible_stake) {
+    return false;  // quorum is not possible
+  }
+
   if (prev == nullptr) {
     if (epoch != 1)
       return false;
@@ -231,6 +245,9 @@ bool RootTrustBaseV1::VerifySignatures(const RootTrustBaseV1* prev) const {
     }
 
     if (secp256k1_ecdsa_verify(GetContext(), &algo_sig, msg_hash.begin(), &pubkey)) {
+      if (total_stake > std::numeric_limits<uint64_t>::max() - node->stake) {
+        return false;  // overflow
+      }
       total_stake += node->stake;
     }
   }

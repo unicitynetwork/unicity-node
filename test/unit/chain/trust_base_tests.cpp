@@ -81,6 +81,19 @@ TEST_CASE("Trust Base Tests", "[chain][trustbase]") {
       tb.root_nodes.clear();
       REQUIRE_FALSE(tb.IsValid(nullptr));
     }
+
+    SECTION("Reject stake overflow") {
+      tb.root_nodes.push_back({"huge", {}, std::numeric_limits<uint64_t>::max()});
+      tb.root_nodes.push_back({"more", {}, 1});
+      REQUIRE_FALSE(tb.IsValid(nullptr));
+    }
+
+    SECTION("Reject impossible quorum threshold") {
+      uint64_t total = 0;
+      for (const auto& n : tb.root_nodes) total += n.stake;
+      tb.quorum_threshold = total + 1;
+      REQUIRE_FALSE(tb.IsValid(nullptr));
+    }
     
     SECTION("Reject epoch mismatch for genesis") {
       tb.epoch = 2;
