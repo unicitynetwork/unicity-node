@@ -21,6 +21,7 @@
 #include "chain/chainparams.hpp"
 #include "chain/block.hpp"
 #include "chain/block_index.hpp"
+#include "chain/trust_base.hpp"
 #include "chain/chain.hpp"
 #include "chain/pow.hpp"
 #include "chain/randomx_pow.hpp"
@@ -117,9 +118,14 @@ static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits
     uint256 token_id;
     token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
     uint256 leaf_0 = SingleHash(token_id);
-    uint256 leaf_1 = uint256::ZERO;
+
+    // Use genesis UTB (epoch 1)
+    auto params = ChainParams::CreateRegTest();
+    auto utb_bytes = params->GenesisBlock().GetUTB();
+    uint256 leaf_1 = SingleHash(utb_bytes);
     header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
     header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+    header.vPayload.insert(header.vPayload.end(), utb_bytes.begin(), utb_bytes.end());
 
     header.nTime = nTime;
     header.nBits = nBits;

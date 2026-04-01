@@ -5,6 +5,7 @@
 #include "chain/block_manager.hpp"
 
 #include "chain/block.hpp"
+#include "chain/trust_base.hpp"
 #include "util/arith_uint256.hpp"
 #include "util/files.hpp"
 #include "util/logging.hpp"
@@ -144,6 +145,23 @@ CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& header) {
   pindex->m_block_hash = hash;
   pindex->pprev = pprev;
 
+  // Extract BFT epoch from payload if present
+  if (pindex->vPayload.size() > 32) {
+    try {
+      const std::span<const uint8_t> utb_cbor(pindex->vPayload.data() + 32, pindex->vPayload.size() - 32);
+      const auto utb = RootTrustBaseV1::FromCBOR(utb_cbor);
+      pindex->bftEpoch = utb.epoch;
+    } catch (const std::exception& e) {
+      LOG_CHAIN_ERROR("Failed to parse UTB from block {} payload: {}", hash.ToString().substr(0, 16), e.what());
+    }
+  } else if (pprev) {
+    // If no new UTB, carry forward the previous one
+    pindex->bftEpoch = pprev->bftEpoch;
+  } else {
+    // Genesis block must contain the genesis UTB (epoch 1)
+    LOG_CHAIN_ERROR("Genesis block {} missing UTB in payload", hash.ToString().substr(0, 16));
+  }
+
   // Set height and chainwork (immutable after insertion - used for std::set ordering)
   if (pprev) {
     pindex->nHeight = pprev->nHeight + 1;
@@ -207,6 +225,7 @@ bool BlockManager::Save(const std::string& filepath) const {
       // Chain metadata
       block_data["height"] = block_index->nHeight;
       block_data["chainwork"] = block_index->nChainWork.GetHex();
+      block_data["bft_epoch"] = block_index->bftEpoch;
 
       // Canonical status representation
       {
@@ -327,7 +346,7 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
     // Required fields for each block entry 
     static const std::vector<std::string> required_fields = {
         "hash", "prev_hash", "version", "payload_root", "time",
-        "bits", "nonce",     "hash_randomx", "height", "chainwork", "status"};
+        "bits", "nonce",     "hash_randomx", "height", "chainwork", "status", "bft_epoch"};
 
     for (const auto& block_data : blocks) {
       // Validate required fields are present
@@ -397,6 +416,7 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
       // Restore metadata
       pindex->nHeight = block_data["height"].get<int>();
       pindex->nChainWork.SetHex(block_data["chainwork"].get<std::string>());
+      pindex->bftEpoch = block_data["bft_epoch"].get<uint64_t>();
 
       // Store for second pass
       block_map[hash] = {pindex, prev_hash};

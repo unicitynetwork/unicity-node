@@ -6,6 +6,7 @@
 
 #include "chain/block.hpp"
 #include "chain/block_index.hpp"
+#include "chain/trust_base.hpp"
 #include "chain/chainparams.hpp"
 #include "chain/pow.hpp"
 #include "chain/randomx_pow.hpp"
@@ -112,6 +113,24 @@ bool ContextualCheckBlockHeader(const CBlockHeader& header, const chain::CBlockI
 
   // Note: Version validation is done in CheckBlockHeader (context-free)
   // Additional contextual version requirements (e.g., soft forks) would go here
+
+  // 5. Check BFT epoch continuity
+  if (pindexPrev) {
+    // Extract UTB from payload if present (payload > 32 bytes)
+    if (header.vPayload.size() > 32) {
+      try {
+        const std::span utb_cbor(header.vPayload.data() + 32, header.vPayload.size() - 32);
+        const auto utb = chain::RootTrustBaseV1::FromCBOR(utb_cbor);
+        uint64_t expected_epoch = pindexPrev->bftEpoch + 1;
+        if (utb.epoch != expected_epoch) {
+          return state.Invalid("bad-bft-epoch", "block included BFT epoch " + std::to_string(utb.epoch) +
+                                                    ", expected " + std::to_string(expected_epoch));
+        }
+      } catch (const std::exception& e) {
+        return state.Invalid("bad-utb-cbor", "failed to parse UTB from payload: " + std::string(e.what()));
+      }
+    }
+  }
 
   return true;
 }

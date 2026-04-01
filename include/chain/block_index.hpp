@@ -91,6 +91,9 @@ public:
   // Cumulative work up to and including this block
   arith_uint256 nChainWork{};
 
+  // BFT epoch number of the last included UTB (or the epoch of currently included UTB in the current block)
+  uint64_t bftEpoch{1};
+
   // Block header fields (stored inline)
   int32_t nVersion{0};
   uint256 payloadRoot{};  // Default-initialized (SetNull())

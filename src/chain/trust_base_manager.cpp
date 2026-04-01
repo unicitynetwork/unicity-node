@@ -131,6 +131,16 @@ void TrustBaseManager::SaveToDisk(const RootTrustBaseV1& tb) const {
   }
 }
 
+std::vector<RootTrustBaseV1> TrustBaseManager::SyncToEpoch(uint64_t target_epoch) {
+  {
+    std::lock_guard lock(mutex_);
+    if (trust_bases_.contains(target_epoch)) {
+      return {};
+    }
+  }
+  return SyncTrustBases();
+}
+
 std::vector<RootTrustBaseV1> TrustBaseManager::SyncTrustBases() {
   try {
     uint64_t from_epoch = 1;

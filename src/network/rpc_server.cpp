@@ -2083,9 +2083,10 @@ std::string RPCServer::HandleGetBlockTemplate(const std::vector<std::string>& pa
   uint256 leaf_1 = uint256::ZERO;
   std::vector<uint8_t> utb_cbor;
 
-  auto new_tbs = trust_base_manager_.SyncTrustBases();
-  if (!new_tbs.empty()) {
-    utb_cbor = new_tbs.back().ToCBOR();
+  uint64_t target_epoch = tip->bftEpoch + 1;
+  trust_base_manager_.SyncToEpoch(target_epoch);
+  if (auto utb = trust_base_manager_.GetTrustBase(target_epoch)) {
+    utb_cbor = utb->ToCBOR();
     leaf_1 = SingleHash(utb_cbor);
   }
 

@@ -29,6 +29,10 @@ public:
   // Returns the latest locally stored trust base.
   std::optional<RootTrustBaseV1> GetLatestTrustBase() const;
 
+  // Syncs trust bases from the BFT node up to the specified target epoch.
+  // Stores them locally and returns the synced trust bases.
+  std::vector<RootTrustBaseV1> SyncToEpoch(uint64_t target_epoch);
+
   // Returns trust base by epoch from local cache.
   std::optional<RootTrustBaseV1> GetTrustBase(uint64_t epoch) const;
 

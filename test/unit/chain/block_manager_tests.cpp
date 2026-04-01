@@ -28,6 +28,12 @@
 #include <unistd.h>
 #include <vector>
 
+#include "util/hash.hpp"
+#include "util/logging.hpp"
+#include "util/string_parsing.hpp"
+#include "chain/trust_base.hpp"
+
+using namespace unicity;
 using namespace unicity::chain;
 using json = nlohmann::json;
 
@@ -36,11 +42,29 @@ using json = nlohmann::json;
 //==============================================================================
 
 // Helper to create a test block header
-static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits = 0x1d00ffff, uint32_t nNonce = 0) {
+static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits = 0x1d00ffff, uint32_t nNonce = 0, bool include_utb = false) {
+    auto params = ChainParams::CreateRegTest();
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.payloadRoot.SetNull();
+    
+    uint256 token_id;
+    token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+    uint256 leaf_0 = SingleHash(std::span<const uint8_t>(token_id.begin(), 32));
+    uint256 leaf_1 = uint256::ZERO;
+    std::span<const uint8_t> utb_bytes;
+
+    if (include_utb) {
+        utb_bytes = params->GenesisBlock().GetUTB();
+        leaf_1 = SingleHash(utb_bytes);
+    }
+    
+    header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+    header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+    if (include_utb) {
+        header.vPayload.insert(header.vPayload.end(), utb_bytes.begin(), utb_bytes.end());
+    }
+
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = nNonce;
@@ -50,20 +74,28 @@ static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits
 
 // Helper to create a child header
 static CBlockHeader CreateChildHeader(const uint256& prevHash, uint32_t nTime = 1234567890, uint32_t nBits = 0x1d00ffff) {
-    CBlockHeader header = CreateTestHeader(nTime, nBits);
+    CBlockHeader header = CreateTestHeader(nTime, nBits, 0, false);
     header.hashPrevBlock = prevHash;
     return header;
 }
 
 // Helper to create a child block with specific difficulty (for ChainstateManager tests)
 static CBlockHeader MakeChild(const CBlockIndex *parent, uint32_t nTime, uint32_t nBits) {
+    auto params = ChainParams::CreateRegTest();
     CBlockHeader child;
     child.nVersion = 1;
     child.hashPrevBlock = parent->GetBlockHash();
+    
+    uint256 token_id;
+    token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+    uint256 leaf_0 = SingleHash(std::span<const uint8_t>(token_id.begin(), 32));
+    uint256 leaf_1 = uint256::ZERO;
+    child.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+    child.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
     child.nTime = nTime;
     child.nBits = nBits;
     child.nNonce = 0;
-    child.payloadRoot.SetNull();
     child.hashRandomX.SetNull();
     return child;
 }
@@ -117,9 +149,10 @@ public:
             block_data["bits"] = block_index.nBits;
             block_data["nonce"] = block_index.nNonce;
             block_data["hash_randomx"] = block_index.hashRandomX.ToString();
-            block_data["payload"] = "";  // Empty payload for test blocks
+            block_data["payload"] = util::ToHex(block_index.vPayload);
             block_data["height"] = block_index.nHeight;
             block_data["chainwork"] = block_index.nChainWork.GetHex();
+            block_data["bft_epoch"] = block_index.bftEpoch;
             block_data["status"] = {
                 {"validation", block_index.status.validation},
                 {"failure", block_index.status.failure}
