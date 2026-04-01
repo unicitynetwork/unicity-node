@@ -61,8 +61,9 @@ std::vector<uint8_t> HttpBFTClient::FetchHttp(const std::string& target) {
     if (res->status == 200) {
       return std::vector<uint8_t>(res->body.begin(), res->body.end());
     }
+    const std::string truncated = res->body.substr(0, 4096);
     throw std::runtime_error("HTTP request failed with status code " + std::to_string(res->status) +
-                             ". Response body: " + res->body);
+                             ". Response body (truncated): " + truncated);
   } else {
     throw std::runtime_error("HTTP request failed: " + httplib::to_string(res.error()));
   }
