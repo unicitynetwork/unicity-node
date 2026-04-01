@@ -23,10 +23,11 @@ static_assert(kHeaderSize == CBlockHeader::HEADER_SIZE, "HEADER_SIZE mismatch");
 }  // namespace
 
 uint256 CBlockHeader::GetHash() const noexcept {
-  return Hash(Serialize(false));
+  return Hash(SerializeHeader());
 }
 
 std::span<const uint8_t> CBlockHeader::GetUTB() const noexcept {
+  // Payload layout: [32 bytes token id hash] [optional UTB CBOR bytes]
   if (vPayload.size() <= 32) {
     return {};
   }
@@ -45,36 +46,51 @@ uint256 CBlockHeader::ComputePayloadRoot(const uint256& leaf_0, const uint256& l
   return root;
 }
 
+CBlockHeader::HeaderBytes CBlockHeader::SerializeHeader() const noexcept {
+  HeaderBytes bytes;
+  SerializeInto(bytes.data(), bytes.size(), false);
+  return bytes;
+}
+
 std::vector<uint8_t> CBlockHeader::Serialize(const bool includePayload) const noexcept {
   std::vector<uint8_t> data(HEADER_SIZE + (includePayload ? vPayload.size() : 0), 0);
+  SerializeInto(data.data(), data.size(), includePayload);
+  return data;
+}
+
+bool CBlockHeader::SerializeInto(uint8_t* buf, size_t len, const bool includePayload) const noexcept {
+  const size_t required_size = HEADER_SIZE + (includePayload ? vPayload.size() : 0);
+  if (len < required_size) {
+    return false;
+  }
 
   // nVersion (4 bytes, offset 0)
-  endian::WriteLE32(data.data() + OFF_VERSION, static_cast<uint32_t>(nVersion));
+  endian::WriteLE32(buf + OFF_VERSION, static_cast<uint32_t>(nVersion));
 
   // hashPrevBlock (32 bytes, offset 4)
-  std::copy(hashPrevBlock.begin(), hashPrevBlock.end(), data.begin() + OFF_PREV);
+  std::copy(hashPrevBlock.begin(), hashPrevBlock.end(), buf + OFF_PREV);
 
   // payloadRoot (32 bytes, offset 36)
-  std::copy(payloadRoot.begin(), payloadRoot.end(), data.begin() + OFF_PAYLOAD_ROOT);
+  std::copy(payloadRoot.begin(), payloadRoot.end(), buf + OFF_PAYLOAD_ROOT);
 
   // nTime (4 bytes, offset 68)
-  endian::WriteLE32(data.data() + OFF_TIME, nTime);
+  endian::WriteLE32(buf + OFF_TIME, nTime);
 
   // nBits (4 bytes, offset 72)
-  endian::WriteLE32(data.data() + OFF_BITS, nBits);
+  endian::WriteLE32(buf + OFF_BITS, nBits);
 
   // nNonce (4 bytes, offset 76)
-  endian::WriteLE32(data.data() + OFF_NONCE, nNonce);
+  endian::WriteLE32(buf + OFF_NONCE, nNonce);
 
   // hashRandomX (32 bytes, offset 80)
-  std::copy(hashRandomX.begin(), hashRandomX.end(), data.begin() + OFF_RANDOMX);
+  std::copy(hashRandomX.begin(), hashRandomX.end(), buf + OFF_RANDOMX);
 
   // Append payload if requested
   if (includePayload && !vPayload.empty()) {
-    std::copy(vPayload.begin(), vPayload.end(), data.begin() + HEADER_SIZE);
+    std::copy(vPayload.begin(), vPayload.end(), buf + HEADER_SIZE);
   }
 
-  return data;
+  return true;
 }
 
 bool CBlockHeader::Deserialize(const uint8_t* data, size_t size) noexcept {

@@ -328,7 +328,7 @@ bool CheckProofOfWork(const CBlockHeader& block, uint32_t nBits, const chain::Ch
     tmp.hashRandomX.SetNull();
 
     // Calculate hash using only the 112-byte static header (thread-safe via thread-local VM)
-    const std::vector<uint8_t> bytes = tmp.Serialize(false);
+    CBlockHeader::HeaderBytes bytes = tmp.SerializeHeader();
     randomx_calculate_hash(vmRef->vm, bytes.data(), bytes.size(), rx_hash);
 
     // If not mining, compare hash in block header with our computed value

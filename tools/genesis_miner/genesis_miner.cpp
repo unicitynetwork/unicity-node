@@ -51,15 +51,14 @@ void MineWorker(randomx_vm* vm, CBlockHeader header, uint32_t start_nonce, uint3
                 MiningStats& stats, const arith_uint256& target) {
     uint32_t nonce = start_nonce;
 
+    header.hashRandomX.SetNull();
+    CBlockHeader::HeaderBytes serialized;
+
     while (!stats.found.load(std::memory_order_acquire)) {
         header.nNonce = nonce;
 
-        // Set hashRandomX to null for hashing
-        CBlockHeader tmp(header);
-        tmp.hashRandomX.SetNull();
-
         // Calculate RandomX hash using only the 112-byte static header
-        auto serialized = tmp.Serialize(false);
+        header.SerializeInto(serialized.data(), serialized.size(), false);
         char rx_hash[RANDOMX_HASH_SIZE];
         randomx_calculate_hash(vm, serialized.data(), serialized.size(), rx_hash);
 

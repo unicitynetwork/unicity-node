@@ -89,20 +89,29 @@ public:
            hashRandomX.IsNull();
   }
 
-  // Access UTB CBOR record from the payload
+  // Access UTB CBOR record from the payload (if present)
+  // Payload layout: [32 bytes token id hash] [optional UTB CBOR bytes]
   [[nodiscard]] std::span<const uint8_t> GetUTB() const noexcept;
 
-  // Compute the hash of this header
+  // Compute the hash of this header (double SHA-256 of the 112-byte header)
   [[nodiscard]] uint256 GetHash() const noexcept;
 
   // Compute payload root from two leaves (e.g. TokenID hash and UTB hash)
   [[nodiscard]] static uint256 ComputePayloadRoot(const uint256& leaf_0, const uint256& leaf_1) noexcept;
   
+  // Serialize only the 112-byte header into a fixed-size array.
+  // Avoids heap allocation, useful for hashing and PoW verification.
+  [[nodiscard]] HeaderBytes SerializeHeader() const noexcept;
+
   // Serialize to wire format
   // Note: Hash blobs (hashPrevBlock, payloadRoot, hashRandomX) are copied
   // byte-for-byte as stored (no endian swap). Scalar fields use little-endian.
   // Optional includePayload appends vPayload contents.
   [[nodiscard]] std::vector<uint8_t> Serialize(bool includePayload = false) const noexcept;
+
+  // Serialize into an existing buffer
+  // Returns false if the buffer is too small.
+  bool SerializeInto(uint8_t* buf, size_t len, bool includePayload = false) const noexcept;
 
   // Deserialize from wire format
   [[nodiscard]] bool Deserialize(const uint8_t* data, size_t size) noexcept;
