@@ -68,4 +68,27 @@ TEST_CASE("Trust Base Tests", "[chain][trustbase]") {
     // Should fail because it only has 1 signature but threshold is 4
     REQUIRE_FALSE(tb3_inv.VerifySignatures(&tb2));
   }
+
+  SECTION("IsValid checks") {
+    RootTrustBaseV1 tb = ParseTB(epoch1_cbor);
+    
+    SECTION("Reject zero quorum threshold") {
+      tb.quorum_threshold = 0;
+      REQUIRE_FALSE(tb.IsValid(nullptr));
+    }
+
+    SECTION("Reject empty root nodes") {
+      tb.root_nodes.clear();
+      REQUIRE_FALSE(tb.IsValid(nullptr));
+    }
+    
+    SECTION("Reject epoch mismatch for genesis") {
+      tb.epoch = 2;
+      REQUIRE_FALSE(tb.IsValid(nullptr));
+    }
+
+    SECTION("Valid genesis") {
+      REQUIRE(tb.IsValid(nullptr));
+    }
+  }
 }

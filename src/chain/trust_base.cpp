@@ -170,6 +170,13 @@ std::vector<uint8_t> RootTrustBaseV1::Hash() const {
 }
 
 bool RootTrustBaseV1::IsValid(const RootTrustBaseV1* prev) const {
+  if (quorum_threshold == 0) {
+    return false;
+  }
+  if (root_nodes.empty()) {
+    return false;
+  }
+
   if (prev == nullptr) {
     if (epoch != 1)
       return false;
