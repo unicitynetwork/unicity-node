@@ -26,24 +26,26 @@ bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& para
     return state.Invalid("bad-version", "block version too old: " + std::to_string(header.nVersion));
   }
 
-  // 2. Check that hashRandomX commitment is present (not null)
+  // 2. Validate Payload Size
+  if (header.vPayload.size() < 32) {
+    return state.Invalid("bad-payload-size", "block payload missing Token ID hash");
+  }
+  if (header.vPayload.size() > CBlockHeader::MAX_PAYLOAD_SIZE) {
+    return state.Invalid("bad-payload-size", "block payload exceeds maximum size");
+  }
+
+  // 3. Check that hashRandomX commitment is present (not null)
   // A null hashRandomX indicates a malformed block header, not just failed PoW
   if (header.hashRandomX.IsNull()) {
     return state.Invalid("bad-randomx-hash", "block header missing RandomX hash commitment");
   }
 
-  // 3. Check proof of work (RandomX)
+  // 4. Check proof of work (RandomX)
   if (!consensus::CheckProofOfWork(header, header.nBits, params, crypto::POWVerifyMode::FULL)) {
     return state.Invalid("high-hash", "proof of work failed");
   }
 
-  // 4. Validate Payload Integrity
-  // Since we don't implement pruning initially, all blocks must have their payloads.
-  // The first 32 bytes of the payload is the Token ID Hash (leaf_0).
-  if (header.vPayload.size() < 32) {
-    return state.Invalid("bad-payload-size", "block payload missing Token ID hash");
-  }
-
+  // 5. Validate Payload Integrity
   // Extract Token ID Hash (leaf_0) directly from payload
   uint256 leaf_0;
   std::memcpy(leaf_0.begin(), header.vPayload.data(), 32);

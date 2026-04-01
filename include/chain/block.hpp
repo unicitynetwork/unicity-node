@@ -39,6 +39,7 @@ public:
 
   // Wire format constants
   static constexpr size_t UINT256_BYTES = 32;
+  static constexpr size_t MAX_PAYLOAD_SIZE = 4096;  // 32 bytes token hash + UTB CBOR
 
   // Serialized header size: 4 + 32 + 32 + 4 + 4 + 4 + 32 = 112 bytes
   static constexpr size_t HEADER_SIZE = 4 +              // nVersion (int32_t)

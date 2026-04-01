@@ -335,6 +335,62 @@ TEST_CASE("CBlockIndex::GetMedianTimePast - median time calculation", "[validati
 // Section 6: Block Header Validation
 // =============================================================================
 
+TEST_CASE("CheckBlockHeader - payload validation", "[validation][payload]") {
+    auto params = ChainParams::CreateRegTest();
+    ValidationState state;
+
+    SECTION("Accepts payload of exactly 32 bytes") {
+        CBlockHeader h = CreateTestHeader();
+        h.hashRandomX = uint256S("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+        h.vPayload.assign(32, 0x42);
+        
+        uint256 leaf_0;
+        std::memcpy(leaf_0.begin(), h.vPayload.data(), 32);
+        h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, uint256::ZERO);
+
+        bool result = CheckBlockHeader(h, *params, state);
+        if (!result) {
+            REQUIRE(state.GetRejectReason() != "bad-payload-size");
+        }
+    }
+
+    SECTION("Accepts payload of MAX_PAYLOAD_SIZE") {
+        CBlockHeader h = CreateTestHeader();
+        h.hashRandomX = uint256S("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+        h.vPayload.assign(CBlockHeader::MAX_PAYLOAD_SIZE, 0x42);
+        
+        uint256 leaf_0;
+        std::memcpy(leaf_0.begin(), h.vPayload.data(), 32);
+        uint256 leaf_1 = SingleHash(std::span(h.vPayload.data() + 32, h.vPayload.size() - 32));
+        h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+
+        bool result = CheckBlockHeader(h, *params, state);
+        if (!result) {
+            REQUIRE(state.GetRejectReason() != "bad-payload-size");
+        }
+    }
+
+    SECTION("Rejects payload < 32 bytes") {
+        CBlockHeader h = CreateTestHeader();
+        h.vPayload.assign(31, 0x42);
+
+        bool result = CheckBlockHeader(h, *params, state);
+        REQUIRE_FALSE(result);
+        REQUIRE(state.GetRejectReason() == "bad-payload-size");
+        REQUIRE(state.GetDebugMessage().find("missing Token ID hash") != std::string::npos);
+    }
+
+    SECTION("Rejects payload > MAX_PAYLOAD_SIZE") {
+        CBlockHeader h = CreateTestHeader();
+        h.vPayload.assign(CBlockHeader::MAX_PAYLOAD_SIZE + 1, 0x42);
+
+        bool result = CheckBlockHeader(h, *params, state);
+        REQUIRE_FALSE(result);
+        REQUIRE(state.GetRejectReason() == "bad-payload-size");
+        REQUIRE(state.GetDebugMessage().find("exceeds maximum size") != std::string::npos);
+    }
+}
+
 TEST_CASE("CheckBlockHeader - version validation", "[validation][version]") {
     auto params = ChainParams::CreateRegTest();
     ValidationState state;
