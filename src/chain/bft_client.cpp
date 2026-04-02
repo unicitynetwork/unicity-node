@@ -6,7 +6,7 @@
 
 namespace unicity::chain {
 
-HttpBFTClient::HttpBFTClient(std::string bftaddr) : bftaddr_(std::move(bftaddr)), cli_(std::make_unique<httplib::Client>(bftaddr_)) {
+HttpBFTClient::HttpBFTClient(std::string bftaddr) : bftaddr_(bftaddr), cli_(std::make_unique<httplib::Client>(bftaddr)) {
   cli_->set_connection_timeout(5, 0);
   cli_->set_read_timeout(5, 0);
   cli_->set_write_timeout(5, 0);
