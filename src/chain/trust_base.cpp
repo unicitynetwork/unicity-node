@@ -15,9 +15,8 @@ namespace unicity::chain {
 
 namespace {
 // Global secp256k1 context
-secp256k1_context* GetContext() {
-  static secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_VERIFY);
-  return ctx;
+const secp256k1_context* GetContext() {
+  return secp256k1_context_static;
 }
 }  // namespace
 
