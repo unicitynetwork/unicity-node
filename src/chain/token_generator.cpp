@@ -155,7 +155,7 @@ bool TokenGenerator::WriteStateFile(const State& state) const {
 
   std::string content = json.dump(2) + "\n";
 
-  if (!util::atomic_write_file(state_file_, content)) {
+  if (!util::atomic_write_file(state_file_, content, 0600)) {
     LOG_ERROR("TokenGenerator: Failed to write state file");
     return false;
   }
