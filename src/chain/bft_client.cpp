@@ -6,11 +6,13 @@
 
 namespace unicity::chain {
 
-HttpBFTClient::HttpBFTClient(std::string bftaddr) : bftaddr_(std::move(bftaddr)), cli_(bftaddr_) {
-  cli_.set_connection_timeout(5, 0);
-  cli_.set_read_timeout(5, 0);
-  cli_.set_write_timeout(5, 0);
+HttpBFTClient::HttpBFTClient(std::string bftaddr) : bftaddr_(std::move(bftaddr)), cli_(std::make_unique<httplib::Client>(bftaddr_)) {
+  cli_->set_connection_timeout(5, 0);
+  cli_->set_read_timeout(5, 0);
+  cli_->set_write_timeout(5, 0);
 }
+
+HttpBFTClient::~HttpBFTClient() = default;
 
 std::optional<RootTrustBaseV1> HttpBFTClient::FetchTrustBase(const uint64_t epoch) {
   const std::string target = "/api/v1/trustbases?from=" + std::to_string(epoch) + "&to=" + std::to_string(epoch);
@@ -57,7 +59,7 @@ std::vector<RootTrustBaseV1> HttpBFTClient::ParseTrustBasesResponse(const std::v
 }
 
 std::vector<uint8_t> HttpBFTClient::FetchHttp(const std::string& target) {
-  if (auto res = cli_.Get(target)) {
+  if (auto res = cli_->Get(target)) {
     if (res->body.size() > MAX_BFT_RESPONSE_SIZE) {
       throw std::runtime_error("BFT response too large: " + std::to_string(res->body.size()));
     }

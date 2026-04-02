@@ -6,7 +6,8 @@
 #include <string>
 #include <vector>
 
-#include <httplib.h>
+namespace httplib { class Client; }
+#include <memory>
 
 namespace unicity::chain {
 
@@ -41,6 +42,7 @@ private:
 class HttpBFTClient : public BFTClient {
 public:
   explicit HttpBFTClient(std::string bftaddr);
+  ~HttpBFTClient() override;
 
   std::optional<RootTrustBaseV1> FetchTrustBase(uint64_t epoch) override;
   std::vector<RootTrustBaseV1> FetchTrustBases(uint64_t from_epoch) override;
@@ -52,7 +54,7 @@ private:
   static std::vector<RootTrustBaseV1> ParseTrustBasesResponse(const std::vector<uint8_t>& data);
 
   std::string bftaddr_;
-  httplib::Client cli_;
+  std::unique_ptr<httplib::Client> cli_;
 
   std::vector<uint8_t> FetchHttp(const std::string& target);
 };
