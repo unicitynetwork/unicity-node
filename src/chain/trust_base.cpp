@@ -5,8 +5,6 @@
 #include "util/string_parsing.hpp"
 #include "util/uint.hpp"
 
-#include <algorithm>
-#include <iostream>
 #include <limits>
 
 #include <secp256k1.h>
