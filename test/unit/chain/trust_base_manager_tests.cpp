@@ -51,7 +51,7 @@ RootTrustBaseV1 ParseHex(const std::string& hex) {
 }  // namespace
 
 TEST_CASE("TrustBaseManager tests", "[chain][trustbase]") {
-  test::TempDir temp_dir("trustbase_manager_test");
+  TempDir temp_dir("trustbase_manager_test");
   const auto& test_dir = temp_dir.path;
 
   RootTrustBaseV1 tb1 = ParseHex(epoch1_hex);

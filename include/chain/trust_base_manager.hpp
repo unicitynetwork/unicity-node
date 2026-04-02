@@ -44,9 +44,13 @@ private:
   std::shared_ptr<BFTClient> bft_client_;
   mutable std::mutex mutex_;
   std::map<uint64_t, RootTrustBaseV1> trust_bases_;
-  std::optional<RootTrustBaseV1> latest_trust_base_;
 
   void SaveToDisk(const RootTrustBaseV1& tb) const;
+
+  // Returns pointer to latest trust base if any, or nullptr. Must be called with mutex_ held.
+  const RootTrustBaseV1* GetLatestLocked() const {
+    return trust_bases_.empty() ? nullptr : &trust_bases_.rbegin()->second;
+  }
 };
 
 }  // namespace unicity::chain

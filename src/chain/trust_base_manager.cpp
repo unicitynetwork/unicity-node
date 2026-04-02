@@ -32,17 +32,15 @@ void TrustBaseManager::Load() {
       try {
         RootTrustBaseV1 tb = RootTrustBaseV1::FromCBOR(data);
         trust_bases_[tb.epoch] = tb;
-        if (!latest_trust_base_ || tb.epoch > latest_trust_base_->epoch) {
-          latest_trust_base_ = tb;
-        }
       } catch (const std::exception& e) {
         spdlog::error("Failed to parse local trust base file {}: {}", entry.path().string(), e.what());
       }
     }
   }
 
+  const auto* latest = GetLatestLocked();
   spdlog::info("Loaded {} trust bases. Latest epoch: {}", trust_bases_.size(),
-               latest_trust_base_ ? std::to_string(latest_trust_base_->epoch) : "None");
+               latest ? std::to_string(latest->epoch) : "None");
 }
 
 // Initialize loads the stored trust base files to memory and creates trust base file for genesis trust base, if needed.
@@ -78,7 +76,8 @@ void TrustBaseManager::Initialize(const std::vector<uint8_t>& genesis_utb_data) 
 
 std::optional<RootTrustBaseV1> TrustBaseManager::GetLatestTrustBase() const {
   std::lock_guard lock(mutex_);
-  return latest_trust_base_;
+  const auto* latest = GetLatestLocked();
+  return latest ? std::make_optional(*latest) : std::nullopt;
 }
 
 std::optional<RootTrustBaseV1> TrustBaseManager::GetTrustBase(const uint64_t epoch) const {
@@ -92,9 +91,8 @@ std::optional<RootTrustBaseV1> TrustBaseManager::GetTrustBase(const uint64_t epo
 std::optional<RootTrustBaseV1> TrustBaseManager::ProcessTrustBase(const RootTrustBaseV1& tb) {
   std::lock_guard lock(mutex_);
 
-  const RootTrustBaseV1* prev_tb = nullptr;
-  if (latest_trust_base_) {
-    prev_tb = &(*latest_trust_base_);
+  const RootTrustBaseV1* prev_tb = GetLatestLocked();
+  if (prev_tb) {
     if (tb.epoch <= prev_tb->epoch) {
       spdlog::debug("Ignoring trust base for epoch {}, already have {}", tb.epoch, prev_tb->epoch);
       return std::nullopt;
@@ -112,7 +110,6 @@ std::optional<RootTrustBaseV1> TrustBaseManager::ProcessTrustBase(const RootTrus
   SaveToDisk(tb);
 
   trust_bases_[tb.epoch] = tb;
-  latest_trust_base_ = tb;
 
   spdlog::info("Processed and saved new trust base for epoch {}", tb.epoch);
   return tb;
