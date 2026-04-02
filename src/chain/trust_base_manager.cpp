@@ -24,8 +24,7 @@ void TrustBaseManager::Load() {
     if (entry.path().extension() == ".cbor") {
       std::ifstream file(entry.path(), std::ios::binary);
       if (!file) {
-        spdlog::error("Failed to open trust base file for reading: {}", entry.path().string());
-        continue;
+        throw std::runtime_error("Failed to open trust base file for reading: " + entry.path().string());
       }
 
       std::vector<uint8_t> data((std::istreambuf_iterator(file)), std::istreambuf_iterator<char>());
@@ -33,7 +32,7 @@ void TrustBaseManager::Load() {
         RootTrustBaseV1 tb = RootTrustBaseV1::FromCBOR(data);
         trust_bases_[tb.epoch] = tb;
       } catch (const std::exception& e) {
-        spdlog::error("Failed to parse local trust base file {}: {}", entry.path().string(), e.what());
+        throw std::runtime_error("Failed to parse local trust base file " + entry.path().string() + ": " + e.what());
       }
     }
   }
@@ -139,25 +138,20 @@ std::vector<RootTrustBaseV1> TrustBaseManager::SyncToEpoch(uint64_t target_epoch
 }
 
 std::vector<RootTrustBaseV1> TrustBaseManager::SyncTrustBases() {
-  try {
-    uint64_t from_epoch = 1;
-    if (const auto latest = GetLatestTrustBase()) {
-      from_epoch = latest->epoch;
-    }
-
-    const auto record_blobs = bft_client_->FetchTrustBases(from_epoch);
-
-    std::vector<RootTrustBaseV1> new_tbs;
-    for (const auto& tb : record_blobs) {
-      if (auto processed = ProcessTrustBase(tb)) {
-        new_tbs.push_back(std::move(*processed));
-      }
-    }
-    return new_tbs;
-  } catch (const std::exception& e) {
-    spdlog::error("SyncTrustBases failed: {}", e.what());
-    return {};
+  uint64_t from_epoch = 1;
+  if (const auto latest = GetLatestTrustBase()) {
+    from_epoch = latest->epoch;
   }
+
+  const auto record_blobs = bft_client_->FetchTrustBases(from_epoch);
+
+  std::vector<RootTrustBaseV1> new_tbs;
+  for (const auto& tb : record_blobs) {
+    if (auto processed = ProcessTrustBase(tb)) {
+      new_tbs.push_back(std::move(*processed));
+    }
+  }
+  return new_tbs;
 }
 
 }  // namespace unicity::chain

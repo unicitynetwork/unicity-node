@@ -242,11 +242,18 @@ BlockTemplate CPUMiner::CreateBlockTemplate() {
   uint256 leaf_1 = uint256::ZERO;
   std::vector<uint8_t> utb_cbor;
 
+  // try to load the latest trust base from BFT node,
+  // if unsuccessful then log warning and proceed without
+  // including new UTB to block
   uint64_t target_epoch = tip ? tip->bftEpoch + 1 : 1;
-  trust_base_manager_.SyncToEpoch(target_epoch);
-  if (auto utb = trust_base_manager_.GetTrustBase(target_epoch)) {
-    utb_cbor = utb->ToCBOR();
-    leaf_1 = SingleHash(utb_cbor);
+  try {
+    trust_base_manager_.SyncToEpoch(target_epoch);
+    if (auto utb = trust_base_manager_.GetTrustBase(target_epoch)) {
+      utb_cbor = utb->ToCBOR();
+      leaf_1 = SingleHash(utb_cbor);
+    }
+  } catch (const std::exception& e) {
+    LOG_CHAIN_WARN("Miner: Failed to sync trust bases to epoch {}: {}", target_epoch, e.what());
   }
 
   const uint256 root = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
