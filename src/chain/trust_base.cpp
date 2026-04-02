@@ -124,12 +124,8 @@ RootTrustBaseV1 RootTrustBaseV1::FromCBOR(std::span<const uint8_t> data) {
 }
 
 std::vector<uint8_t> RootTrustBaseV1::SigBytes() const {
-  // Create copy with empty signatures
-  RootTrustBaseV1 copy = *this;
-  copy.signatures.clear();
-
   nlohmann::json j;
-  to_json(j, copy);
+  to_json(j, *this);
   j[9] = nullptr;  // Force the last element (signatures) to be null
 
   std::vector<uint8_t> data = nlohmann::json::to_cbor(j);
