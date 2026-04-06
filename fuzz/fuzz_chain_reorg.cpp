@@ -22,6 +22,9 @@
 #include <memory>
 #include <cstring>
 
+#include "../test/common/mock_trust_base_manager.hpp"
+#include "../test/common/test_chainstate_manager.hpp"
+
 using namespace unicity;
 using namespace unicity::chain;
 using namespace unicity::validation;
@@ -31,7 +34,8 @@ using namespace unicity::consensus;
 class FuzzChainstateManager : public ChainstateManager {
 public:
     FuzzChainstateManager(const ChainParams& params)
-        : ChainstateManager(params) {}
+        : FuzzChainstateManager(params, std::make_unique<test::MockTrustBaseManager>())
+    {}
 
     // Override PoW check to always pass (we're fuzzing chain logic, not RandomX)
     bool CheckProofOfWork(const CBlockHeader& header, crypto::POWVerifyMode mode) const override {
@@ -56,6 +60,14 @@ public:
         }
         return true;
     }
+
+private:
+    FuzzChainstateManager(const chain::ChainParams& params, std::unique_ptr<test::MockTrustBaseManager> tbm)
+        : ChainstateManager(params, *tbm), 
+          mock_tbm_(std::move(tbm))
+    {}
+
+    std::unique_ptr<test::MockTrustBaseManager> mock_tbm_;
 };
 
 // Fuzz input parser

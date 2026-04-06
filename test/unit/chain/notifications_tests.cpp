@@ -356,7 +356,7 @@ TEST_CASE("Notifications - Miner template invalidation on tip change", "[notific
     if (mkdtemp(dir_template)) {
         test_dir = dir_template;
     }
-    TrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
+    LocalTrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
     mining::TokenManager token_manager(test_dir, chainstate);
     mining::CPUMiner miner(*params, chainstate, tbm, token_manager);
 

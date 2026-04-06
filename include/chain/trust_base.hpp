@@ -51,10 +51,13 @@ struct RootTrustBaseV1 {
 
     // Verification
     // IsValid verifies the trust base content consistency (without signatures)
-    bool IsValid(const RootTrustBaseV1* prev) const;
+    bool IsValid(const std::optional<RootTrustBaseV1>& prev) const;
 
     // VerifySignatures verifies that the trust base is signed by the previous epoch's validators
-    bool VerifySignatures(const RootTrustBaseV1* prev) const;
+    bool VerifySignatures(const std::optional<RootTrustBaseV1>& prev) const;
+
+    // Verify verifies both content consistency and signatures
+    bool Verify(const std::optional<RootTrustBaseV1>& prev) const;
     
     // Helper to get a node info by ID
     const NodeInfo* GetNode(const std::string& node_id) const;

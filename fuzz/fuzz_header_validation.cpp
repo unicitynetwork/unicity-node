@@ -25,6 +25,8 @@
 #include <vector>
 #include <limits>
 
+#include "../test/common/mock_trust_base_manager.hpp"
+
 using namespace unicity;
 
 // FuzzInput: Parse structured fuzz data
@@ -100,7 +102,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if ((mode & 0x07) == 0) {
         try {
             validation::ValidationState state;
-            bool result = validation::CheckBlockHeader(header, *params, state);
+            test::MockTrustBaseManager mock_tbm;
+            bool result = validation::CheckBlockHeader(header, *params, state, mock_tbm);
 
             // If it returns true, header must have valid PoW
             // If false, state should have rejection reason
@@ -111,7 +114,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
             // CheckBlockHeader should be deterministic
             validation::ValidationState state2;
-            bool result2 = validation::CheckBlockHeader(header, *params, state2);
+            bool result2 = validation::CheckBlockHeader(header, *params, state2, mock_tbm);
             if (result != result2) {
                 // Non-deterministic validation - BUG!
                 __builtin_trap();
@@ -314,7 +317,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
             try {
                 validation::ValidationState state;
-                validation::CheckBlockHeader(test_header, *params, state);
+                test::MockTrustBaseManager mock_tbm;
+                validation::CheckBlockHeader(test_header, *params, state, mock_tbm);
                 // Should not crash regardless of timestamp
             } catch (const std::exception&) {
                 __builtin_trap();
@@ -339,7 +343,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
             try {
                 validation::ValidationState state;
-                validation::CheckBlockHeader(test_header, *params, state);
+                test::MockTrustBaseManager mock_tbm;
+                validation::CheckBlockHeader(test_header, *params, state, mock_tbm);
                 // Should not crash regardless of nBits
             } catch (const std::exception&) {
                 __builtin_trap();

@@ -11,6 +11,8 @@
 #include "chain/notifications.hpp"
 #include "chain/pow.hpp"
 #include "chain/randomx_pow.hpp"
+#include "chain/trust_base.hpp"
+#include "chain/trust_base_manager.hpp"
 #include "chain/validation.hpp"
 #include "network/protocol.hpp"
 #include "util/arith_uint256.hpp"
@@ -34,9 +36,10 @@ namespace validation {
 // IBD (Initial Block Download) staleness threshold
 static constexpr int64_t IBD_STALE_TIP_SECONDS = 5 * 24 * 3600;  // 5 days (432000 seconds)
 
-ChainstateManager::ChainstateManager(const chain::ChainParams& params)
+ChainstateManager::ChainstateManager(const chain::ChainParams& params, chain::TrustBaseManager& tbm)
     : block_manager_()
     , params_(params)
+    , tbm_(tbm)
 {
 }
 
@@ -120,6 +123,19 @@ chain::CBlockIndex* ChainstateManager::AcceptBlockHeader(const CBlockHeader& hea
     state.Error("failed to add block to index");
     return nullptr;
   }
+
+  // Step 9: If block contains a UTB, record it in TrustBaseManager
+  if (header.vPayload.size() > 32) {
+    try {
+      const std::span utb_cbor(header.vPayload.data() + 32, header.vPayload.size() - 32);
+      const auto utb = chain::RootTrustBaseV1::FromCBOR(utb_cbor);
+      tbm_.ProcessTrustBase(utb);
+    } catch (const std::exception& e) {
+      // shouldn't happen as block is already validated in CheckBlockHeader
+      LOG_CHAIN_ERROR("Failed to store UTB from block {} into manager: {}", hash.ToString().substr(0, 16), e.what());
+    }
+  }
+
   pindex->nTimeReceived = util::GetTime();
 
   // Mark validity - must succeed for newly added block
@@ -720,7 +736,7 @@ bool ChainstateManager::CheckBlockHeaderWrapper(const CBlockHeader& header, Vali
   if (test_skip_pow_checks_.load(std::memory_order_acquire)) {
     return true;
   }
-  return CheckBlockHeader(header, params_, state);
+  return CheckBlockHeader(header, params_, state, tbm_);
 }
 
 bool ChainstateManager::ContextualCheckBlockHeaderWrapper(const CBlockHeader& header,

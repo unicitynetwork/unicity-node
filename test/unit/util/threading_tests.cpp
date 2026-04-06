@@ -15,6 +15,8 @@
 #include <vector>
 #include <atomic>
 
+#include "mock_trust_base_manager.hpp"
+
 using namespace unicity;
 
 TEST_CASE("ChainstateManager thread safety", "[validation][threading]") {
@@ -23,7 +25,8 @@ TEST_CASE("ChainstateManager thread safety", "[validation][threading]") {
 
     // Create test environment
     auto params = chain::ChainParams::CreateRegTest();
-    validation::ChainstateManager chainstate(*params);
+    test::MockTrustBaseManager mock_tbm;
+    validation::ChainstateManager chainstate(*params, mock_tbm);
 
     // Initialize with genesis
     CBlockHeader genesis = params->GenesisBlock();

@@ -7,6 +7,7 @@
 #include "chain/block.hpp"
 #include "chain/block_index.hpp"
 #include "chain/trust_base.hpp"
+#include "chain/trust_base_manager.hpp"
 #include "chain/chainparams.hpp"
 #include "chain/pow.hpp"
 #include "chain/randomx_pow.hpp"
@@ -18,7 +19,8 @@
 namespace unicity {
 namespace validation {
 
-bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& params, ValidationState& state) {
+bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& params, ValidationState& state,
+                      const chain::TrustBaseManager& tbm) {
   // 1. Version validation (basic sanity, context-free)
   // Reject obviously invalid versions (negative or zero)
   // This is a context-free check - specific version requirements may be contextual
@@ -51,11 +53,23 @@ bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& para
   std::memcpy(leaf_0.begin(), header.vPayload.data(), 32);
 
   // If payload size > 32, the remainder is the CBOR-encoded UTB record.
-  // We compute leaf_1 by hashing these bytes.
-  // NB! Currently, we do not validate the actual UTB!
   uint256 leaf_1 = uint256::ZERO;
   if (header.vPayload.size() > 32) {
     const std::span cbor_bytes(header.vPayload.data() + 32, header.vPayload.size() - 32);
+    // parse the trust base and verify it extends the previous entry
+    try {
+      const auto tb = chain::RootTrustBaseV1::FromCBOR(cbor_bytes);
+      if (tb.epoch == 0) {
+          return state.Invalid("bad-trustbase", "trust base epoch cannot be 0");
+      }
+      if (!tb.Verify(tbm.GetTrustBase(tb.epoch - 1))) {
+        return state.Invalid("bad-trustbase", "trust base for epoch " + std::to_string(tb.epoch) +
+                                                  " does not extend previous trust base (epoch " +
+                                                  std::to_string(tb.epoch - 1) + ")");
+      }
+    } catch (const std::exception& e) {
+      return state.Invalid("bad-trustbase", "failed to parse UTB from payload: " + std::string(e.what()));
+    }
     leaf_1 = SingleHash(cbor_bytes);
   }
 

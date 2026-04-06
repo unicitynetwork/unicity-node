@@ -16,6 +16,7 @@
 
 #include "catch_amalgamated.hpp"
 #include "chain/chainstate_manager.hpp"
+#include "common/mock_trust_base_manager.hpp"
 #include "chain/active_tip_candidates.hpp"
 #include "chain/block_manager.hpp"
 #include "chain/chainparams.hpp"
@@ -48,11 +49,8 @@ using namespace unicity::chain;
 class TestChainstateManager : public ChainstateManager {
 public:
     explicit TestChainstateManager(const ChainParams& params)
-        : ChainstateManager(params), bypass_pow_validation_(true) {
-        if (params.GetChainType() == ChainType::REGTEST) {
-            TestSetSkipPoWChecks(true);
-        }
-    }
+        : TestChainstateManager(params, std::make_unique<test::MockTrustBaseManager>())
+    {}
 
     // Control validation bypass
     void SetBypassPoW(bool bypass) {
@@ -102,7 +100,17 @@ protected:
     }
 
 private:
-    bool bypass_pow_validation_{true};
+    TestChainstateManager(const ChainParams& params, std::unique_ptr<test::MockTrustBaseManager> tbm)
+      : ChainstateManager(params, *tbm), 
+        mock_tbm_(std::move(tbm)),
+        bypass_pow_validation_(true) {
+        if (params.GetChainType() == ChainType::REGTEST) {
+            TestSetSkipPoWChecks(true);
+        }
+    }
+
+    std::unique_ptr<test::MockTrustBaseManager> mock_tbm_;
+    bool bypass_pow_validation_;
     bool bypass_contextual_{true};
     bool pow_check_result_{true};
     bool block_header_check_result_{true};
@@ -114,7 +122,7 @@ static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    
+
     uint256 token_id;
     token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
     uint256 leaf_0 = SingleHash(token_id);
@@ -146,7 +154,7 @@ static CBlockHeader MakeChild(const CBlockIndex* prev, uint32_t nTime, uint32_t 
     CBlockHeader h;
     h.nVersion = 1;
     h.hashPrevBlock = prev ? prev->GetBlockHash() : uint256();
-    
+
     uint256 token_id;
     token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
     uint256 leaf_0 = SingleHash(token_id);
@@ -166,7 +174,7 @@ static CBlockHeader MineChild(const CBlockIndex* prev, const ChainParams& params
     CBlockHeader h;
     h.nVersion = 1;
     h.hashPrevBlock = prev ? prev->GetBlockHash() : uint256();
-    
+
     uint256 token_id;
     token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
     uint256 leaf_0 = SingleHash(token_id);
@@ -532,7 +540,8 @@ TEST_CASE("Chainstate Load hardening: recompute ignores tampered chainwork", "[c
 
     auto params = ChainParams::CreateRegTest();
 
-    ChainstateManager csm(*params);
+    test::MockTrustBaseManager mock_tbm;
+    ChainstateManager csm(*params, mock_tbm);
     REQUIRE(csm.Initialize(params->GenesisBlock()));
 
     const CBlockIndex* tip = csm.GetTip();
@@ -573,7 +582,8 @@ TEST_CASE("Chainstate Load hardening: recompute ignores tampered chainwork", "[c
         out.close();
     }
 
-    ChainstateManager csm2(*params);
+    test::MockTrustBaseManager mock_tbm2;
+    ChainstateManager csm2(*params, mock_tbm2);
     REQUIRE(csm2.Load(tmp_path.string(), true) == chain::LoadResult::SUCCESS);
     REQUIRE(csm2.ActivateBestChain(nullptr));
 
@@ -590,7 +600,8 @@ TEST_CASE("Chainstate Load: trust mode marks all blocks valid", "[chain][chainst
 
     auto params = ChainParams::CreateRegTest();
 
-    ChainstateManager csm(*params);
+    test::MockTrustBaseManager mock_tbm;
+    ChainstateManager csm(*params, mock_tbm);
     REQUIRE(csm.Initialize(params->GenesisBlock()));
 
     const CBlockIndex* tip = csm.GetTip();
@@ -605,7 +616,8 @@ TEST_CASE("Chainstate Load: trust mode marks all blocks valid", "[chain][chainst
     const std::filesystem::path tmp_path = std::filesystem::temp_directory_path() / "trust_mode_test.json";
     REQUIRE(csm.Save(tmp_path.string()));
 
-    ChainstateManager csm2(*params);
+    test::MockTrustBaseManager mock_tbm2;
+    ChainstateManager csm2(*params, mock_tbm2);
     REQUIRE(csm2.Load(tmp_path.string(), false) == chain::LoadResult::SUCCESS);
     csm2.ActivateBestChain(nullptr);
 
@@ -628,7 +640,8 @@ TEST_CASE("Chainstate Load: round-trip preserves fork structure", "[chain][chain
 
     auto params = ChainParams::CreateRegTest();
 
-    ChainstateManager csm(*params);
+    test::MockTrustBaseManager mock_tbm;
+    ChainstateManager csm(*params, mock_tbm);
     REQUIRE(csm.Initialize(params->GenesisBlock()));
 
     const CBlockIndex* genesis = csm.GetTip();
@@ -650,7 +663,8 @@ TEST_CASE("Chainstate Load: round-trip preserves fork structure", "[chain][chain
     const std::filesystem::path tmp_path = std::filesystem::temp_directory_path() / "fork_roundtrip_test.json";
     REQUIRE(csm.Save(tmp_path.string()));
 
-    ChainstateManager csm2(*params);
+    test::MockTrustBaseManager mock_tbm2;
+    ChainstateManager csm2(*params, mock_tbm2);
     REQUIRE(csm2.Load(tmp_path.string(), true) == chain::LoadResult::SUCCESS);
     csm2.ActivateBestChain(nullptr);
 
@@ -671,7 +685,8 @@ TEST_CASE("Chainstate Load: revalidate fails on corrupted block", "[chain][chain
 
     auto params = ChainParams::CreateRegTest();
 
-    ChainstateManager csm(*params);
+    test::MockTrustBaseManager mock_tbm;
+    ChainstateManager csm(*params, mock_tbm);
     REQUIRE(csm.Initialize(params->GenesisBlock()));
 
     const CBlockIndex* tip = csm.GetTip();
@@ -740,7 +755,8 @@ TEST_CASE("Chainstate Load: revalidate fails on corrupted block", "[chain][chain
         out << root.dump(2);
     }
 
-    ChainstateManager csm2(*params);
+    test::MockTrustBaseManager mock_tbm2;
+    ChainstateManager csm2(*params, mock_tbm2);
     REQUIRE(csm2.Load(tmp_path.string(), true) == chain::LoadResult::CORRUPTED);
 
     std::filesystem::remove(tmp_path);
@@ -1402,7 +1418,8 @@ TEST_CASE("TestSetSkipPoWChecks - Network type guard", "[chain][chainstate_manag
 
     SECTION("Rejects PoW skip in MAINNET mode") {
         auto params = ChainParams::CreateMainNet();
-        ChainstateManager csm(*params);
+        test::MockTrustBaseManager mock_tbm;
+        ChainstateManager csm(*params, mock_tbm);
         REQUIRE(csm.Initialize(params->GenesisBlock()));
 
         REQUIRE_THROWS_AS(csm.TestSetSkipPoWChecks(true), std::runtime_error);
@@ -1411,7 +1428,8 @@ TEST_CASE("TestSetSkipPoWChecks - Network type guard", "[chain][chainstate_manag
 
     SECTION("Rejects PoW skip in TESTNET mode") {
         auto params = ChainParams::CreateTestNet();
-        ChainstateManager csm(*params);
+        test::MockTrustBaseManager mock_tbm;
+        ChainstateManager csm(*params, mock_tbm);
         REQUIRE(csm.Initialize(params->GenesisBlock()));
 
         REQUIRE_THROWS_AS(csm.TestSetSkipPoWChecks(true), std::runtime_error);
@@ -1420,7 +1438,8 @@ TEST_CASE("TestSetSkipPoWChecks - Network type guard", "[chain][chainstate_manag
 
     SECTION("Exception contains descriptive message") {
         auto params = ChainParams::CreateMainNet();
-        ChainstateManager csm(*params);
+        test::MockTrustBaseManager mock_tbm;
+        ChainstateManager csm(*params, mock_tbm);
         REQUIRE(csm.Initialize(params->GenesisBlock()));
 
         try {
@@ -1768,7 +1787,9 @@ TEST_CASE("ActiveTipCandidates - Edge Cases", "[chain][active_tip_candidates][un
 // Test subclass for GetChainTips that bypasses PoW validation
 class TestChainstateManagerForTips : public ChainstateManager {
 public:
-  explicit TestChainstateManagerForTips(const ChainParams& params) : ChainstateManager(params) {}
+  explicit TestChainstateManagerForTips(const ChainParams& params)
+      : TestChainstateManagerForTips(params, std::make_unique<test::MockTrustBaseManager>())
+  {}
 
 protected:
   bool CheckProofOfWork(const CBlockHeader& /*header*/, crypto::POWVerifyMode /*mode*/) const override { return true; }
@@ -1781,6 +1802,14 @@ protected:
                                          int64_t /*adjusted_time*/, ValidationState& /*state*/) const override {
     return true;
   }
+
+private:
+  TestChainstateManagerForTips(const ChainParams& params, std::unique_ptr<test::MockTrustBaseManager> tbm)
+      : ChainstateManager(params, *tbm), 
+        mock_tbm_(std::move(tbm))
+  {}
+
+  std::unique_ptr<test::MockTrustBaseManager> mock_tbm_;
 };
 
 // Helper: Create a block header for GetChainTips tests
@@ -1788,7 +1817,7 @@ static CBlockHeader CreateTipsTestHeader(uint32_t nTime = 1234567890, uint32_t n
   CBlockHeader header;
   header.nVersion = 1;
   header.hashPrevBlock.SetNull();
-  
+
   uint256 token_id;
   token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
   uint256 leaf_0 = SingleHash(token_id);

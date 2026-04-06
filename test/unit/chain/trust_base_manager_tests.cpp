@@ -58,7 +58,7 @@ TEST_CASE("TrustBaseManager tests", "[chain][trustbase]") {
   RootTrustBaseV1 tb2 = ParseHex(epoch2_hex);
 
   SECTION("Process_HigherEpoch_UpdatesLatest") {
-    TrustBaseManager manager(test_dir, std::make_shared<MockBFTClient>());
+    LocalTrustBaseManager manager(test_dir, std::make_shared<MockBFTClient>());
     REQUIRE(manager.ProcessTrustBase(tb1).has_value());
 
     REQUIRE(manager.ProcessTrustBase(tb2).has_value());
@@ -68,7 +68,7 @@ TEST_CASE("TrustBaseManager tests", "[chain][trustbase]") {
   }
 
   SECTION("Process_LowerEpoch_Ignored") {
-    TrustBaseManager manager(test_dir, std::make_shared<MockBFTClient>());
+    LocalTrustBaseManager manager(test_dir, std::make_shared<MockBFTClient>());
     REQUIRE(manager.ProcessTrustBase(tb1).has_value());
     REQUIRE(manager.ProcessTrustBase(tb2).has_value());
     REQUIRE_FALSE(manager.ProcessTrustBase(tb1).has_value());
@@ -80,13 +80,13 @@ TEST_CASE("TrustBaseManager tests", "[chain][trustbase]") {
   SECTION("Load_MultipleFiles_SetsCorrectLatest") {
     {
       // Create a manager, process two epochs to save them to disk
-      TrustBaseManager manager(test_dir, std::make_shared<MockBFTClient>());
+      LocalTrustBaseManager manager(test_dir, std::make_shared<MockBFTClient>());
       REQUIRE(manager.ProcessTrustBase(tb1).has_value());
       REQUIRE(manager.ProcessTrustBase(tb2).has_value());
     }
 
     // Create a new manager instance and load from the same directory
-    TrustBaseManager manager2(test_dir, std::make_shared<MockBFTClient>());
+    LocalTrustBaseManager manager2(test_dir, std::make_shared<MockBFTClient>());
     REQUIRE_NOTHROW(manager2.Load());
 
     auto latest = manager2.GetLatestTrustBase();

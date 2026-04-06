@@ -11,6 +11,7 @@
 #include "network/rpc_server.hpp"
 #include "util/logging.hpp"
 #include "common/mock_bft_client.hpp"
+#include "common/mock_trust_base_manager.hpp"
 
 #include <thread>
 #include <chrono>
@@ -34,7 +35,7 @@ public:
         // Initialize components
         auto params_unique = chain::ChainParams::CreateRegTest();
         params_ = params_unique.release();  // Take ownership as raw pointer
-        chainstate_ = new validation::ChainstateManager(*params_);
+        chainstate_ = new validation::ChainstateManager(*params_, *tbm_);
 
         // Create NetworkManager config for regtest
         network::NetworkManager::Config net_config;
@@ -45,7 +46,7 @@ public:
 
         network_ = new network::NetworkManager(*chainstate_, net_config);
 
-        tbm_ = new chain::TrustBaseManager(temp_dir_, std::make_shared<test::MockBFTClient>());
+        tbm_ = new chain::LocalTrustBaseManager(temp_dir_, std::make_shared<test::MockBFTClient>());
         token_manager_ = new mining::TokenManager(temp_dir_, *chainstate_);
 
         // Create RPC server (without miner for basic tests)
@@ -310,7 +311,8 @@ TEST_CASE("RPC: Socket Path Validation", "[rpc][integration][validation]") {
         auto temp_dir = std::filesystem::temp_directory_path() / "rpc_long_path_test";
         std::filesystem::create_directories(temp_dir);
 
-        validation::ChainstateManager chainstate(*params_ptr);
+        test::MockTrustBaseManager mock_tbm;
+        validation::ChainstateManager chainstate(*params_ptr, mock_tbm);
 
         network::NetworkManager::Config net_config;
         net_config.network_magic = params_ptr->GetNetworkMagic();
@@ -319,7 +321,7 @@ TEST_CASE("RPC: Socket Path Validation", "[rpc][integration][validation]") {
         net_config.io_threads = 0;
         network::NetworkManager network(chainstate, net_config);
 
-        chain::TrustBaseManager tbm(temp_dir, std::make_shared<test::MockBFTClient>());
+        chain::LocalTrustBaseManager tbm(temp_dir, std::make_shared<test::MockBFTClient>());
         mining::TokenManager token_manager(temp_dir, chainstate);
 
         rpc::RPCServer server(long_path, chainstate, network, nullptr, token_manager, tbm, *params_ptr);

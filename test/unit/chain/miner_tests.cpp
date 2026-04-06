@@ -36,18 +36,18 @@ public:
     MinerTestFixture() {
         GlobalChainParams::Select(ChainType::REGTEST);
         params = &GlobalChainParams::Get();
-        chainstate = std::make_unique<ChainstateManager>(*params);
-        
+
         test_dir = std::filesystem::temp_directory_path() / "unicity_miner_test_XXXXXX";
         char dir_template[256];
         std::strncpy(dir_template, test_dir.string().c_str(), sizeof(dir_template));
         if (mkdtemp(dir_template)) {
             test_dir = dir_template;
         }
-        
-        tbm = std::make_unique<TrustBaseManager>(test_dir, std::make_shared<MockBFTClient>());
-        token_manager = std::make_unique<TokenManager>(test_dir, *chainstate);
-        miner = std::make_unique<CPUMiner>(*params, *chainstate, *tbm, *token_manager);
+
+        tbm = std::make_unique<LocalTrustBaseManager>(test_dir, std::make_shared<MockBFTClient>());
+        chainstate = std::make_unique<ChainstateManager>(*params, *tbm);
+
+        token_manager = std::make_unique<TokenManager>(test_dir, *chainstate);        miner = std::make_unique<CPUMiner>(*params, *chainstate, *tbm, *token_manager);
     }
 
     ~MinerTestFixture() {
@@ -99,7 +99,7 @@ TEST_CASE("CPUMiner - Start/Stop and idempotency", "[miner]") {
     char dir_template[256];
     std::strncpy(dir_template, test_dir.string().c_str(), sizeof(dir_template));
 
-    TrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
+    LocalTrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
     TokenManager token_manager(test_dir, csm);
     CPUMiner miner(*params, csm, tbm, token_manager);
 
@@ -139,7 +139,7 @@ TEST_CASE("CPUMiner - DebugCreateBlockTemplate and DebugShouldRegenerateTemplate
         test_dir = dir_template;
     }
 
-    TrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
+    LocalTrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
     TokenManager token_manager(test_dir, csm);
     CPUMiner miner(*params, csm, tbm, token_manager);
 

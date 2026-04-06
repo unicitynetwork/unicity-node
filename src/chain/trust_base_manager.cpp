@@ -8,7 +8,7 @@
 
 namespace unicity::chain {
 
-TrustBaseManager::TrustBaseManager(const std::filesystem::path& data_dir, std::shared_ptr<BFTClient> bft_client)
+LocalTrustBaseManager::LocalTrustBaseManager(const std::filesystem::path& data_dir, std::shared_ptr<BFTClient> bft_client)
     : data_dir_(data_dir / "trustbases"), bft_client_(std::move(bft_client)) {
   if (!bft_client_) {
     throw std::invalid_argument("TrustBaseManager: BFTClient cannot be null");
@@ -16,7 +16,7 @@ TrustBaseManager::TrustBaseManager(const std::filesystem::path& data_dir, std::s
   std::filesystem::create_directories(data_dir_);
 }
 
-void TrustBaseManager::Load() {
+void LocalTrustBaseManager::Load() {
   std::lock_guard lock(mutex_);
 
   // Load all .cbor files in data_dir_
@@ -37,13 +37,13 @@ void TrustBaseManager::Load() {
     }
   }
 
-  const auto* latest = GetLatestLocked();
+  const auto* latest = GetLatest();
   spdlog::info("Loaded {} trust bases. Latest epoch: {}", trust_bases_.size(),
                latest ? std::to_string(latest->epoch) : "None");
 }
 
 // Initialize loads the stored trust base files to memory and creates trust base file for genesis trust base, if needed.
-void TrustBaseManager::Initialize(const std::vector<uint8_t>& genesis_utb_data) {
+void LocalTrustBaseManager::Initialize(const std::vector<uint8_t>& genesis_utb_data) {
   Load();
 
   {
@@ -73,13 +73,13 @@ void TrustBaseManager::Initialize(const std::vector<uint8_t>& genesis_utb_data) 
   }
 }
 
-std::optional<RootTrustBaseV1> TrustBaseManager::GetLatestTrustBase() const {
+std::optional<RootTrustBaseV1> LocalTrustBaseManager::GetLatestTrustBase() const {
   std::lock_guard lock(mutex_);
-  const auto* latest = GetLatestLocked();
+  const auto* latest = GetLatest();
   return latest ? std::make_optional(*latest) : std::nullopt;
 }
 
-std::optional<RootTrustBaseV1> TrustBaseManager::GetTrustBase(const uint64_t epoch) const {
+std::optional<RootTrustBaseV1> LocalTrustBaseManager::GetTrustBase(const uint64_t epoch) const {
   std::lock_guard lock(mutex_);
   if (const auto it = trust_bases_.find(epoch); it != trust_bases_.end()) {
     return it->second;
@@ -87,23 +87,24 @@ std::optional<RootTrustBaseV1> TrustBaseManager::GetTrustBase(const uint64_t epo
   return std::nullopt;
 }
 
-std::optional<RootTrustBaseV1> TrustBaseManager::ProcessTrustBase(const RootTrustBaseV1& tb) {
+std::optional<RootTrustBaseV1> LocalTrustBaseManager::ProcessTrustBase(const RootTrustBaseV1& tb) {
   std::lock_guard lock(mutex_);
 
-  const RootTrustBaseV1* prev_tb = GetLatestLocked();
-  if (prev_tb) {
-    if (tb.epoch <= prev_tb->epoch) {
-      spdlog::debug("Ignoring trust base for epoch {}, already have {}", tb.epoch, prev_tb->epoch);
-      return std::nullopt;
-    }
+  if (tb.epoch == 0) {
+    throw std::invalid_argument("Trust base epoch cannot be 0");
   }
 
-  if (!tb.IsValid(prev_tb)) {
-    throw std::invalid_argument("Invalid trust base content for epoch " + std::to_string(tb.epoch));
+  if (trust_bases_.contains(tb.epoch)) {
+    return std::nullopt;
   }
 
-  if (!tb.VerifySignatures(prev_tb)) {
-    throw std::invalid_argument("Invalid signatures for trust base epoch " + std::to_string(tb.epoch));
+  std::optional<RootTrustBaseV1> prev_tb;
+  if (const auto it = trust_bases_.find(tb.epoch - 1); it != trust_bases_.end()) {
+    prev_tb = it->second;
+  }
+
+  if (!tb.Verify(prev_tb)) {
+    throw std::invalid_argument("Failed to verify trust base for epoch " + std::to_string(tb.epoch));
   }
 
   SaveToDisk(tb);
@@ -114,7 +115,7 @@ std::optional<RootTrustBaseV1> TrustBaseManager::ProcessTrustBase(const RootTrus
   return tb;
 }
 
-void TrustBaseManager::SaveToDisk(const RootTrustBaseV1& tb) const {
+void LocalTrustBaseManager::SaveToDisk(const RootTrustBaseV1& tb) const {
   const std::filesystem::path file_path = data_dir_ / ("epoch_" + std::to_string(tb.epoch) + ".cbor");
   std::ofstream file(file_path, std::ios::binary);
   if (!file) {
@@ -127,7 +128,7 @@ void TrustBaseManager::SaveToDisk(const RootTrustBaseV1& tb) const {
   }
 }
 
-std::vector<RootTrustBaseV1> TrustBaseManager::SyncToEpoch(uint64_t target_epoch) {
+std::vector<RootTrustBaseV1> LocalTrustBaseManager::SyncToEpoch(uint64_t target_epoch) {
   {
     std::lock_guard lock(mutex_);
     if (trust_bases_.contains(target_epoch)) {
@@ -137,7 +138,7 @@ std::vector<RootTrustBaseV1> TrustBaseManager::SyncToEpoch(uint64_t target_epoch
   return SyncTrustBases();
 }
 
-std::vector<RootTrustBaseV1> TrustBaseManager::SyncTrustBases() {
+std::vector<RootTrustBaseV1> LocalTrustBaseManager::SyncTrustBases() {
   uint64_t from_epoch = 1;
   if (const auto latest = GetLatestTrustBase()) {
     from_epoch = latest->epoch;

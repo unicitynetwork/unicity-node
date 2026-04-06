@@ -38,7 +38,7 @@ TEST_CASE("Trust Base Tests", "[chain][trustbase]") {
     REQUIRE(tb.epoch == 1);
     REQUIRE(util::ToHex(tb.Hash()) == epoch1_hash);
     REQUIRE(util::ToHex(tb.ToCBOR()) == epoch1_cbor);
-    REQUIRE(tb.VerifySignatures(nullptr));
+    REQUIRE(tb.VerifySignatures(std::nullopt));
   }
 
   SECTION("Verify Epoch 2") {
@@ -47,7 +47,7 @@ TEST_CASE("Trust Base Tests", "[chain][trustbase]") {
     REQUIRE(tb2.epoch == 2);
     REQUIRE(util::ToHex(tb2.Hash()) == epoch2_hash);
     REQUIRE(util::ToHex(tb2.ToCBOR()) == epoch2_cbor);
-    REQUIRE(tb2.VerifySignatures(&tb1));
+    REQUIRE(tb2.VerifySignatures(tb1));
   }
 
   SECTION("Verify Epoch 3") {
@@ -56,7 +56,7 @@ TEST_CASE("Trust Base Tests", "[chain][trustbase]") {
     REQUIRE(tb3.epoch == 3);
     REQUIRE(util::ToHex(tb3.Hash()) == epoch3_hash);
     REQUIRE(util::ToHex(tb3.ToCBOR()) == epoch3_cbor);
-    REQUIRE(tb3.VerifySignatures(&tb2));
+    REQUIRE(tb3.VerifySignatures(tb2));
   }
 
   SECTION("Verify Epoch 3 Invalid (Insufficent signatures)") {
@@ -66,7 +66,7 @@ TEST_CASE("Trust Base Tests", "[chain][trustbase]") {
     REQUIRE(util::ToHex(tb3_inv.Hash()) == epoch3_invalid_hash);
     REQUIRE(util::ToHex(tb3_inv.ToCBOR()) == epoch3_invalid_cbor);
     // Should fail because it only has 1 signature but threshold is 4
-    REQUIRE_FALSE(tb3_inv.VerifySignatures(&tb2));
+    REQUIRE_FALSE(tb3_inv.VerifySignatures(tb2));
   }
 
   SECTION("IsValid checks") {
@@ -74,34 +74,34 @@ TEST_CASE("Trust Base Tests", "[chain][trustbase]") {
     
     SECTION("Reject zero quorum threshold") {
       tb.quorum_threshold = 0;
-      REQUIRE_FALSE(tb.IsValid(nullptr));
+      REQUIRE_FALSE(tb.IsValid(std::nullopt));
     }
 
     SECTION("Reject empty root nodes") {
       tb.root_nodes.clear();
-      REQUIRE_FALSE(tb.IsValid(nullptr));
+      REQUIRE_FALSE(tb.IsValid(std::nullopt));
     }
 
     SECTION("Reject stake overflow") {
       tb.root_nodes.push_back({"huge", {}, std::numeric_limits<uint64_t>::max()});
       tb.root_nodes.push_back({"more", {}, 1});
-      REQUIRE_FALSE(tb.IsValid(nullptr));
+      REQUIRE_FALSE(tb.IsValid(std::nullopt));
     }
 
     SECTION("Reject impossible quorum threshold") {
       uint64_t total = 0;
       for (const auto& n : tb.root_nodes) total += n.stake;
       tb.quorum_threshold = total + 1;
-      REQUIRE_FALSE(tb.IsValid(nullptr));
+      REQUIRE_FALSE(tb.IsValid(std::nullopt));
     }
     
     SECTION("Reject epoch mismatch for genesis") {
       tb.epoch = 2;
-      REQUIRE_FALSE(tb.IsValid(nullptr));
+      REQUIRE_FALSE(tb.IsValid(std::nullopt));
     }
 
     SECTION("Valid genesis") {
-      REQUIRE(tb.IsValid(nullptr));
+      REQUIRE(tb.IsValid(std::nullopt));
     }
   }
 }

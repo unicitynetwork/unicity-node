@@ -163,7 +163,7 @@ std::vector<uint8_t> RootTrustBaseV1::Hash() const {
   return std::vector(h.begin(), h.end());
 }
 
-bool RootTrustBaseV1::IsValid(const RootTrustBaseV1* prev) const {
+bool RootTrustBaseV1::IsValid(const std::optional<RootTrustBaseV1>& prev) const {
   if (quorum_threshold == 0) {
     return false;
   }
@@ -184,7 +184,7 @@ bool RootTrustBaseV1::IsValid(const RootTrustBaseV1* prev) const {
     return false;  // quorum is not possible
   }
 
-  if (prev == nullptr) {
+  if (!prev.has_value()) {
     if (epoch != 1)
       return false;
   } else {
@@ -203,12 +203,14 @@ bool RootTrustBaseV1::IsValid(const RootTrustBaseV1* prev) const {
   return true;
 }
 
-bool RootTrustBaseV1::VerifySignatures(const RootTrustBaseV1* prev) const {
-  const RootTrustBaseV1* trusted = prev;
+bool RootTrustBaseV1::VerifySignatures(const std::optional<RootTrustBaseV1>& prev) const {
+  const RootTrustBaseV1* trusted = nullptr;
   if (epoch == 1) {
     trusted = this;  // Genesis is self-signed
-  } else if (trusted == nullptr) {
+  } else if (!prev.has_value()) {
     return false;
+  } else {
+    trusted = &prev.value();
   }
 
   std::vector<uint8_t> sig_data = SigBytes();
@@ -246,6 +248,10 @@ bool RootTrustBaseV1::VerifySignatures(const RootTrustBaseV1* prev) const {
   }
 
   return total_stake >= trusted->quorum_threshold;
+}
+
+bool RootTrustBaseV1::Verify(const std::optional<RootTrustBaseV1>& prev) const {
+  return IsValid(prev) && VerifySignatures(prev);
 }
 
 const NodeInfo* RootTrustBaseV1::GetNode(const std::string& node_id) const {
