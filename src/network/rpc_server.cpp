@@ -84,13 +84,13 @@ RPCServer::RPCServer(
     , chainstate_manager_(chainstate_manager)
     , network_manager_(network_manager)
     , miner_(miner)
+    , token_manager_(token_manager)
+    , trust_base_manager_(trust_base_manager)
     , params_(params)
     , shutdown_callback_(shutdown_callback)
     , server_fd_(-1)
     , running_(false)
     , shutting_down_(false)
-    , token_manager_(token_manager)
-    , trust_base_manager_(trust_base_manager)
 {
   RegisterHandlers();
 
