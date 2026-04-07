@@ -124,99 +124,102 @@ double CPUMiner::GetHashrate() const {
 }
 
 void CPUMiner::MiningWorker() {
-  uint32_t nonce = 0;
+  try {
+    uint32_t nonce = 0;
+    // Create block template locally for this mining iteration
+    BlockTemplate local_template = CreateBlockTemplate();
+    uint256 template_prev_hash = local_template.hashPrevBlock;
 
-  // Create block template locally for this mining iteration
-  BlockTemplate local_template = CreateBlockTemplate();
-  uint256 template_prev_hash = local_template.hashPrevBlock;
+    LOG_CHAIN_TRACE("Miner: Mining block at height {} (prev={}..., target=0x{:x})", local_template.nHeight,
+                    local_template.hashPrevBlock.ToString().substr(0, 16), local_template.nBits);
 
-  LOG_CHAIN_TRACE("Miner: Mining block at height {} (prev={}..., target=0x{:x})", local_template.nHeight,
-                  local_template.hashPrevBlock.ToString().substr(0, 16), local_template.nBits);
-
-  while (mining_.load()) {
-    // Check if we need to regenerate template (chain tip changed)
-    if (ShouldRegenerateTemplate(template_prev_hash)) {
-      LOG_CHAIN_TRACE("Miner: Chain tip changed, regenerating template");
-      local_template = CreateBlockTemplate();
-      template_prev_hash = local_template.hashPrevBlock;
-      nonce = 0;  // Restart nonce
-    }
-
-    // Update nonce
-    local_template.header.nNonce = nonce;
-
-    // Count this hash attempt (including successful ones)
-    total_hashes_.fetch_add(1);
-
-    // Try mining this nonce using RandomX
-    uint256 rx_hash;
-    bool found_block = consensus::CheckProofOfWork(local_template.header, local_template.nBits, params_,
-                                                   crypto::POWVerifyMode::MINING, &rx_hash);
-
-    // Check if we found a block
-    if (found_block) {
-      blocks_found_.fetch_add(1);
-
-      CBlockHeader found_header = local_template.header;
-      found_header.hashRandomX = rx_hash;
-
-      LOG_CHAIN_TRACE("Miner: *** BLOCK FOUND *** Height: {}, Nonce: {}, Hash: {}...", local_template.nHeight, nonce,
-                      found_header.GetHash().ToString().substr(0, 16));
-
-      // Process block through chainstate manager
-      validation::ValidationState state;
-      if (!chainstate_.ProcessNewBlockHeader(found_header, state)) {
-        LOG_CHAIN_ERROR("Miner: Failed to process mined block: {} - {}", state.GetRejectReason(),
-                        state.GetDebugMessage());
-        continue;
+    while (mining_.load()) {
+      // Check if we need to regenerate template (chain tip changed)
+      if (ShouldRegenerateTemplate(template_prev_hash)) {
+        LOG_CHAIN_TRACE("Miner: Chain tip changed, regenerating template");
+        local_template = CreateBlockTemplate();
+        template_prev_hash = local_template.hashPrevBlock;
+        nonce = 0;  // Restart nonce
       }
 
-      // Record reward to CSV
-      // Only record if the block was successfully accepted as the active tip (ignores stale blocks)
-      const chain::CBlockIndex* new_tip = chainstate_.GetTip();
-      if (new_tip && new_tip->GetBlockHash() == found_header.GetHash()) {
-        token_manager_.RecordReward(found_header.GetHash(), local_template.rewardTokenId);
-      }
+      // Update nonce
+      local_template.header.nNonce = nonce;
 
-      // Check if we've reached target height
-      // Use ACTUAL chain height, not template height (template might be ahead if validation failed)
-      int target = target_height_.load();
-      const chain::CBlockIndex* tip = chainstate_.GetTip();
-      int actual_height = tip ? tip->nHeight : -1;
-      if (target != -1 && actual_height >= target) {
-        LOG_CHAIN_TRACE("Miner: Reached target height {} (actual chain: {}), stopping", target, actual_height);
-        mining_.store(false);
-        break;
-      }
+      // Count this hash attempt (including successful ones)
+      total_hashes_.fetch_add(1);
 
-      // Continue mining next block
-      local_template = CreateBlockTemplate();
-      template_prev_hash = local_template.hashPrevBlock;
-      nonce = 0;
-      continue;
-    }
+      // Try mining this nonce using RandomX
+      uint256 rx_hash;
+      bool found_block = consensus::CheckProofOfWork(local_template.header, local_template.nBits, params_,
+                                                     crypto::POWVerifyMode::MINING, &rx_hash);
 
-    // Next nonce
-    nonce++;
-    if (nonce == 0) {
-      // Nonce space exhausted - increment timestamp for fresh search space
-      uint32_t current_time = static_cast<uint32_t>(util::GetTime());
-      uint32_t max_future_time = current_time + validation::MAX_FUTURE_BLOCK_TIME;
+      // Check if we found a block
+      if (found_block) {
+        blocks_found_.fetch_add(1);
 
-      if (local_template.header.nTime < max_future_time) {
-        local_template.header.nTime++;
-        LOG_CHAIN_TRACE("Miner: Nonce exhausted, incremented nTime to {}", local_template.header.nTime);
-      } else {
-        // Timestamp would exceed maximum future time - regenerate template
-        LOG_CHAIN_TRACE("Miner: Timestamp at maximum, regenerating template");
+        CBlockHeader found_header = local_template.header;
+        found_header.hashRandomX = rx_hash;
+
+        LOG_CHAIN_TRACE("Miner: *** BLOCK FOUND *** Height: {}, Nonce: {}, Hash: {}...", local_template.nHeight, nonce,
+                        found_header.GetHash().ToString().substr(0, 16));
+
+        // Process block through chainstate manager
+        validation::ValidationState state;
+        if (!chainstate_.ProcessNewBlockHeader(found_header, state)) {
+          LOG_CHAIN_ERROR("Miner: Failed to process mined block: {} - {}", state.GetRejectReason(),
+                          state.GetDebugMessage());
+          continue;
+        }
+
+        // Record reward to CSV
+        // Only record if the block was successfully accepted as the active tip (ignores stale blocks)
+        const chain::CBlockIndex* new_tip = chainstate_.GetTip();
+        if (new_tip && new_tip->GetBlockHash() == found_header.GetHash()) {
+          token_manager_.RecordReward(found_header.GetHash(), local_template.rewardTokenId);
+        }
+
+        // Check if we've reached target height
+        // Use ACTUAL chain height, not template height (template might be ahead if validation failed)
+        int target = target_height_.load();
+        const chain::CBlockIndex* tip = chainstate_.GetTip();
+        int actual_height = tip ? tip->nHeight : -1;
+        if (target != -1 && actual_height >= target) {
+          LOG_CHAIN_TRACE("Miner: Reached target height {} (actual chain: {}), stopping", target, actual_height);
+          mining_.store(false);
+          break;
+        }
+
+        // Continue mining next block
         local_template = CreateBlockTemplate();
         template_prev_hash = local_template.hashPrevBlock;
         nonce = 0;
+        continue;
+      }
+
+      // Next nonce
+      nonce++;
+      if (nonce == 0) {
+        // Nonce space exhausted - increment timestamp for fresh search space
+        uint32_t current_time = static_cast<uint32_t>(util::GetTime());
+        uint32_t max_future_time = current_time + validation::MAX_FUTURE_BLOCK_TIME;
+
+        if (local_template.header.nTime < max_future_time) {
+          local_template.header.nTime++;
+          LOG_CHAIN_TRACE("Miner: Nonce exhausted, incremented nTime to {}", local_template.header.nTime);
+        } else {
+          // Timestamp would exceed maximum future time - regenerate template
+          LOG_CHAIN_TRACE("Miner: Timestamp at maximum, regenerating template");
+          local_template = CreateBlockTemplate();
+          template_prev_hash = local_template.hashPrevBlock;
+          nonce = 0;
+        }
       }
     }
+    LOG_CHAIN_TRACE("Miner: Worker thread exiting normally");
+  } catch (const std::exception& e) {
+    LOG_CHAIN_ERROR("Miner: Fatal error in worker thread: {}", e.what());
+    mining_.store(false);
   }
-
-  LOG_CHAIN_TRACE("Miner: Worker thread exiting normally");
 }
 
 BlockTemplate CPUMiner::CreateBlockTemplate() {
