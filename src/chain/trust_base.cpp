@@ -16,6 +16,16 @@ namespace {
 const secp256k1_context* GetContext() {
   return secp256k1_context_static;
 }
+
+std::vector<uint8_t> PrependCBORTag1013(const std::vector<uint8_t>& data) {
+  std::vector<uint8_t> tagged;
+  tagged.reserve(data.size() + 3);
+  tagged.push_back(0xd9);
+  tagged.push_back(0x03);
+  tagged.push_back(0xf5);
+  tagged.insert(tagged.end(), data.begin(), data.end());
+  return tagged;
+}
 }  // namespace
 
 void to_json(nlohmann::json& j, const NodeInfo& n) {
@@ -128,33 +138,14 @@ std::vector<uint8_t> RootTrustBaseV1::SigBytes() const {
   to_json(j, *this);
   j[9] = nullptr;  // Force the last element (signatures) to be null
 
-  std::vector<uint8_t> data = nlohmann::json::to_cbor(j);
-
-  // Prepend tag 1013 (d9 03f5)
-  std::vector<uint8_t> tagged;
-  tagged.reserve(data.size() + 3);
-  tagged.push_back(0xd9);
-  tagged.push_back(0x03);
-  tagged.push_back(0xf5);
-  tagged.insert(tagged.end(), data.begin(), data.end());
-
-  return tagged;
+  return PrependCBORTag1013(nlohmann::json::to_cbor(j));
 }
 
 std::vector<uint8_t> RootTrustBaseV1::ToCBOR() const {
   nlohmann::json j;
   to_json(j, *this);
-  std::vector<uint8_t> data = nlohmann::json::to_cbor(j);
 
-  // Prepend tag 1013 (d9 03f5)
-  std::vector<uint8_t> tagged;
-  tagged.reserve(data.size() + 3);
-  tagged.push_back(0xd9);
-  tagged.push_back(0x03);
-  tagged.push_back(0xf5);
-  tagged.insert(tagged.end(), data.begin(), data.end());
-
-  return tagged;
+  return PrependCBORTag1013(nlohmann::json::to_cbor(j));
 }
 
 std::vector<uint8_t> RootTrustBaseV1::Hash() const {
