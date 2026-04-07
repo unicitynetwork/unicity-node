@@ -1768,14 +1768,14 @@ std::string RPCServer::HandleSubmitHeader(const std::vector<std::string>& params
     }
   }
 
-  // Expect exactly 224 hex chars (112 bytes)
-  if (hex.size() != 224) {
-    return util::JsonError("Invalid header length (expect 224 hex chars)");
+  // Expect at least 224 hex chars (112 bytes)
+  if (hex.size() < 224 || hex.size() % 2 != 0) {
+    return util::JsonError("Invalid header length (expect at least 224 hex chars)");
   }
 
   // Decode hex
   std::vector<uint8_t> bytes;
-  bytes.reserve(112);
+  bytes.reserve(hex.size() / 2);
   auto hex_to_nibble = [](char c) -> int {
     if (c >= '0' && c <= '9')
       return c - '0';
