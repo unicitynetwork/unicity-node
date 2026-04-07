@@ -153,6 +153,10 @@ CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& header) {
       pindex->bftEpoch = utb.epoch;
     } catch (const std::exception& e) {
       LOG_CHAIN_ERROR("Failed to parse UTB from block {} payload: {}", hash.ToString().substr(0, 16), e.what());
+      // in case of any errors, carry forward the previous bftEpoch
+      if (pprev) {
+        pindex->bftEpoch = pprev->bftEpoch;
+      }
     }
   } else if (pprev) {
     // If no new UTB, carry forward the previous one
