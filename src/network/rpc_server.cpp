@@ -2112,7 +2112,7 @@ std::string RPCServer::HandleGetBlockTemplate(const std::vector<std::string>& pa
   // No transactions, coinbase, or merkle tree - just header fields
   std::ostringstream oss;
   oss << "{\n"
-      << "  \"version\": " << tip->nVersion << ",\n"
+      << "  \"version\": " << 1 << ",\n"
       << "  \"previousblockhash\": \"" << prev_hash.GetHex() << "\",\n"
       << "  \"height\": " << next_height << ",\n"
       << "  \"curtime\": " << cur_time << ",\n"
