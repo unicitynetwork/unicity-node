@@ -69,7 +69,9 @@ def main():
 
     node = None
     try:
-        node = TestNode(0, test_dir / "node0", binary_path, extra_args=["--nolisten"], chain="testnet")
+        # Start node on testnet
+        # Disable BFT integration (--bftaddr="")
+        node = TestNode(0, test_dir / "node0", binary_path, extra_args=["--nolisten", "--bftaddr="], chain="testnet")
         node.start()
 
         # Genesis

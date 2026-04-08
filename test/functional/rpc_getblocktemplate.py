@@ -14,6 +14,7 @@ import time
 import tempfile
 import shutil
 import threading
+import hashlib
 from pathlib import Path
 
 # Add test framework to path
@@ -174,13 +175,15 @@ def test_submitblock_invalid_length(node):
     """Test that submitblock rejects invalid header length."""
     print("  Testing submitblock rejects invalid length...")
 
+    rewardtokenid = "00" * 32
+
     # Too short
-    result = node.rpc("submitblock", "00" * 50)  # 50 bytes instead of 100
+    result = node.rpc("submitblock", "00" * 100, rewardtokenid)  # 100 bytes instead of 144
     assert result.get("error") or result.get("success") == False, \
         "Should reject short header"
 
     # Too long
-    result = node.rpc("submitblock", "00" * 150)  # 150 bytes instead of 100
+    result = node.rpc("submitblock", "00" * 5000, rewardtokenid)  # Too large
     assert result.get("error") or result.get("success") == False, \
         "Should reject long header"
 
@@ -191,8 +194,10 @@ def test_submitblock_invalid_hex(node):
     """Test that submitblock rejects invalid hex."""
     print("  Testing submitblock rejects invalid hex...")
 
+    rewardtokenid = "00" * 32
+
     # Invalid hex characters
-    result = node.rpc("submitblock", "GG" + "00" * 99)
+    result = node.rpc("submitblock", "GG" + "00" * 144, rewardtokenid)
     assert result.get("error") or result.get("success") == False, \
         "Should reject invalid hex"
 
@@ -203,8 +208,11 @@ def test_submitblock_invalid_prevhash(node):
     """Test that submitblock rejects block with unknown prevhash."""
     print("  Testing submitblock rejects unknown prevhash...")
 
+    rewardtokenid = "00" * 32
+    payload_hash = hashlib.sha256(bytes.fromhex(rewardtokenid)).hexdigest()
+
     # Construct a header with garbage prevhash (won't connect to chain)
-    # Header format: version(4) + prevhash(32) + mineraddr(32) + time(4) + bits(4) + nonce(4) + rxhash(32) = 112 bytes
+    # Header format: version(4) + prevhash(32) + payloadRoot(32) + time(4) + bits(4) + nonce(4) + rxhash(32) = 112 bytes
     fake_header = (
         "01000000" +                              # version = 1
         "ff" * 32 +                               # prevhash = all 0xff (doesn't exist)
@@ -212,10 +220,11 @@ def test_submitblock_invalid_prevhash(node):
         "00000000" +                              # time = 0
         "ffff001d" +                              # bits (doesn't matter)
         "00000000" +                              # nonce = 0
-        "00" * 32                                 # hashRandomX = zeros
+        "00" * 32 +                               # hashRandomX = zeros
+        payload_hash                              # payload (32 bytes)
     )
 
-    result = node.rpc("submitblock", fake_header)
+    result = node.rpc("submitblock", fake_header, rewardtokenid)
 
     # Should fail because prevhash doesn't exist
     assert result.get("success") == False or result.get("error"), \

@@ -1795,13 +1795,18 @@ std::string RPCServer::HandleSubmitHeader(const std::vector<std::string>& params
     bytes.push_back(static_cast<uint8_t>((hi << 4) | lo));
   }
 
-  if (bytes.size() != CBlockHeader::HEADER_SIZE) {
+  if (bytes.size() < CBlockHeader::HEADER_SIZE) {
     return util::JsonError("Decoded header size mismatch");
   }
 
   CBlockHeader header;
   if (!header.Deserialize(bytes.data(), bytes.size())) {
     return util::JsonError("Failed to deserialize header");
+  }
+
+  // add default reward token id to payload
+  if (bytes.size() == CBlockHeader::HEADER_SIZE) {
+    header.vPayload.assign(32, 0);
   }
 
   // Apply temporary PoW-skip hook if requested (regtest-only)

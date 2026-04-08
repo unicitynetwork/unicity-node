@@ -821,7 +821,7 @@ bool ChainstateManager::InvalidateBlock(const uint256& hash) {
 }
 
 void ChainstateManager::TestSetSkipPoWChecks(bool enabled) {
-  if (params_.GetChainType() != chain::ChainType::REGTEST) {
+  if (enabled && params_.GetChainType() != chain::ChainType::REGTEST) {
     throw std::runtime_error("PoW skip is only allowed in regtest mode");
   }
   test_skip_pow_checks_.store(enabled, std::memory_order_release);
