@@ -685,7 +685,7 @@ std::string RPCServer::HandleGetBlockHash(const std::vector<std::string>& params
     return util::JsonError("Block height out of range");
   }
 
-  return index->GetBlockHash().GetHex() + "\n";
+  return "\"" + index->GetBlockHash().GetHex() + "\"\n";
 }
 
 std::string RPCServer::HandleGetBlockHeader(const std::vector<std::string>& params) {
@@ -762,7 +762,7 @@ std::string RPCServer::HandleGetBestBlockHash(const std::vector<std::string>& pa
     return "null\n";
   }
 
-  return tip->GetBlockHash().GetHex() + "\n";
+  return "\"" + tip->GetBlockHash().GetHex() + "\"\n";
 }
 
 std::string RPCServer::HandleGetConnectionCount(const std::vector<std::string>& params) {
