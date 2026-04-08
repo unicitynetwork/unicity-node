@@ -25,6 +25,7 @@ namespace unicity {
 namespace chain {
 class ChainParams;
 class CBlockIndex;
+class TrustBaseManager;
 }  // namespace chain
 
 namespace crypto {
@@ -43,7 +44,7 @@ namespace validation {
 class ChainstateManager {
 public:
   // LIFETIME: ChainParams reference must outlive this ChainstateManager
-  explicit ChainstateManager(const chain::ChainParams& params);
+  explicit ChainstateManager(const chain::ChainParams& params, chain::TrustBaseManager& tbm);
 
   // Accept a block header into the block index.
   // Returns pointer to CBlockIndex on success, nullptr on failure (check state).
@@ -205,6 +206,7 @@ private:
   chain::BlockManager block_manager_;
   ActiveTipCandidates active_tip_candidates_;
   const chain::ChainParams& params_;
+  chain::TrustBaseManager& tbm_;
 
   // Cached IBD status (latches false once complete, atomic for lock-free reads)
   mutable std::atomic<bool> m_cached_finished_ibd{false};

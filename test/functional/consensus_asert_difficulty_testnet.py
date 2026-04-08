@@ -41,14 +41,13 @@ def hex_to_le32(hex_str: str) -> bytes:
 
 
 def build_header_hex(prev_hash_hex_be: str, n_time: int, n_bits_u32: int, n_nonce: int = 0, version: int = 1) -> str:
-    """Build a 100-byte Unicity header for testing.
+    """Build a 112-byte Unicity header for testing.
 
-    Layout: nVersion(4) | prevhash(32 LE) | miner(20) | nTime(4 LE) |
+    Layout: nVersion(4) | prevhash(32 LE) | payloadRoot(32) | nTime(4 LE) |
             nBits(4 LE) | nNonce(4 LE) | hashRandomX(32)
     """
     prev_le = hex_to_le32(prev_hash_hex_be)
-    miner = b"\x00" * 20
-    rx = b"\x00" * 32
+    miner = b"\x00" * 32
     header = b"".join([
         u32le(version),
         prev_le,
@@ -56,9 +55,9 @@ def build_header_hex(prev_hash_hex_be: str, n_time: int, n_bits_u32: int, n_nonc
         u32le(n_time),
         u32le(n_bits_u32),
         u32le(n_nonce),
-        rx,
+        b"\x00" * 32,
     ])
-    assert len(header) == 100
+    assert len(header) == 112
     return header.hex()
 
 
@@ -70,7 +69,9 @@ def main():
 
     node = None
     try:
-        node = TestNode(0, test_dir / "node0", binary_path, extra_args=["--nolisten"], chain="testnet")
+        # Start node on testnet
+        # Disable BFT integration (--bftaddr="")
+        node = TestNode(0, test_dir / "node0", binary_path, extra_args=["--nolisten", "--bftaddr="], chain="testnet")
         node.start()
 
         # Genesis

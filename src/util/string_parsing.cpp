@@ -8,9 +8,22 @@
 #include <cctype>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
 namespace unicity {
 namespace util {
+
+namespace {
+uint8_t hexValue(char c) {
+  if ('0' <= c && c <= '9')
+    return c - '0';
+  if ('a' <= c && c <= 'f')
+    return c - 'a' + 10;
+  if ('A' <= c && c <= 'F')
+    return c - 'A' + 10;
+  throw std::invalid_argument("Invalid hex character");
+}
+}  // namespace
 
 std::optional<int> SafeParseInt(const std::string& str, int min, int max) {
   try {
@@ -101,6 +114,36 @@ bool IsValidHex(const std::string& str) {
     }
   }
   return true;
+}
+
+std::string ToHex(const std::span<const uint8_t> data) {
+  static constexpr char hex_chars[] = "0123456789abcdef";
+  std::string out;
+  out.reserve(data.size() * 2);
+
+  for (const uint8_t b : data) {
+    out.push_back(hex_chars[b >> 4]);
+    out.push_back(hex_chars[b & 0x0f]);
+  }
+
+  return out;
+}
+
+std::vector<uint8_t> ParseHex(const std::string_view hex) {
+  if (hex.size() % 2 != 0) {
+    throw std::invalid_argument("Hex string must have even length");
+  }
+
+  std::vector<uint8_t> out;
+  out.reserve(hex.size() / 2);
+
+  for (size_t i = 0; i < hex.size(); i += 2) {
+    const uint8_t high = hexValue(hex[i]);
+    const uint8_t low = hexValue(hex[i + 1]);
+    out.push_back((high << 4) | low);
+  }
+
+  return out;
 }
 
 std::optional<uint256> SafeParseHash(const std::string& str) {

@@ -5,9 +5,14 @@
 
 #include "network/protocol.hpp"
 #include "util/arith_uint256.hpp"
+#include "util/hash.hpp"
+#include "util/sha256.hpp"
+#include "util/string_parsing.hpp"
 
 #include <cassert>
+#include <cstring>
 #include <stdexcept>
+#include <string_view>
 
 namespace unicity {
 namespace chain {
@@ -17,29 +22,42 @@ namespace chain {
 // ============================================================================
 
 // Mainnet
-static constexpr uint256 MAINNET_GENESIS_HASH{"b675bea090e27659c91885afe341facf399cf84997918bac927948ee75409ebf"};
+static constexpr uint256 MAINNET_GENESIS_HASH{"4e98c1cc1d5de0b107267e0f856d3f0d4a3a184a25f730ff8a7f2404eb1507e1"};
 static constexpr uint256 MAINNET_POW_LIMIT{"000fffff00000000000000000000000000000000000000000000000000000000"};
+static constexpr std::string_view MAINNET_GENESIS_UTB_CBOR_HEX = "d903f58a010301018383783531365569753248416b776456513347774234586f4b554c624b733174504b7671386e6664385941594450415a395341766d61427663582102d23be5a4932867088fd6fbf12cbc2744ff1393ec1cc7eb47addcec6d908a9e710183783531365569753248416d476b734c324674316d3156506a3774326463484c59343661686a6d726245483655316873486d346e72473268582103411c106956451afa8a596f9d3ef443c073f6d6d40c5d4539fa3e140465301f3e0183783531365569753248416d514d7052575343736b576773486e41507148436355487165396848533353787461337a6941737a37795531685821027f0fe7ba12dc544fe9d4f8bdc8f71de106b97d234e769c87a938cc7c5f9587570103f6f6f6a3783531365569753248416b776456513347774234586f4b554c624b733174504b7671386e6664385941594450415a395341766d614276635841dde5ce121337851277214f4cfdb12e1470115987bab6d66cc754df325a8b1ee21fbc022514dcafd8aa73e1b95a599a684a2d2c2f6b373c66becc7975af84588d00783531365569753248416d476b734c324674316d3156506a3774326463484c59343661686a6d726245483655316873486d346e724732685841027cc807c54a74c6530be68d4797b9d1e1154a34559a0f5c608d402db074ef6b71b26c04e16594ca7f63a82bf26b4253e94b987c2b92ac4ff72667f5b56d0ac601783531365569753248416d514d7052575343736b576773486e41507148436355487165396848533353787461337a6941737a377955316858413ddb9ce2a7f1ee255966b91f06409a791cd101ce865c2c5ff1054ff8ca0dc7db145de2c71a0b5ed7776532a6581e3fe6b685ea5d48568f898a9193bb0444c3ab01";
 
 // Testnet
-static constexpr uint256 TESTNET_GENESIS_HASH{"cb608755c4b2bee0b929fe5760dec6cc578b48976ee164bb06eb9597c17575f8"};
+static constexpr uint256 TESTNET_GENESIS_HASH{"4d2297d3b1e809e2ec21e6f403ab8c8f1d1e3ba2970a9739affc74f86a90a061"};
 static constexpr uint256 TESTNET_POW_LIMIT{"007fffff00000000000000000000000000000000000000000000000000000000"};
+static constexpr std::string_view TESTNET_GENESIS_UTB_CBOR_HEX = MAINNET_GENESIS_UTB_CBOR_HEX;
 
 // Regtest
-static constexpr uint256 REGTEST_GENESIS_HASH{"0555faa88836f4ce189235a28279af4614432234b6f7e2f350e4fc0dadb1ffa7"};
+static constexpr uint256 REGTEST_GENESIS_HASH{"cd47e25259cc39fa905e5b0adc7e515d26dba0674659999c61f69d1ed1ed1085"};
 static constexpr uint256 REGTEST_POW_LIMIT{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
+static constexpr std::string_view REGTEST_GENESIS_UTB_CBOR_HEX = MAINNET_GENESIS_UTB_CBOR_HEX;
 
 // Static instance
 std::unique_ptr<ChainParams> GlobalChainParams::instance = nullptr;
 
-CBlockHeader CreateGenesisBlock(uint32_t nTime, uint32_t nNonce, uint32_t nBits, int32_t nVersion) {
+CBlockHeader CreateGenesisBlock(uint32_t nTime, uint32_t nNonce, uint32_t nBits, std::span<const uint8_t> utb_cbor,
+                                int32_t nVersion) {
   CBlockHeader genesis;
   genesis.nVersion = nVersion;
   genesis.hashPrevBlock.SetNull();
-  genesis.minerAddress.SetNull();
+
+  // Genesis Payload: [32 bytes rewardTokenIdHash (all zeros)] + [UTB CBOR bytes]
+  genesis.vPayload.assign(32, 0);
+  genesis.vPayload.insert(genesis.vPayload.end(), utb_cbor.begin(), utb_cbor.end());
+
+  // Compute leaf_1 by hashing the UTB
+  const uint256 leaf_1 = SingleHash(utb_cbor);
+  genesis.payloadRoot = CBlockHeader::ComputePayloadRoot(uint256::ZERO, leaf_1);
+
   genesis.nTime = nTime;
   genesis.nBits = nBits;
   genesis.nNonce = nNonce;
   genesis.hashRandomX.SetNull();
+
   return genesis;
 }
 
@@ -93,41 +111,23 @@ CMainParams::CMainParams() {
   consensus.nASERTHalfLife = 2 * 24 * 60 * 60;         // 2 days (~20 blocks at 2.4h)
 
   // ASERT anchor: Use block 1 as the anchor
-  // This means block 0 (genesis) and block 1 both use powLimit
-  // Block 2 onwards uses ASERT relative to block 1's actual timestamp
-  // This eliminates timing issues - block 1 can be mined at any time
   consensus.nASERTAnchorHeight = 1;
 
   // Minimum chain work
-  // Update this value periodically as the chain grows
-  // Set to 0 for now since this is a fresh chain with no accumulated work
-  // Once mainnet has significant work, update this to ~90% of current chain work
   consensus.nMinimumChainWork = uint256::ZERO;
 
   // Network configuration
   nDefaultPort = protocol::ports::MAINNET;
 
-  // Genesis block:
-  // Mined on: 2025-10-24 19:20:12 UTC
-  // Difficulty: 0x1f06a000 (target: ~2.5 minutes at 50 H/s)
-  // Block hash: b675bea090e27659c91885afe341facf399cf84997918bac927948ee75409ebf
-  genesis = CreateGenesisBlock(1761330012,  // nTime - Oct 24, 2025
-                               8497,        // nNonce - found by genesis miner
-                               0x1f06a000,  // nBits - initial difficulty
-                               1            // nVersion
-  );
-
+  // Genesis block
+  genesis = CreateGenesisBlock(1761330012, 495, 0x1f06a000, util::ParseHex(MAINNET_GENESIS_UTB_CBOR_HEX), 1);
   consensus.hashGenesisBlock = genesis.GetHash();
   assert(consensus.hashGenesisBlock == MAINNET_GENESIS_HASH);
 
-  // TODO add timebomb to initial mainnet
   consensus.nNetworkExpirationInterval = 0;
   consensus.nNetworkExpirationGracePeriod = 0;
+  consensus.nSuspiciousReorgDepth = 2;
 
-  // Reorg protection
-  consensus.nSuspiciousReorgDepth = 2;  // 2 blocks (~4.8 hours)
-
-  // Hardcoded seed node addresses
   vFixedSeeds.push_back("178.18.251.16:9590");
   vFixedSeeds.push_back("185.225.233.49:9590");
   vFixedSeeds.push_back("207.244.248.15:9590");
@@ -144,42 +144,24 @@ CMainParams::CMainParams() {
 CTestNetParams::CTestNetParams() {
   chainType = ChainType::TESTNET;
 
-  // Easy difficulty for testnet
   consensus.powLimit = TESTNET_POW_LIMIT;
-  consensus.nPowTargetSpacing = 144 * 60;              // 2.4 hours (same as mainnet)
-  consensus.nRandomXEpochDuration = 7 * 24 * 60 * 60;  // 1 week  (70 blocks at 2.4h)
-  consensus.nASERTHalfLife = 2 * 24 * 60 * 60;         // 2 days (~20 blocks at 2.4h)
-
-  // ASERT anchor: Use block 1 (same as mainnet)
+  consensus.nPowTargetSpacing = 144 * 60;
+  consensus.nRandomXEpochDuration = 7 * 24 * 60 * 60;
+  consensus.nASERTHalfLife = 2 * 24 * 60 * 60;
   consensus.nASERTAnchorHeight = 1;
-
-  // Minimum chain work (eclipse attack protection)
-  // Set to 0 for fresh testnet - update as the network grows
   consensus.nMinimumChainWork = uint256::ZERO;
 
-  // Network expiration enabled for testnet - set to 1000 blocks for testing
-  consensus.nNetworkExpirationInterval = 1000;
-  consensus.nNetworkExpirationGracePeriod = 24;  // 24 blocks (~2.4 days warning period)
-
-  // Reorg protection
-  consensus.nSuspiciousReorgDepth = 100;  // 100 blocks (~10 days) - testing flexibility
-
-  // Network configuration
   nDefaultPort = protocol::ports::TESTNET;
 
-  // Testnet genesis - mined at Oct 15, 2025
-  // Block hash:
-  // cb608755c4b2bee0b929fe5760dec6cc578b48976ee164bb06eb9597c17575f8
-  genesis = CreateGenesisBlock(1760549555,  // Oct 15, 2025
-                               253,         // Nonce found by genesis miner
-                               0x1f7fffff,  // Easy difficulty for fast testing
-                               1);
-
+  // Genesis block
+  genesis = CreateGenesisBlock(1760549555, 427, 0x1f7fffff, util::ParseHex(TESTNET_GENESIS_UTB_CBOR_HEX), 1);
   consensus.hashGenesisBlock = genesis.GetHash();
   assert(consensus.hashGenesisBlock == TESTNET_GENESIS_HASH);
 
-  // Hardcoded seed node addresses (ct20-ct26)
-  // These are reliable seed nodes for initial peer discovery
+  consensus.nNetworkExpirationInterval = 1000;
+  consensus.nNetworkExpirationGracePeriod = 24;
+  consensus.nSuspiciousReorgDepth = 100;
+
   vFixedSeeds.push_back("178.18.251.16:19590");
   vFixedSeeds.push_back("185.225.233.49:19590");
   vFixedSeeds.push_back("207.244.248.15:19590");
@@ -196,35 +178,23 @@ CTestNetParams::CTestNetParams() {
 CRegTestParams::CRegTestParams() {
   chainType = ChainType::REGTEST;
 
-  // Very easy difficulty - instant block generation
   consensus.powLimit = REGTEST_POW_LIMIT;
   consensus.nPowTargetSpacing = 2 * 60;
-  consensus.nRandomXEpochDuration = 365ULL * 24 * 60 * 60 *
-                                    100;  // 100 years (so all regtest blocks stay in same epoch)
-
-  // Minimum chain work - disabled for regtest (generate chains from scratch)
+  consensus.nRandomXEpochDuration = 365ULL * 24 * 60 * 60 * 100;
   consensus.nMinimumChainWork = uint256::ZERO;
 
-  // Network expiration disabled for regtest (testing environment)
-  consensus.nNetworkExpirationInterval = 0;     // Disabled
-  consensus.nNetworkExpirationGracePeriod = 0;  // Disabled
-
-  // Reorg protection
-  consensus.nSuspiciousReorgDepth = 100;  // 100 blocks
-
-  // Network configuration
   nDefaultPort = protocol::ports::REGTEST;
 
-  // Regtest genesis - instant mine
-  genesis = CreateGenesisBlock(1760549555,  // Oct 15, 2025 (same as testnet)
-                               2,           // Easy nonce
-                               0x207fffff,  // Very easy difficulty
-                               1);
-
+  // Genesis block
+  genesis = CreateGenesisBlock(1774378227, 23, 0x207fffff, util::ParseHex(REGTEST_GENESIS_UTB_CBOR_HEX), 1);
   consensus.hashGenesisBlock = genesis.GetHash();
   assert(consensus.hashGenesisBlock == REGTEST_GENESIS_HASH);
 
-  vFixedSeeds.clear();  // No hardcoded seeds for local testing
+  consensus.nNetworkExpirationInterval = 0;
+  consensus.nNetworkExpirationGracePeriod = 0;
+  consensus.nSuspiciousReorgDepth = 100;
+
+  vFixedSeeds.clear();
 }
 
 // ============================================================================

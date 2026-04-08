@@ -16,6 +16,7 @@
 #include <chrono>
 
 using namespace unicity;
+#include "../common/mock_trust_base_manager.hpp"
 using namespace unicity::network;
 using namespace unicity::chain;
 using namespace unicity::validation;
@@ -28,13 +29,15 @@ public:
     MinimalChainstate() {
         GlobalChainParams::Select(ChainType::REGTEST);
         params_ = ChainParams::CreateRegTest();
-        manager_ = std::make_unique<ChainstateManager>(*params_);
+        tbm_ = std::make_unique<test::MockTrustBaseManager>();
+        manager_ = std::make_unique<ChainstateManager>(*params_, *tbm_);
     }
 
     ChainstateManager& get() { return *manager_; }
 
 private:
     std::unique_ptr<ChainParams> params_;
+    std::unique_ptr<test::MockTrustBaseManager> tbm_;
     std::unique_ptr<ChainstateManager> manager_;
 };
 

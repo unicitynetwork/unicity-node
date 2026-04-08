@@ -20,7 +20,9 @@
 #include "chain/pow.hpp"
 #include "chain/randomx_pow.hpp"
 #include "network/protocol.hpp"
+#include "util/hash.hpp"
 #include "util/time.hpp"
+#include "util/string_parsing.hpp"
 #include "common/test_chainstate_manager.hpp"
 #include <memory>
 
@@ -38,12 +40,31 @@ static CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+
+    uint256 token_id;
+    token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+    uint256 leaf_0 = SingleHash(token_id);
+    uint256 leaf_1 = uint256::ZERO;
+    header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+    header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = nNonce;
     header.hashRandomX.SetNull();
     return header;
+}
+
+static bool MineBlockHeader(CBlockHeader& h, const chain::ChainParams& params) {
+    uint256 out_hash;
+    for (uint32_t nonce = 0; nonce < 1000000; ++nonce) {
+        h.nNonce = nonce;
+        if (consensus::CheckProofOfWork(h, h.nBits, params, crypto::POWVerifyMode::MINING, &out_hash)) {
+            h.hashRandomX = out_hash;
+            return true;
+        }
+    }
+    return false;
 }
 
 // =============================================================================
@@ -327,16 +348,80 @@ TEST_CASE("CBlockIndex::GetMedianTimePast - median time calculation", "[validati
 // Section 6: Block Header Validation
 // =============================================================================
 
+TEST_CASE("CheckBlockHeader - payload validation", "[validation][payload]") {
+    crypto::InitRandomX();
+    auto params = ChainParams::CreateRegTest();
+    ValidationState state;
+    MockTrustBaseManager tbm;
+
+    SECTION("Accepts payload of exactly 32 bytes") {
+        CBlockHeader h = CreateTestHeader();
+        h.vPayload.assign(32, 0x42);
+
+        uint256 leaf_0;
+        std::memcpy(leaf_0.begin(), h.vPayload.data(), 32);
+        h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, uint256::ZERO);
+
+        REQUIRE(MineBlockHeader(h, *params));
+        bool result = CheckBlockHeader(h, *params, state, tbm);
+        CAPTURE(state.GetRejectReason());
+        REQUIRE(result);
+    }
+
+    SECTION("Accepts payload containing valid UTB") {
+        CBlockHeader h = CreateTestHeader();
+        
+        // Sample UTB from epoch 1 in trust_base_tests.cpp
+        std::string epoch1_cbor_hex = "d903f58a010301018383783531365569753248416b776456513347774234586f4b554c624b733174504b7671386e6664385941594450415a395341766d61427663582102d23be5a4932867088fd6fbf12cbc2744ff1393ec1cc7eb47addcec6d908a9e710183783531365569753248416d476b734c324674316d3156506a3774326463484c59343661686a6d726245483655316873486d346e72473268582103411c106956451afa8a596f9d3ef443c073f6d6d40c5d4539fa3e140465301f3e0183783531365569753248416d514d7052575343736b576773486e41507148436355487165396848533353787461337a6941737a37795531685821027f0fe7ba12dc544fe9d4f8bdc8f71de106b97d234e769c87a938cc7c5f9587570103f6f6f6a3783531365569753248416b776456513347774234586f4b554c624b733174504b7671386e6664385941594450415a395341766d614276635841dde5ce121337851277214f4cfdb12e1470115987bab6d66cc754df325a8b1ee21fbc022514dcafd8aa73e1b95a599a684a2d2c2f6b373c66becc7975af84588d00783531365569753248416d476b734c324674316d3156506a3774326463484c59343661686a6d726245483655316873486d346e724732685841027cc807c54a74c6530be68d4797b9d1e1154a34559a0f5c608d402db074ef6b71b26c04e16594ca7f63a82bf26b4253e94b987c2b92ac4ff72667f5b56d0ac601783531365569753248416d514d7052575343736b576773486e41507148436355487165396848533353787461337a6941737a377955316858413ddb9ce2a7f1ee255966b91f06409a791cd101ce865c2c5ff1054ff8ca0dc7db145de2c71a0b5ed7776532a6581e3fe6b685ea5d48568f898a9193bb0444c3ab01";
+        std::vector<uint8_t> utb_bytes = util::ParseHex(epoch1_cbor_hex);
+        
+        // Payload = 32 bytes Token ID + UTB CBOR
+        h.vPayload.assign(32, 0x42);
+        h.vPayload.insert(h.vPayload.end(), utb_bytes.begin(), utb_bytes.end());
+
+        uint256 leaf_0;
+        std::memcpy(leaf_0.begin(), h.vPayload.data(), 32);
+        uint256 leaf_1 = SingleHash(std::span(h.vPayload.data() + 32, h.vPayload.size() - 32));
+        h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+
+        REQUIRE(MineBlockHeader(h, *params));
+        bool result = CheckBlockHeader(h, *params, state, tbm);
+        CAPTURE(state.GetRejectReason());
+        REQUIRE(result);
+    }
+
+    SECTION("Rejects payload < 32 bytes") {
+        CBlockHeader h = CreateTestHeader();
+        h.vPayload.assign(31, 0x42);
+
+        bool result = CheckBlockHeader(h, *params, state, tbm);
+        REQUIRE_FALSE(result);
+        REQUIRE(state.GetRejectReason() == "bad-payload-size");
+        REQUIRE(state.GetDebugMessage().find("missing Token ID hash") != std::string::npos);
+    }
+
+    SECTION("Rejects payload > MAX_PAYLOAD_SIZE") {
+        CBlockHeader h = CreateTestHeader();
+        h.vPayload.assign(CBlockHeader::MAX_PAYLOAD_SIZE + 1, 0x42);
+
+        bool result = CheckBlockHeader(h, *params, state, tbm);
+        REQUIRE_FALSE(result);
+        REQUIRE(state.GetRejectReason() == "bad-payload-size");
+        REQUIRE(state.GetDebugMessage().find("exceeds maximum size") != std::string::npos);
+    }
+}
+
 TEST_CASE("CheckBlockHeader - version validation", "[validation][version]") {
     auto params = ChainParams::CreateRegTest();
     ValidationState state;
+    MockTrustBaseManager mock_tbm;
 
     SECTION("Accepts version >= MIN_BLOCK_VERSION (1)") {
         CBlockHeader h = CreateTestHeader();
         h.nVersion = 1;
         h.hashRandomX = uint256S("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
 
-        bool result = CheckBlockHeader(h, *params, state);
+        bool result = CheckBlockHeader(h, *params, state, mock_tbm);
         if (!result) {
             REQUIRE(state.GetRejectReason() != "bad-version");
         }
@@ -347,7 +432,7 @@ TEST_CASE("CheckBlockHeader - version validation", "[validation][version]") {
         h.nVersion = 2;
         h.hashRandomX = uint256S("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
 
-        bool result = CheckBlockHeader(h, *params, state);
+        bool result = CheckBlockHeader(h, *params, state, mock_tbm);
         if (!result) {
             REQUIRE(state.GetRejectReason() != "bad-version");
         }
@@ -357,7 +442,7 @@ TEST_CASE("CheckBlockHeader - version validation", "[validation][version]") {
         CBlockHeader h = CreateTestHeader();
         h.nVersion = 0;
 
-        bool result = CheckBlockHeader(h, *params, state);
+        bool result = CheckBlockHeader(h, *params, state, mock_tbm);
         REQUIRE_FALSE(result);
         REQUIRE(state.GetRejectReason() == "bad-version");
         REQUIRE(state.GetDebugMessage().find("version too old") != std::string::npos);
@@ -367,7 +452,7 @@ TEST_CASE("CheckBlockHeader - version validation", "[validation][version]") {
         CBlockHeader h = CreateTestHeader();
         h.nVersion = -1;
 
-        bool result = CheckBlockHeader(h, *params, state);
+        bool result = CheckBlockHeader(h, *params, state, mock_tbm);
         REQUIRE_FALSE(result);
         REQUIRE(state.GetRejectReason() == "bad-version");
     }
@@ -376,13 +461,14 @@ TEST_CASE("CheckBlockHeader - version validation", "[validation][version]") {
 TEST_CASE("CheckBlockHeader - null hashRandomX validation", "[validation][pow]") {
     auto params = ChainParams::CreateRegTest();
     ValidationState state;
+    MockTrustBaseManager mock_tbm;
 
     SECTION("Rejects header with null hashRandomX") {
         CBlockHeader h = CreateTestHeader();
         h.nVersion = 1;
         h.hashRandomX.SetNull();
 
-        bool result = CheckBlockHeader(h, *params, state);
+        bool result = CheckBlockHeader(h, *params, state, mock_tbm);
         REQUIRE_FALSE(result);
         REQUIRE(state.GetRejectReason() == "bad-randomx-hash");
         REQUIRE(state.GetDebugMessage().find("missing RandomX hash") != std::string::npos);
@@ -393,7 +479,7 @@ TEST_CASE("CheckBlockHeader - null hashRandomX validation", "[validation][pow]")
         h.nVersion = 1;
         h.hashRandomX = uint256S("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
 
-        bool result = CheckBlockHeader(h, *params, state);
+        bool result = CheckBlockHeader(h, *params, state, mock_tbm);
         if (!result) {
             REQUIRE(state.GetRejectReason() != "bad-randomx-hash");
         }
@@ -554,7 +640,14 @@ TEST_CASE("CheckHeadersPoW - Direct validation function tests", "[validation][po
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        
+        uint256 token_id;
+        token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+        uint256 leaf_0 = SingleHash(token_id);
+        uint256 leaf_1 = uint256::ZERO;
+        header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+        header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
         header.nTime = 1234567890;
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -580,7 +673,14 @@ TEST_CASE("CheckHeadersPoW - Direct validation function tests", "[validation][po
             CBlockHeader header;
             header.nVersion = 1;
             header.hashPrevBlock.SetNull();
-            header.minerAddress.SetNull();
+            
+            uint256 token_id;
+            token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+            uint256 leaf_0 = SingleHash(token_id);
+            uint256 leaf_1 = uint256::ZERO;
+            header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+            header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
             header.nTime = 1234567890;
             header.nBits = 0x207fffff;
             header.nNonce = 0;
@@ -611,7 +711,7 @@ TEST_CASE("Validation - integration test", "[validation]") {
         CBlockHeader header = CreateTestHeader();
 
         auto serialized = header.Serialize();
-        REQUIRE(serialized.size() == 100);
+        REQUIRE(serialized.size() == 112);
 
         CBlockHeader header2;
         REQUIRE(header2.Deserialize(serialized.data(), serialized.size()));

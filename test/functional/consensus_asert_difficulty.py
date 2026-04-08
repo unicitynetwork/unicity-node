@@ -30,16 +30,16 @@ def hex_to_le32(hex_str: str) -> bytes:
     return b[::-1]
 
 
-def hex_to_20(hex_str: str) -> bytes:
+def hex_to_32(hex_str: str) -> bytes:
     b = bytes.fromhex(hex_str)
-    if len(b) != 20:
-        raise ValueError("address must be 20 bytes (40 hex chars)")
+    if len(b) != 32:
+        raise ValueError("hash must be 32 bytes (64 hex chars)")
     return b
 
 
 def build_header_hex(prev_hash_hex_be: str, n_time: int, n_bits_u32: int, n_nonce: int = 0, version: int = 1, miner_addr_hex: str | None = None) -> str:
     prev_le = hex_to_le32(prev_hash_hex_be)
-    miner = hex_to_20(miner_addr_hex) if miner_addr_hex else (b"\x00" * 20)
+    miner = hex_to_32(miner_addr_hex) if miner_addr_hex else (b"\x00" * 32)
     rx = b"\x00" * 32
     header = b"".join([
         u32le(version),
@@ -50,7 +50,7 @@ def build_header_hex(prev_hash_hex_be: str, n_time: int, n_bits_u32: int, n_nonc
         u32le(n_nonce),
         rx,
     ])
-    assert len(header) == 100
+    assert len(header) == 112
     return header.hex()
 
 

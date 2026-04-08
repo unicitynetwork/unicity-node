@@ -10,10 +10,12 @@
 #include <chrono>
 
 using namespace unicity;
+#include "../common/mock_trust_base_manager.hpp"
 
 TEST_CASE("Stress test: High concurrency validation", "[stress][threading]") {
     auto params = chain::ChainParams::CreateRegTest();
-    validation::ChainstateManager chainstate(*params);
+    test::MockTrustBaseManager mock_tbm;
+    validation::ChainstateManager chainstate(*params, mock_tbm);
     CBlockHeader genesis = params->GenesisBlock();
     REQUIRE(chainstate.Initialize(genesis));
 

@@ -38,10 +38,13 @@ cp fuzz/fuzz_lock_directory $OUT/
 
 # Create seed corpora for better fuzzing
 
-# Seed corpus for block headers (100 bytes each)
+# Seed corpus for block headers (112-byte header + variable-length payload)
 mkdir -p $OUT/fuzz_block_header_seed_corpus
-# Create a few valid block headers as seeds
-echo -n "0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" | xxd -r -p > $OUT/fuzz_block_header_seed_corpus/valid_header_1
+# Create a valid non-null block header (112 bytes) with a 32-byte payload (total 144 bytes)
+# Offset 68 (nTime) is set to 1 (01000000 in LE) to ensure header is not considered null
+printf '00%.0s' {1..68} | xxd -r -p > $OUT/fuzz_block_header_seed_corpus/valid_header_1
+printf '01000000' | xxd -r -p >> $OUT/fuzz_block_header_seed_corpus/valid_header_1
+printf '00%.0s' {1..72} | xxd -r -p >> $OUT/fuzz_block_header_seed_corpus/valid_header_1
 zip -j $OUT/fuzz_block_header_seed_corpus.zip $OUT/fuzz_block_header_seed_corpus/*
 
 # Seed corpus for messages (various message types)

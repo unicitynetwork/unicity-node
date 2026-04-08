@@ -12,6 +12,7 @@ PORT="${UNICITY_PORT:-9590}"
 LISTEN="${UNICITY_LISTEN:-1}"
 SERVER="${UNICITY_SERVER:-0}"
 VERBOSE="${UNICITY_VERBOSE:-0}"
+BFTADDR="${UNICITY_BFTADDR:-}"
 NETWORK="${UNICITY_NETWORK:-mainnet}"
 LOGLEVEL="${UNICITY_LOGLEVEL:-}"
 DEBUG="${UNICITY_DEBUG:-}"
@@ -66,6 +67,11 @@ fi
 
 # Note: RPC server is always enabled, no --server flag needed
 
+# BFT RPC address
+if [ -n "$BFTADDR" ]; then
+  ARGS+=("--bftaddr=$BFTADDR")
+fi
+
 # Verbose logging
 if [ "$VERBOSE" = "1" ]; then
   ARGS+=("--verbose")
@@ -97,6 +103,9 @@ echo "Port:       $PORT"
 echo "Listen:     $LISTEN"
 echo "Server:     $SERVER"
 echo "Verbose:    $VERBOSE"
+if [ -n "$BFTADDR" ]; then
+  echo "BFT Addr:   $BFTADDR"
+fi
 if [ -n "$LOGLEVEL" ]; then
   echo "Log Level:  $LOGLEVEL"
 fi

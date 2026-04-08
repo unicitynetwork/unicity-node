@@ -6,9 +6,12 @@
 
 #include "chain/block.hpp"
 #include "chain/block_index.hpp"
+#include "chain/trust_base.hpp"
+#include "chain/trust_base_manager.hpp"
 #include "chain/chainparams.hpp"
 #include "chain/pow.hpp"
 #include "chain/randomx_pow.hpp"
+#include "util/hash.hpp"
 #include "util/logging.hpp"
 #include "util/time.hpp"
 #include "util/uint.hpp"
@@ -16,7 +19,8 @@
 namespace unicity {
 namespace validation {
 
-bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& params, ValidationState& state) {
+bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& params, ValidationState& state,
+                      const chain::TrustBaseManager& tbm) {
   // 1. Version validation (basic sanity, context-free)
   // Reject obviously invalid versions (negative or zero)
   // This is a context-free check - specific version requirements may be contextual
@@ -24,15 +28,54 @@ bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& para
     return state.Invalid("bad-version", "block version too old: " + std::to_string(header.nVersion));
   }
 
-  // 2. Check that hashRandomX commitment is present (not null)
+  // 2. Validate Payload Size
+  if (header.vPayload.size() < 32) {
+    return state.Invalid("bad-payload-size", "block payload missing Token ID hash");
+  }
+  if (header.vPayload.size() > CBlockHeader::MAX_PAYLOAD_SIZE) {
+    return state.Invalid("bad-payload-size", "block payload exceeds maximum size");
+  }
+
+  // 3. Check that hashRandomX commitment is present (not null)
   // A null hashRandomX indicates a malformed block header, not just failed PoW
   if (header.hashRandomX.IsNull()) {
     return state.Invalid("bad-randomx-hash", "block header missing RandomX hash commitment");
   }
 
-  // 3. Check proof of work (RandomX)
+  // 4. Check proof of work (RandomX)
   if (!consensus::CheckProofOfWork(header, header.nBits, params, crypto::POWVerifyMode::FULL)) {
     return state.Invalid("high-hash", "proof of work failed");
+  }
+
+  // 5. Validate Payload Integrity
+  // Extract Token ID Hash (leaf_0) directly from payload
+  uint256 leaf_0;
+  std::memcpy(leaf_0.begin(), header.vPayload.data(), 32);
+
+  // If payload size > 32, the remainder is the CBOR-encoded UTB record.
+  uint256 leaf_1 = uint256::ZERO;
+  if (header.vPayload.size() > 32) {
+    const std::span cbor_bytes(header.vPayload.data() + 32, header.vPayload.size() - 32);
+    // parse the trust base and verify it extends the previous entry
+    try {
+      const auto tb = chain::RootTrustBaseV1::FromCBOR(cbor_bytes);
+      if (tb.epoch == 0) {
+          return state.Invalid("bad-trustbase", "trust base epoch cannot be 0");
+      }
+      if (!tb.Verify(tbm.GetTrustBase(tb.epoch - 1))) {
+        return state.Invalid("bad-trustbase", "trust base for epoch " + std::to_string(tb.epoch) +
+                                                  " does not extend previous trust base (epoch " +
+                                                  std::to_string(tb.epoch - 1) + ")");
+      }
+    } catch (const std::exception& e) {
+      return state.Invalid("bad-trustbase", "failed to parse UTB from payload: " + std::string(e.what()));
+    }
+    leaf_1 = SingleHash(cbor_bytes);
+  }
+
+  const uint256 calculated_root = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+  if (calculated_root != header.payloadRoot) {
+    return state.Invalid("bad-payload-root", "calculated payload root does not match header commitment");
   }
 
   return true;
@@ -86,6 +129,24 @@ bool ContextualCheckBlockHeader(const CBlockHeader& header, const chain::CBlockI
 
   // Note: Version validation is done in CheckBlockHeader (context-free)
   // Additional contextual version requirements (e.g., soft forks) would go here
+
+  // 5. Check BFT epoch continuity
+  if (pindexPrev) {
+    // Extract UTB from payload if present (payload > 32 bytes)
+    if (header.vPayload.size() > 32) {
+      try {
+        const std::span utb_cbor(header.vPayload.data() + 32, header.vPayload.size() - 32);
+        const auto utb = chain::RootTrustBaseV1::FromCBOR(utb_cbor);
+        uint64_t expected_epoch = pindexPrev->bftEpoch + 1;
+        if (utb.epoch != expected_epoch) {
+          return state.Invalid("bad-bft-epoch", "block included BFT epoch " + std::to_string(utb.epoch) +
+                                                    ", expected " + std::to_string(expected_epoch));
+        }
+      } catch (const std::exception& e) {
+        return state.Invalid("bad-utb-cbor", "failed to parse UTB from payload: " + std::string(e.what()));
+      }
+    }
+  }
 
   return true;
 }

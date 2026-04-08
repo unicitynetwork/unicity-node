@@ -4,11 +4,15 @@
 #include "catch_amalgamated.hpp"
 #include "chain/chainparams.hpp"
 #include "chain/chainstate_manager.hpp"
+#include "chain/token_manager.hpp"
+#include "chain/trust_base_manager.hpp"
 #include "network/network_manager.hpp"
 #include "network/rpc_client.hpp"
 #include "network/rpc_server.hpp"
 #include "util/logging.hpp"
 #include <nlohmann/json.hpp>
+#include "common/mock_bft_client.hpp"
+#include "common/mock_trust_base_manager.hpp"
 
 #include <thread>
 #include <chrono>
@@ -32,7 +36,7 @@ public:
         // Initialize components
         auto params_unique = chain::ChainParams::CreateRegTest();
         params_ = params_unique.release();  // Take ownership as raw pointer
-        chainstate_ = new validation::ChainstateManager(*params_);
+        chainstate_ = new validation::ChainstateManager(*params_, *tbm_);
 
         // Create NetworkManager config for regtest
         network::NetworkManager::Config net_config;
@@ -43,9 +47,12 @@ public:
 
         network_ = new network::NetworkManager(*chainstate_, net_config);
 
+        tbm_ = new chain::LocalTrustBaseManager(temp_dir_, std::make_shared<test::MockBFTClient>());
+        token_manager_ = new mining::TokenManager(temp_dir_, *chainstate_);
+
         // Create RPC server (without miner for basic tests)
         server_ = new rpc::RPCServer(
-            socket_path_, *chainstate_, *network_, nullptr, *params_);
+            socket_path_, *chainstate_, *network_, nullptr, *token_manager_, *tbm_, *params_);
     }
 
     ~RPCTestFixture() {
@@ -59,6 +66,8 @@ public:
         util::LogManager::SetLogLevel("off");
         delete server_;
         delete network_;
+        delete token_manager_;
+        delete tbm_;
         delete chainstate_;
         delete params_;
         std::filesystem::remove_all(temp_dir_);
@@ -86,6 +95,8 @@ private:
     chain::ChainParams* params_;
     validation::ChainstateManager* chainstate_;
     network::NetworkManager* network_;
+    chain::TrustBaseManager* tbm_;
+    mining::TokenManager* token_manager_;
     rpc::RPCServer* server_;
 };
 
@@ -301,7 +312,8 @@ TEST_CASE("RPC: Socket Path Validation", "[rpc][integration][validation]") {
         auto temp_dir = std::filesystem::temp_directory_path() / "rpc_long_path_test";
         std::filesystem::create_directories(temp_dir);
 
-        validation::ChainstateManager chainstate(*params_ptr);
+        test::MockTrustBaseManager mock_tbm;
+        validation::ChainstateManager chainstate(*params_ptr, mock_tbm);
 
         network::NetworkManager::Config net_config;
         net_config.network_magic = params_ptr->GetNetworkMagic();
@@ -310,7 +322,10 @@ TEST_CASE("RPC: Socket Path Validation", "[rpc][integration][validation]") {
         net_config.io_threads = 0;
         network::NetworkManager network(chainstate, net_config);
 
-        rpc::RPCServer server(long_path, chainstate, network, nullptr, *params_ptr);
+        chain::LocalTrustBaseManager tbm(temp_dir, std::make_shared<test::MockBFTClient>());
+        mining::TokenManager token_manager(temp_dir, chainstate);
+
+        rpc::RPCServer server(long_path, chainstate, network, nullptr, token_manager, tbm, *params_ptr);
 
         // Should fail to start due to path too long
         REQUIRE_FALSE(server.Start());
@@ -779,17 +794,17 @@ TEST_CASE("RPC Commands: submitblock", "[rpc][integration][mining]") {
     SECTION("Invalid hex length returns error") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        // 100 bytes = 200 hex chars expected
-        std::string response = client.ExecuteCommand("submitblock", {"abcd1234"});
+        // 112 bytes header + 32 bytes payload = 144 bytes = 288 hex chars expected
+        std::string response = client.ExecuteCommand("submitblock", {"abcd1234", "0000000000000000000000000000000000000000000000000000000000000000"});
         REQUIRE(response.find("error") != std::string::npos);
-        REQUIRE(response.find("length") != std::string::npos);
+        REQUIRE(response.find("288 hex chars") != std::string::npos);
     }
 
     SECTION("Invalid hex characters returns error") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        // 200 chars but with invalid hex (contains 'g')
-        std::string invalid_hex(200, 'g');
+        // 224 chars but with invalid hex (contains 'g')
+        std::string invalid_hex(224, 'g');
         std::string response = client.ExecuteCommand("submitblock", {invalid_hex});
         REQUIRE(response.find("error") != std::string::npos);
     }
