@@ -401,9 +401,15 @@ void RPCServer::HandleClient(int client_fd) {
   // Use proper JSON parsing
   std::string method;
   std::vector<std::string> params;
+  std::string request_id = "0";
 
   try {
     nlohmann::json j = nlohmann::json::parse(request);
+
+    // Extract ID (mirror in response)
+    if (j.contains("id")) {
+      request_id = j["id"].dump();
+    }
 
     // Extract method
     if (!j.contains("method") || !j["method"].is_string()) {
@@ -454,14 +460,14 @@ void RPCServer::HandleClient(int client_fd) {
     if (result.is_error) {
       // Error: use extracted error_message as the JSON-RPC error string
       json_rpc_response = "{\"result\":null,\"error\":\""
-          + util::EscapeJSONString(result.error_message) + "\",\"id\":0}\n";
+          + util::EscapeJSONString(result.error_message) + "\",\"id\":" + request_id + "}\n";
     } else {
       // Success: embed handler JSON as the JSON-RPC result value
       std::string trimmed = result.json;
       while (!trimmed.empty() && (trimmed.back() == '\n' || trimmed.back() == '\r')) {
         trimmed.pop_back();
       }
-      json_rpc_response = "{\"result\":" + trimmed + ",\"error\":null,\"id\":0}\n";
+      json_rpc_response = "{\"result\":" + trimmed + ",\"error\":null,\"id\":" + request_id + "}\n";
     }
 
     std::string http_response = "HTTP/1.1 200 OK\r\n"

@@ -18,6 +18,9 @@
 #include <chrono>
 #include <filesystem>
 #include <atomic>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 using namespace unicity;
 using namespace std::chrono_literals;
@@ -1279,4 +1282,63 @@ TEST_CASE("RPC Commands: getpeerinfo extended fields", "[rpc][integration][netwo
     // Note: Testing lastsend/lastrecv with actual peers would require
     // setting up peer connections, which is done in dedicated peer tests.
     // Here we just verify the RPC command executes without errors.
+}
+
+TEST_CASE("RPC Server: Request ID Mirroring", "[rpc][integration]") {
+    RPCTestFixture fixture;
+    REQUIRE(fixture.StartServer());
+
+    // Give server time to bind
+    std::this_thread::sleep_for(100ms);
+
+    auto send_raw_http = [&](const std::string& body) -> std::string {
+        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) return "";
+
+        struct sockaddr_un addr;
+        std::memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        std::strncpy(addr.sun_path, fixture.GetSocketPath().c_str(), sizeof(addr.sun_path) - 1);
+
+        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+            close(fd);
+            return "";
+        }
+
+        std::string request = "POST / HTTP/1.1\r\n"
+                              "Content-Length: " + std::to_string(body.length()) + "\r\n"
+                              "\r\n" + body;
+        
+        send(fd, request.c_str(), request.length(), 0);
+
+        char buffer[4096];
+        ssize_t received = recv(fd, buffer, sizeof(buffer) - 1, 0);
+        close(fd);
+
+        if (received <= 0) return "";
+        buffer[received] = '\0';
+        return std::string(buffer);
+    };
+
+    SECTION("Mirrors integer ID") {
+        std::string body = "{\"method\":\"getinfo\",\"id\":42}";
+        std::string response = send_raw_http(body);
+        REQUIRE(!response.empty());
+        REQUIRE(response.find("\"id\":42") != std::string::npos);
+    }
+
+    SECTION("Mirrors string ID") {
+        std::string body = "{\"method\":\"getinfo\",\"id\":\"test-id\"}";
+        std::string response = send_raw_http(body);
+        REQUIRE(!response.empty());
+        REQUIRE(response.find("\"id\":\"test-id\"") != std::string::npos);
+    }
+
+    SECTION("Defaults to 0 if ID missing") {
+        // technically does not follow rpc spec, but matches original implementation
+        std::string body = "{\"method\":\"getinfo\"}";
+        std::string response = send_raw_http(body);
+        REQUIRE(!response.empty());
+        REQUIRE(response.find("\"id\":0") != std::string::npos);
+    }
 }
