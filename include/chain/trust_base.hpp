@@ -12,7 +12,7 @@ namespace unicity {
 namespace chain {
 
 // CBOR Tag for RootTrustBaseV1
-constexpr int TAG_ROOT_TRUST_BASE = 1013;
+constexpr int TAG_ROOT_TRUST_BASE = 39000;
 
 struct NodeInfo {
     std::string node_id;

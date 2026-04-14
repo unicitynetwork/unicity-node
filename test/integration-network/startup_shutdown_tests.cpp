@@ -14,9 +14,9 @@
 #include <filesystem>
 #include <thread>
 #include <chrono>
+#include "common/mock_trust_base_manager.hpp"
 
 using namespace unicity;
-#include "../common/mock_trust_base_manager.hpp"
 using namespace unicity::network;
 using namespace unicity::chain;
 using namespace unicity::validation;
