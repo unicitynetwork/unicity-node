@@ -1,0 +1,97 @@
+name: Coverage
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Code Coverage (GCC + lcov)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-coverage-cmake-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-coverage-cmake-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libboost-system-dev libboost-filesystem-dev libminiupnpc-dev \
+            gcc-11 g++-11 lcov
+
+      - name: Configure CMake with coverage flags
+        run: |
+          cmake -B build \
+            -DCMAKE_CXX_COMPILER=g++-11 \
+            -DCMAKE_C_COMPILER=gcc-11 \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
+            -DCMAKE_C_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
+            -DCMAKE_EXE_LINKER_FLAGS="--coverage"
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Run unit tests
+        run: ./build/bin/unicity_tests -d yes "~[real]" "~[rpc]" "~[slow]"
+        timeout-minutes: 10
+
+      - name: Capture coverage data
+        run: |
+          lcov --capture \
+               --directory build \
+               --output-file coverage.info \
+               --ignore-errors mismatch \
+               --rc branch_coverage=1
+
+      - name: Filter out system headers and third-party deps
+        run: |
+          lcov --remove coverage.info \
+               '/usr/*' \
+               '*/build/_deps/*' \
+               '*/test/*' \
+               --output-file coverage.filtered.info \
+               --rc branch_coverage=1
+
+      - name: Generate HTML report
+        run: |
+          genhtml coverage.filtered.info \
+                  --output-directory coverage-html \
+                  --branch-coverage \
+                  --title "unicity-node coverage"
+
+      - name: Upload HTML report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage-html/
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.filtered.info
+          flags: unittests
+          name: unicity-node-coverage
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Coverage summary
+        run: |
+          lcov --summary coverage.filtered.info --rc branch_coverage=1

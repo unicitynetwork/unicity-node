@@ -54,13 +54,13 @@ The chain layer validates block headers and maintains the blockchain state:
 │  │  • GetTip()                 • IsInitialBlockDownload()      │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 │                               ▼                                   │
-│  ┌──────────────────┐ ┌────────────────────┐ ┌──────────────┐     │
-│  │  BlockManager    │ │ ActiveTipCandidates│ │ Orphan Pool  │     │
-│  │                  │ │                    │ │              │     │
-│  │ • Block storage  │ │ • Candidate tips   │ │ • DoS limits │     │
-│  │ • Active chain   │ │ • Best chain       │ │              │     │
-│  │ • Persistence    │ │ • Pruning          │ │              │     │
-│  └──────────────────┘ └────────────────────┘ └──────────────┘     │
+│  ┌──────────────────┐ ┌────────────────────┐                      │
+│  │  BlockManager    │ │ ActiveTipCandidates│                      │
+│  │                  │ │                    │                      │
+│  │ • Block storage  │ │ • Candidate tips   │                      │
+│  │ • Active chain   │ │ • Best chain       │                      │
+│  │ • Persistence    │ │ • Pruning          │                      │
+│  └──────────────────┘ └────────────────────┘                      │
 │                               ▼                                   │
 │  ┌─────────────────────────────────────────────────────────────┐  │
 │  │                     Validation Layer                        │  │
@@ -490,7 +490,7 @@ Block Arrives:
 **Fast Rejection**:
 - Commitment-only PoW check (~1ms) before expensive validation
 - Message size limits (8 MB maximum)
-- Orphan header limits (1000 total, 50 per peer)
+- Candidate tip limits (1000 total, 50 per peer)
 
 **Resource Limits**:
 - Connection limits (10 outbound, 125 inbound)

@@ -1,0 +1,66 @@
+name: Feature Request
+description: Propose a new feature or improvement for unicity-node
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an improvement! Please fill in as much detail as possible
+        so maintainers can evaluate the proposal efficiently.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: What problem does this feature solve? What use case does it enable?
+      placeholder: "Currently, there is no way to ... which means ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the feature you would like to see implemented.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you considered other approaches? Why is your proposed solution preferred?
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area of the Codebase
+      options:
+        - Chain / Consensus
+        - P2P Networking
+        - RPC
+        - CI / Build System
+        - Documentation
+        - Testing
+        - Performance
+        - Security
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: consensus
+    attributes:
+      label: Consensus Impact
+      options:
+        - label: This feature would change consensus rules (requires broader discussion)
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues and this is not a duplicate
+          required: true
+        - label: I am willing to help implement this feature
