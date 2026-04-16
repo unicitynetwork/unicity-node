@@ -158,8 +158,7 @@ target_compile_definitions(asio INTERFACE ASIO_STANDALONE)
 FetchContent_Declare(
     randomx
     GIT_REPOSITORY https://github.com/unicitynetwork/RandomX.git
-    GIT_TAG        origin/master
-    GIT_SHALLOW    TRUE
+    GIT_TAG        051d4424394cf8d1f8d0bfff581f0729f2753341
 )
 set(RANDOMX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(RANDOMX_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
