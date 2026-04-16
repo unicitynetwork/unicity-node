@@ -9,9 +9,12 @@
 #include "chain/chainparams.hpp"
 #include "chain/chain.hpp"
 #include "chain/block_index.hpp"
-#include "chain/block.hpp"
-#include "chain/notifications.hpp"
 #include "chain/miner.hpp"
+#include "chain/token_manager.hpp"
+#include "chain/notifications.hpp"
+
+#include "chain/miner.hpp"
+#include "common/mock_bft_client.hpp"
 #include "util/logging.hpp"
 #include "util/time.hpp"
 #include <filesystem>
@@ -31,7 +34,7 @@ static CBlockHeader CreateTestHeader(const uint256& hashPrevBlock,
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock = hashPrevBlock;
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = 0;
@@ -347,7 +350,15 @@ TEST_CASE("Notifications - Miner template invalidation on tip change", "[notific
     validation::ValidationState state;
 
     // Create a miner
-    mining::CPUMiner miner(*params, chainstate);
+    std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "unicity_notif_test_XXXXXX";
+    char dir_template[256];
+    std::strncpy(dir_template, test_dir.string().c_str(), sizeof(dir_template));
+    if (mkdtemp(dir_template)) {
+        test_dir = dir_template;
+    }
+    LocalTrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
+    mining::TokenManager token_manager(test_dir, chainstate);
+    mining::CPUMiner miner(*params, chainstate, tbm, token_manager);
 
     // Simulate miner generating template (sets internal state)
     // In real code, GetBlockTemplate() would be called by mining loop

@@ -2,6 +2,7 @@
 // Distributed under the MIT software license
 
 #include "application.hpp"
+#include "chain/bft_client.hpp"
 #include "chain/randomx_pow.hpp"
 #include "network/addr_relay_manager.hpp"
 #include "util/fs_lock.hpp"
@@ -47,20 +48,27 @@ bool Application::initialize() {
   switch (config_.chain_type) {
   case chain::ChainType::MAIN:
     chain_name = "MAINNET";
+    chain_params_ = chain::ChainParams::CreateMainNet();
     break;
   case chain::ChainType::TESTNET:
     chain_name = "TESTNET";
+    chain_params_ = chain::ChainParams::CreateTestNet();
     break;
   case chain::ChainType::REGTEST:
     chain_name = "REGTEST";
+    chain_params_ = chain::ChainParams::CreateRegTest();
     break;
   }
+
+  // Select chain type globally (needed by NetworkManager)
+  chain::GlobalChainParams::Select(config_.chain_type);
 
   // Print startup banner (use std::cout for immediate visibility before logger
   // fully initialized)
   std::cout << GetStartupBanner(chain_name) << std::flush;
 
   LOG_INFO("Initializing Unicity...");
+  LOG_INFO("Using {}", chain_name);
 
   // Create data directory
   if (!init_datadir()) {
@@ -74,6 +82,12 @@ bool Application::initialize() {
     return false;
   }
 
+  // Initialize Trust Base Manager
+  if (!init_trustbase()) {
+    LOG_ERROR("Failed to initialize Trust Base Manager");
+    return false;
+  }
+
   // Initialize blockchain (creates chainstate_manager)
   if (!init_chain()) {
     LOG_ERROR("Failed to initialize blockchain");
@@ -82,8 +96,10 @@ bool Application::initialize() {
 
   // Initialize miner (after chainstate is ready)
   LOG_INFO("Initializing miner...");
-  miner_ =
-      std::make_unique<mining::CPUMiner>(*chain_params_, *chainstate_manager_);
+  token_manager_ = std::make_unique<mining::TokenManager>(config_.datadir, *chainstate_manager_);
+  miner_ = std::make_unique<mining::CPUMiner>(*chain_params_, *chainstate_manager_, *trust_base_manager_,
+                                              *token_manager_);
+
 
   // Initialize network manager
   if (!init_network()) {
@@ -338,27 +354,35 @@ bool Application::init_randomx() {
   return true;
 }
 
+bool Application::init_trustbase() {
+  LOG_INFO("Initializing Trust Base Manager...");
+
+  std::shared_ptr<chain::BFTClient> bft_client;
+  if (config_.bftaddr.empty()) {
+      LOG_INFO("BFT integration disabled (bftaddr is empty)");
+      auto genesis_utb_span = chain_params_->GenesisBlock().GetUTB();
+      auto genesis_tb = chain::RootTrustBaseV1::FromCBOR(genesis_utb_span);
+      bft_client = std::make_shared<chain::RegtestBFTClient>(genesis_tb);
+  } else {
+      bft_client = std::make_shared<chain::HttpBFTClient>(config_.bftaddr);
+  }
+  trust_base_manager_ = std::make_unique<chain::LocalTrustBaseManager>(config_.datadir, bft_client);
+
+  // Initialize with Genesis UTB
+  auto genesis_utb_span = chain_params_->GenesisBlock().GetUTB();
+  std::vector<uint8_t> genesis_utb(genesis_utb_span.begin(), genesis_utb_span.end());
+  try {
+      trust_base_manager_->Initialize(genesis_utb);
+  } catch (const std::exception& e) {
+      LOG_ERROR("Failed to initialize Trust Base Manager with Genesis UTB: {}", e.what());
+      return false;
+  }
+
+  return true;
+}
+
 bool Application::init_chain() {
   LOG_INFO("Initializing blockchain...");
-
-  // Select chain type globally (needed by NetworkManager)
-  chain::GlobalChainParams::Select(config_.chain_type);
-
-  // Create chain params based on type
-  switch (config_.chain_type) {
-  case chain::ChainType::MAIN:
-    chain_params_ = chain::ChainParams::CreateMainNet();
-    LOG_INFO("Using mainnet");
-    break;
-  case chain::ChainType::TESTNET:
-    chain_params_ = chain::ChainParams::CreateTestNet();
-    LOG_INFO("Using testnet");
-    break;
-  case chain::ChainType::REGTEST:
-    chain_params_ = chain::ChainParams::CreateRegTest();
-    LOG_INFO("Using regtest");
-    break;
-  }
 
   // Create chainstate manager (which owns BlockManager)
   // Apply command-line override to chain params if provided
@@ -369,7 +393,7 @@ bool Application::init_chain() {
              chain_params_->GetConsensus().nSuspiciousReorgDepth);
     chain_params_->SetSuspiciousReorgDepth(config_.suspicious_reorg_depth);
   }
-  chainstate_manager_ = std::make_unique<validation::ChainstateManager>(*chain_params_);
+  chainstate_manager_ = std::make_unique<validation::ChainstateManager>(*chain_params_, *trust_base_manager_);
 
   // Try to load headers from disk
   std::string headers_file = (config_.datadir / "headers.json").string();
@@ -430,7 +454,7 @@ bool Application::init_rpc() {
 
   rpc_server_ = std::make_unique<rpc::RPCServer>(
       socket_path, *chainstate_manager_, *network_manager_, miner_.get(),
-      *chain_params_, shutdown_callback);
+      *token_manager_, *trust_base_manager_, *chain_params_, shutdown_callback);
 
   return true;
 }

@@ -112,7 +112,8 @@ std::string CBlockIndex::ToString() const {
      << "hash=" << m_block_hash.ToString().substr(0, 16) << ", height=" << nHeight
      << ", chainwork=0x" << nChainWork.GetHex() << ", status=" << status.ToString() << ", version=" << nVersion
      << ", time=" << nTime << ", bits=0x" << std::hex << nBits << std::dec << ", nonce=" << nNonce
-     << ", miner=" << minerAddress.ToString() << ", randomx=" << hashRandomX.ToString().substr(0, 16)
+     << ", payload_root=" << payloadRoot.ToString()
+     << ", randomx=" << hashRandomX.ToString().substr(0, 16)
      << ", pprev=" << pprev << ")";
   return ss.str();
 }

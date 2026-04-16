@@ -2,8 +2,10 @@
 // Genesis Block Miner - Finds nonce for genesis block using RandomX
 
 #include "chain/block.hpp"
+#include "chain/chainparams.hpp"
 #include "util/sha256.hpp"
 #include "util/arith_uint256.hpp"
+#include "util/string_parsing.hpp"
 #include "randomx.h"
 #include <iostream>
 #include <iomanip>
@@ -11,6 +13,9 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+#include <cstring>
+
+using namespace unicity;
 
 // Mining statistics
 struct MiningStats {
@@ -46,20 +51,20 @@ void MineWorker(randomx_vm* vm, CBlockHeader header, uint32_t start_nonce, uint3
                 MiningStats& stats, const arith_uint256& target) {
     uint32_t nonce = start_nonce;
 
+    header.hashRandomX.SetNull();
+    CBlockHeader::HeaderBytes serialized;
+
     while (!stats.found.load(std::memory_order_acquire)) {
         header.nNonce = nonce;
 
-        // Set hashRandomX to null for hashing
-        CBlockHeader tmp(header);
-        tmp.hashRandomX.SetNull();
-
-        // Calculate RandomX hash
+        // Calculate RandomX hash using only the 112-byte static header
+        header.SerializeInto(serialized.data(), serialized.size(), false);
         char rx_hash[RANDOMX_HASH_SIZE];
-        randomx_calculate_hash(vm, &tmp, sizeof(tmp), rx_hash);
+        randomx_calculate_hash(vm, serialized.data(), serialized.size(), rx_hash);
 
         // Calculate commitment: BLAKE2b(block_header || rx_hash)
         char rx_cm[RANDOMX_HASH_SIZE];
-        randomx_calculate_commitment(&tmp, sizeof(tmp), rx_hash, rx_cm);
+        randomx_calculate_commitment(serialized.data(), serialized.size(), rx_hash, rx_cm);
 
         // Convert to uint256 and check against target
         uint256 commitment = uint256(std::vector<unsigned char>(rx_cm, rx_cm + RANDOMX_HASH_SIZE));
@@ -122,6 +127,11 @@ int main(int argc, char* argv[]) {
     uint32_t nBits = TARGET_BITS;
     uint32_t nEpochDuration = 7200; // Default: 2 hours (like Unicity)
     int num_threads = std::thread::hardware_concurrency();
+    
+    // Default to MainNet UTB bytes from parameters
+    auto mainnet_params = chain::ChainParams::CreateMainNet();
+    auto default_utb = mainnet_params->GenesisBlock().GetUTB();
+    std::vector utb_cbor(default_utb.begin(), default_utb.end());
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -133,6 +143,8 @@ int main(int argc, char* argv[]) {
             nEpochDuration = std::stoul(argv[++i]);
         } else if (arg == "--threads" && i + 1 < argc) {
             num_threads = std::stoi(argv[++i]);
+        } else if (arg == "--utb" && i + 1 < argc) {
+            utb_cbor = util::ParseHex(argv[++i]);
         } else if (arg == "--help") {
             std::cout << "Usage: " << argv[0] << " [options]\n\n";
             std::cout << "Options:\n";
@@ -140,6 +152,7 @@ int main(int argc, char* argv[]) {
             std::cout << "  --bits <hex>            Target difficulty in hex (default: 0x1d00ffff)\n";
             std::cout << "  --epoch-duration <sec>  Epoch duration in seconds (default: 7200)\n";
             std::cout << "  --threads <n>           Number of threads (default: " << num_threads << ")\n";
+            std::cout << "  --utb <hex>             Custom UTB CBOR record in hex\n";
             std::cout << "  --help                  Show this help message\n";
             return 0;
         }
@@ -171,12 +184,7 @@ int main(int argc, char* argv[]) {
     std::cout << "RandomX cache initialized\n";
 
     // Create genesis block header
-    CBlockHeader genesis;
-    genesis.nVersion = 1;
-    genesis.hashPrevBlock.SetNull(); // Genesis has no previous block
-    genesis.nTime = nTime;
-    genesis.nBits = nBits;
-    genesis.nNonce = 0;
+    CBlockHeader genesis = chain::CreateGenesisBlock(nTime, 0, nBits, utb_cbor, 1);
 
     // Calculate target
     arith_uint256 target = GetTargetFromBits(nBits);

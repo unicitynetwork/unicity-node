@@ -14,7 +14,7 @@ using unicity::test::TestChainstateManager;
 
 static CBlockHeader Mkh(const CBlockIndex* prev, uint32_t nTime) {
     CBlockHeader h; h.nVersion=1; h.hashPrevBlock = prev ? prev->GetBlockHash() : uint256();
-    h.minerAddress.SetNull(); h.nTime=nTime; h.nBits=0x207fffff; h.nNonce=0; h.hashRandomX.SetNull(); return h;
+    h.payloadRoot.SetNull(); h.nTime=nTime; h.nBits=0x207fffff; h.nNonce=0; h.hashRandomX.SetNull(); return h;
 }
 
 static bool HasChild(const BlockManager& bm, const CBlockIndex* idx) {

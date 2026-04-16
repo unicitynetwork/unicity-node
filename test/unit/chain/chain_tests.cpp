@@ -16,7 +16,7 @@ TEST_CASE("BlockManager basic operations", "[chain]") {
     CBlockHeader genesis;
     genesis.nVersion = 1;
     genesis.hashPrevBlock.SetNull();
-    genesis.minerAddress.SetNull();
+    genesis.payloadRoot.SetNull();
     genesis.nTime = 1231006505; // 
     genesis.nBits = 0x1d00ffff;
     genesis.nNonce = 2083236893;
@@ -36,7 +36,7 @@ TEST_CASE("BlockManager basic operations", "[chain]") {
         CBlockHeader block1;
         block1.nVersion = 1;
         block1.hashPrevBlock = genesis.GetHash();
-        block1.minerAddress.SetNull();
+        block1.payloadRoot.SetNull();
         block1.nTime = genesis.nTime + 600;
         block1.nBits = genesis.nBits;
         block1.nNonce = 123456;
@@ -52,7 +52,7 @@ TEST_CASE("BlockManager basic operations", "[chain]") {
         CBlockHeader block2;
         block2.nVersion = 1;
         block2.hashPrevBlock = block1.GetHash();
-        block2.minerAddress.SetNull();
+        block2.payloadRoot.SetNull();
         block2.nTime = block1.nTime + 600;
         block2.nBits = block1.nBits;
         block2.nNonce = 789012;

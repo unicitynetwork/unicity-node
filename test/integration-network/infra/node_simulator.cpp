@@ -28,7 +28,7 @@ CBlockHeader NodeSimulator::CreateDummyHeader(const uint256& prev_hash, uint32_t
 
     std::uniform_int_distribution<uint8_t> dis_byte(0, 255);
     for (int i = 0; i < 20; i++) {
-        header.minerAddress.data()[i] = dis_byte(gen);
+        header.payloadRoot.data()[i] = dis_byte(gen);
     }
 
     // Set dummy RandomX hash that is NOT null (passes IsNull() check)
@@ -167,7 +167,7 @@ void NodeSimulator::SendOversizedHeaders(int peer_node_id, size_t count) {
     sim_network_->SendMessage(GetId(), peer_node_id, full_message);
 }
 
-uint256 NodeSimulator::MineBlockPrivate(const std::string& miner_address) {
+uint256 NodeSimulator::MineBlockPrivate(const std::string& payload_root) {
     // Create block header (same as normal MineBlock)
     CBlockHeader header;
     header.nVersion = 1;
@@ -184,7 +184,7 @@ uint256 NodeSimulator::MineBlockPrivate(const std::string& miner_address) {
     // Random miner address
     std::uniform_int_distribution<uint8_t> dis_byte(0, 255);
     for (int i = 0; i < 20; i++) {
-        header.minerAddress.data()[i] = dis_byte(gen);
+        header.payloadRoot.data()[i] = dis_byte(gen);
     }
 
     // Bypass PoW (bypass enabled by default)
@@ -340,7 +340,7 @@ void NodeSimulator::SendValidSideChainHeaders(int peer_node_id, const uint256& f
 
         // Random miner address for uniqueness
         for (int j = 0; j < 20; j++) {
-            header.minerAddress.data()[j] = dis_byte(gen);
+            header.payloadRoot.data()[j] = dis_byte(gen);
         }
 
         // Set null RandomX hash - PoW bypass mode will accept this

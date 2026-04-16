@@ -22,6 +22,9 @@
 #include <memory>
 #include <cstring>
 
+#include "../test/common/mock_trust_base_manager.hpp"
+#include "../test/common/test_chainstate_manager.hpp"
+
 using namespace unicity;
 using namespace unicity::chain;
 using namespace unicity::validation;
@@ -31,7 +34,8 @@ using namespace unicity::consensus;
 class FuzzChainstateManager : public ChainstateManager {
 public:
     FuzzChainstateManager(const ChainParams& params)
-        : ChainstateManager(params) {}
+        : FuzzChainstateManager(params, std::make_unique<test::MockTrustBaseManager>())
+    {}
 
     // Override PoW check to always pass (we're fuzzing chain logic, not RandomX)
     bool CheckProofOfWork(const CBlockHeader& header, crypto::POWVerifyMode mode) const override {
@@ -56,6 +60,14 @@ public:
         }
         return true;
     }
+
+private:
+    FuzzChainstateManager(const chain::ChainParams& params, std::unique_ptr<test::MockTrustBaseManager> tbm)
+        : ChainstateManager(params, *tbm), 
+          mock_tbm_(std::move(tbm))
+    {}
+
+    std::unique_ptr<test::MockTrustBaseManager> mock_tbm_;
 };
 
 // Fuzz input parser
@@ -115,7 +127,7 @@ CBlockHeader BuildFuzzHeader(FuzzInput& input, const uint256& prevHash, uint32_t
 
     // Fuzz miner address (just use random bytes)
     for (size_t i = 0; i < 20; i++) {
-        header.minerAddress.data()[i] = input.ReadByte();
+        header.payloadRoot.data()[i] = input.ReadByte();
     }
 
     // Time: base + small offset to keep roughly increasing
@@ -124,6 +136,7 @@ CBlockHeader BuildFuzzHeader(FuzzInput& input, const uint256& prevHash, uint32_t
 
     // Difficulty: use easy target for fuzzing
     header.nBits = 0x207fffff; // Very easy target
+    header.payloadRoot.SetHex("00");
 
     // Nonce and RandomX hash (not validated in fuzz mode)
     header.nNonce = input.ReadUInt32();
@@ -176,7 +189,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             baseTime = header.nTime + 120;
 
             ValidationState state;
-            auto* pindex = chainstate.AcceptBlockHeader(header, state, true);
+            auto* pindex = chainstate.AcceptBlockHeader(header, state);
             if (pindex) {
                 chain_tips[0] = header.GetHash();
             }
@@ -198,7 +211,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             CBlockHeader header = BuildFuzzHeader(input, prevHash, baseTime);
 
             ValidationState state;
-            auto* pindex = chainstate.AcceptBlockHeader(header, state, true);
+            auto* pindex = chainstate.AcceptBlockHeader(header, state);
             if (pindex && chain_tips.size() < num_chains) {
                 chain_tips.push_back(header.GetHash());
             }
@@ -216,7 +229,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             baseTime = header.nTime + 120;
 
             ValidationState state;
-            auto* pindex = chainstate.AcceptBlockHeader(header, state, true);
+            auto* pindex = chainstate.AcceptBlockHeader(header, state);
             if (pindex) {
                 chain_tips[tip_idx] = header.GetHash();
             }
@@ -231,7 +244,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             CBlockHeader header = BuildFuzzHeader(input, fakeParent, baseTime);
 
             ValidationState state;
-            chainstate.AcceptBlockHeader(header, state, input.ReadByte());
+            chainstate.AcceptBlockHeader(header, state);
             // Might be orphaned or rejected
             break;
         }

@@ -9,12 +9,16 @@
 
 #include "catch_amalgamated.hpp"
 #include "chain/miner.hpp"
+#include "chain/token_manager.hpp"
+#include "chain/trust_base_manager.hpp"
 #include "chain/chainparams.hpp"
 #include "chain/chainstate_manager.hpp"
 #include "chain/block.hpp"
 #include "chain/validation.hpp"
 #include "common/test_chainstate_manager.hpp"
+#include "common/mock_bft_client.hpp"
 #include "util/uint.hpp"
+#include "util/hash.hpp"
 #include <memory>
 
 using namespace unicity;
@@ -32,212 +36,39 @@ public:
     MinerTestFixture() {
         GlobalChainParams::Select(ChainType::REGTEST);
         params = &GlobalChainParams::Get();
-        chainstate = std::make_unique<ChainstateManager>(*params);
-        miner = std::make_unique<CPUMiner>(*params, *chainstate);
+
+        test_dir = std::filesystem::temp_directory_path() / "unicity_miner_test_XXXXXX";
+        char dir_template[256];
+        std::strncpy(dir_template, test_dir.string().c_str(), sizeof(dir_template));
+        if (mkdtemp(dir_template)) {
+            test_dir = dir_template;
+        }
+
+        tbm = std::make_unique<LocalTrustBaseManager>(test_dir, std::make_shared<MockBFTClient>());
+        chainstate = std::make_unique<ChainstateManager>(*params, *tbm);
+
+        token_manager = std::make_unique<TokenManager>(test_dir, *chainstate);        miner = std::make_unique<CPUMiner>(*params, *chainstate, *tbm, *token_manager);
     }
 
     ~MinerTestFixture() {
         if (miner && miner->IsMining()) {
             miner->Stop();
         }
+        if (!test_dir.empty() && std::filesystem::exists(test_dir)) {
+            std::filesystem::remove_all(test_dir);
+        }
     }
 
     const ChainParams* params;
     std::unique_ptr<ChainstateManager> chainstate;
+    std::unique_ptr<TrustBaseManager> tbm;
+    std::unique_ptr<TokenManager> token_manager;
     std::unique_ptr<CPUMiner> miner;
+    std::filesystem::path test_dir;
 };
 
 // =============================================================================
-// Section 1: Mining Address
-// =============================================================================
-
-TEST_CASE("CPUMiner - Mining address management", "[miner]") {
-    MinerTestFixture fixture;
-
-    SECTION("Default mining address is null (zero)") {
-        uint160 default_addr = fixture.miner->GetMiningAddress();
-        REQUIRE(default_addr.IsNull());
-        REQUIRE(default_addr == uint160());
-    }
-
-    SECTION("SetMiningAddress stores the address") {
-        uint160 test_addr;
-        test_addr.SetHex("1234567890abcdef1234567890abcdef12345678");
-
-        fixture.miner->SetMiningAddress(test_addr);
-
-        uint160 retrieved = fixture.miner->GetMiningAddress();
-        REQUIRE(retrieved == test_addr);
-        REQUIRE(retrieved.GetHex() == "1234567890abcdef1234567890abcdef12345678");
-    }
-
-    SECTION("Mining address persists across multiple set/get calls") {
-        uint160 addr1;
-        addr1.SetHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-
-        fixture.miner->SetMiningAddress(addr1);
-        REQUIRE(fixture.miner->GetMiningAddress() == addr1);
-        REQUIRE(fixture.miner->GetMiningAddress() == addr1);
-
-        uint160 addr2;
-        addr2.SetHex("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        fixture.miner->SetMiningAddress(addr2);
-
-        REQUIRE(fixture.miner->GetMiningAddress() == addr2);
-        REQUIRE(fixture.miner->GetMiningAddress() != addr1);
-    }
-
-    SECTION("Can set address to null (zero)") {
-        uint160 test_addr;
-        test_addr.SetHex("1234567890abcdef1234567890abcdef12345678");
-        fixture.miner->SetMiningAddress(test_addr);
-        REQUIRE(!fixture.miner->GetMiningAddress().IsNull());
-
-        uint160 null_addr;
-        null_addr.SetNull();
-        fixture.miner->SetMiningAddress(null_addr);
-
-        REQUIRE(fixture.miner->GetMiningAddress().IsNull());
-    }
-
-    SECTION("Different address formats are preserved correctly") {
-        uint160 zeros;
-        zeros.SetHex("0000000000000000000000000000000000000000");
-        fixture.miner->SetMiningAddress(zeros);
-        REQUIRE(fixture.miner->GetMiningAddress() == zeros);
-
-        uint160 ones;
-        ones.SetHex("ffffffffffffffffffffffffffffffffffffffff");
-        fixture.miner->SetMiningAddress(ones);
-        REQUIRE(fixture.miner->GetMiningAddress() == ones);
-
-        uint160 mixed;
-        mixed.SetHex("0123456789abcdef0123456789abcdef01234567");
-        fixture.miner->SetMiningAddress(mixed);
-        REQUIRE(fixture.miner->GetMiningAddress() == mixed);
-    }
-}
-
-TEST_CASE("CPUMiner - Address validation scenarios", "[miner]") {
-    MinerTestFixture fixture;
-
-    SECTION("Valid 40-character hex address") {
-        uint160 addr;
-        addr.SetHex("1234567890abcdef1234567890abcdef12345678");
-
-        fixture.miner->SetMiningAddress(addr);
-        REQUIRE(fixture.miner->GetMiningAddress().GetHex() == "1234567890abcdef1234567890abcdef12345678");
-    }
-
-    SECTION("Address with uppercase hex characters") {
-        uint160 addr;
-        addr.SetHex("1234567890ABCDEF1234567890ABCDEF12345678");
-
-        fixture.miner->SetMiningAddress(addr);
-        REQUIRE(fixture.miner->GetMiningAddress().GetHex() == "1234567890abcdef1234567890abcdef12345678");
-    }
-
-    SECTION("Address with mixed case") {
-        uint160 addr;
-        addr.SetHex("1234567890AbCdEf1234567890aBcDeF12345678");
-
-        fixture.miner->SetMiningAddress(addr);
-        REQUIRE(fixture.miner->GetMiningAddress().GetHex() == "1234567890abcdef1234567890abcdef12345678");
-    }
-}
-
-TEST_CASE("CPUMiner - Mining address sticky behavior", "[miner]") {
-    MinerTestFixture fixture;
-
-    SECTION("Address persists without explicit reset") {
-        uint160 addr1;
-        addr1.SetHex("1111111111111111111111111111111111111111");
-        fixture.miner->SetMiningAddress(addr1);
-
-        REQUIRE(fixture.miner->GetMiningAddress() == addr1);
-        REQUIRE(fixture.miner->GetMiningAddress() == addr1);
-        REQUIRE(fixture.miner->GetMiningAddress() == addr1);
-    }
-
-    SECTION("Address changes only when explicitly set") {
-        uint160 addr1;
-        addr1.SetHex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-
-        uint160 addr2;
-        addr2.SetHex("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-
-        fixture.miner->SetMiningAddress(addr1);
-        REQUIRE(fixture.miner->GetMiningAddress() == addr1);
-
-        REQUIRE(fixture.miner->GetMiningAddress() == addr1);
-
-        fixture.miner->SetMiningAddress(addr2);
-        REQUIRE(fixture.miner->GetMiningAddress() == addr2);
-        REQUIRE(fixture.miner->GetMiningAddress() != addr1);
-    }
-
-    SECTION("Address survives across mining operations") {
-        uint160 test_addr;
-        test_addr.SetHex("9999999999999999999999999999999999999999");
-
-        fixture.miner->SetMiningAddress(test_addr);
-        REQUIRE(fixture.miner->GetMiningAddress() == test_addr);
-
-        REQUIRE(fixture.miner->GetMiningAddress() == test_addr);
-
-        bool is_mining = fixture.miner->IsMining();
-        REQUIRE(!is_mining);
-        REQUIRE(fixture.miner->GetMiningAddress() == test_addr);
-    }
-}
-
-TEST_CASE("CPUMiner - Address format edge cases", "[miner]") {
-    MinerTestFixture fixture;
-
-    SECTION("Leading zeros preserved in address") {
-        uint160 addr;
-        addr.SetHex("0000000000000000000000000000000012345678");
-
-        fixture.miner->SetMiningAddress(addr);
-
-        std::string hex = fixture.miner->GetMiningAddress().GetHex();
-        REQUIRE(hex == "0000000000000000000000000000000012345678");
-        REQUIRE(hex.length() == 40);
-    }
-
-    SECTION("Trailing zeros preserved in address") {
-        uint160 addr;
-        addr.SetHex("1234567800000000000000000000000000000000");
-
-        fixture.miner->SetMiningAddress(addr);
-
-        std::string hex = fixture.miner->GetMiningAddress().GetHex();
-        REQUIRE(hex == "1234567800000000000000000000000000000000");
-        REQUIRE(hex.length() == 40);
-    }
-
-    SECTION("All zeros is a valid address") {
-        uint160 addr;
-        addr.SetHex("0000000000000000000000000000000000000000");
-
-        fixture.miner->SetMiningAddress(addr);
-
-        REQUIRE(fixture.miner->GetMiningAddress().IsNull());
-        REQUIRE(fixture.miner->GetMiningAddress().GetHex() == "0000000000000000000000000000000000000000");
-    }
-
-    SECTION("Maximum value address (all F's)") {
-        uint160 addr;
-        addr.SetHex("ffffffffffffffffffffffffffffffffffffffff");
-
-        fixture.miner->SetMiningAddress(addr);
-
-        REQUIRE(fixture.miner->GetMiningAddress().GetHex() == "ffffffffffffffffffffffffffffffffffffffff");
-    }
-}
-
-// =============================================================================
-// Section 2: Initial State
+// Section 1: Initial State
 // =============================================================================
 
 TEST_CASE("CPUMiner - Initial state", "[miner]") {
@@ -253,13 +84,10 @@ TEST_CASE("CPUMiner - Initial state", "[miner]") {
         REQUIRE(fixture.miner->GetHashrate() == 0.0);
     }
 
-    SECTION("Initial address is null") {
-        REQUIRE(fixture.miner->GetMiningAddress().IsNull());
-    }
 }
 
 // =============================================================================
-// Section 3: Start/Stop
+// Section 2: Start/Stop
 // =============================================================================
 
 TEST_CASE("CPUMiner - Start/Stop and idempotency", "[miner]") {
@@ -267,7 +95,13 @@ TEST_CASE("CPUMiner - Start/Stop and idempotency", "[miner]") {
     TestChainstateManager csm(*params);
     REQUIRE(csm.Initialize(params->GenesisBlock()));
 
-    mining::CPUMiner miner(*params, csm);
+    std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "unicity_miner_test_XXXXXX";
+    char dir_template[256];
+    std::strncpy(dir_template, test_dir.string().c_str(), sizeof(dir_template));
+
+    LocalTrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
+    TokenManager token_manager(test_dir, csm);
+    CPUMiner miner(*params, csm, tbm, token_manager);
 
     SECTION("Start spawns worker and Stop joins") {
         REQUIRE(miner.Start(/*target_height=*/-1));
@@ -283,10 +117,14 @@ TEST_CASE("CPUMiner - Start/Stop and idempotency", "[miner]") {
         miner.Stop();
         REQUIRE_FALSE(miner.IsMining());
     }
+    
+    if (std::filesystem::exists(test_dir)) {
+        std::filesystem::remove_all(test_dir);
+    }
 }
 
 // =============================================================================
-// Section 4: Block Template
+// Section 3: Block Template
 // =============================================================================
 
 TEST_CASE("CPUMiner - DebugCreateBlockTemplate and DebugShouldRegenerateTemplate", "[miner]") {
@@ -294,7 +132,16 @@ TEST_CASE("CPUMiner - DebugCreateBlockTemplate and DebugShouldRegenerateTemplate
     TestChainstateManager csm(*params);
     REQUIRE(csm.Initialize(params->GenesisBlock()));
 
-    mining::CPUMiner miner(*params, csm);
+    std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "unicity_miner_test_XXXXXX";
+    char dir_template[256];
+    std::strncpy(dir_template, test_dir.string().c_str(), sizeof(dir_template));
+    if (mkdtemp(dir_template)) {
+        test_dir = dir_template;
+    }
+
+    LocalTrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
+    TokenManager token_manager(test_dir, csm);
+    CPUMiner miner(*params, csm, tbm, token_manager);
 
     SECTION("Template reflects tip and MTP constraint") {
         auto tmpl1 = miner.DebugCreateBlockTemplate();
@@ -305,7 +152,15 @@ TEST_CASE("CPUMiner - DebugCreateBlockTemplate and DebugShouldRegenerateTemplate
         CBlockHeader h;
         h.nVersion = 1;
         h.hashPrevBlock = params->GenesisBlock().GetHash();
-        h.minerAddress = uint160();
+        
+        uint256 token_id;
+        token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+        uint256 token_hash = Hash(std::span<const uint8_t>(token_id.begin(), token_id.size()));
+        uint256 leaf_0 = token_hash;
+        uint256 leaf_1 = uint256::ZERO;
+        h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+        h.vPayload.assign(token_hash.begin(), token_hash.end());
+
         h.nTime = tmpl1.header.nTime + 120;
         h.nBits = tmpl1.nBits;
         h.nNonce = 0;
@@ -325,5 +180,9 @@ TEST_CASE("CPUMiner - DebugCreateBlockTemplate and DebugShouldRegenerateTemplate
         miner.InvalidateTemplate();
         REQUIRE(miner.DebugShouldRegenerateTemplate(tmpl.hashPrevBlock));
         REQUIRE_FALSE(miner.DebugShouldRegenerateTemplate(tmpl.hashPrevBlock));
+    }
+    
+    if (std::filesystem::exists(test_dir)) {
+        std::filesystem::remove_all(test_dir);
     }
 }

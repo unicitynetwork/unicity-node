@@ -51,7 +51,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock = prev_hash;
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = util::GetTime() + (node_id * 1000); // Offset by node_id to ensure unique hashes
         header.nBits = 0x207fffff;
         header.nNonce = node_id + (tip ? tip->nHeight : 0);
