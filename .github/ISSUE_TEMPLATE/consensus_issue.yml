@@ -1,0 +1,83 @@
+name: Consensus Issue
+description: Report a potential consensus bug, divergence, or rule violation
+title: "[Consensus]: "
+labels: ["consensus", "critical"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Consensus bugs are the most critical category of issues in a blockchain node.
+        Please provide as much detail as possible.
+
+        **If this could be exploited to attack the network, use the private disclosure
+        process in [SECURITY.md](../SECURITY.md) instead of this public form.**
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the consensus issue clearly.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Block validation rule violation
+        - Difficulty adjustment (ASERT) error
+        - Fork resolution / chain selection bug
+        - RandomX PoW verification error
+        - Timestamp validation issue
+        - Peer divergence (nodes disagree on chain tip)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can maintainers reproduce this issue?
+      placeholder: |
+        1. Build node at commit ...
+        2. Sync to block height ...
+        3. Submit block with headers ...
+        4. Node accepts/rejects incorrectly
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: What is the potential impact? (e.g., chain split, double-spend, node crash)
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Affected Commit / Version
+      placeholder: "e.g. a1b2c3d or main"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs / Chain Data
+      render: shell
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have confirmed this is reproducible
+          required: true
+        - label: I have checked that this is not a known/documented behavior
+          required: true
+        - label: This issue does NOT require private disclosure (not exploitable)
+          required: true
