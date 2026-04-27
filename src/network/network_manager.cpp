@@ -391,7 +391,8 @@ void NetworkManager::stop() {
 ConnectionResult NetworkManager::connect_to(const protocol::NetworkAddress& addr,
                                             NetPermissionFlags permissions,
                                             ConnectionType conn_type,
-                                            bool bypass_slot_limit) {
+                                            bool bypass_slot_limit,
+                                            const ConnectCompletion& on_complete) {
   if (!running_.load(std::memory_order_acquire)) {
     return ConnectionResult::NotRunning;
   }
@@ -402,7 +403,8 @@ ConnectionResult NetworkManager::connect_to(const protocol::NetworkAddress& addr
   }
 
   // Delegate to ConnectionManager (handles all connection logic)
-  return peer_manager_->ConnectTo(addr, permissions, chainstate_manager_.GetChainHeight(), conn_type, bypass_slot_limit);
+  return peer_manager_->ConnectTo(addr, permissions, chainstate_manager_.GetChainHeight(), conn_type, bypass_slot_limit,
+                                  on_complete);
 }
 
 bool NetworkManager::disconnect_from(int peer_id) {

@@ -108,6 +108,9 @@ class HeaderSyncManager;
 class Transport;
 enum class ConnectionResult;  // From network_manager.hpp
 
+// Optional connection completion callback fired from the io_context thread
+using ConnectCompletion = std::function<void(ConnectionResult)>;
+
 class ConnectionManager {
 public:
   struct Config {
@@ -331,7 +334,8 @@ public:
                              NetPermissionFlags permissions,
                              int32_t chain_height,
                              ConnectionType conn_type = ConnectionType::OUTBOUND_FULL_RELAY,
-                             bool bypass_slot_limit = false);
+                             bool bypass_slot_limit = false,
+                             const ConnectCompletion& on_complete = {});
 
   // Handle an inbound connection
   // Processes incoming connections, validates against bans/limits, creates peer

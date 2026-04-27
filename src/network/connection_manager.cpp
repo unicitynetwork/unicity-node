@@ -1100,7 +1100,8 @@ ConnectionResult ConnectionManager::ConnectTo(const protocol::NetworkAddress& ad
                                               NetPermissionFlags permissions,
                                               int32_t chain_height,
                                               ConnectionType conn_type,
-                                              bool bypass_slot_limit) {
+                                              bool bypass_slot_limit,
+                                              const ConnectCompletion& on_complete) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   // Convert NetworkAddress to IP string for transport layer
   auto ip_opt = addr.to_string();
@@ -1176,13 +1177,15 @@ ConnectionResult ConnectionManager::ConnectTo(const protocol::NetworkAddress& ad
   // Create async transport connection with callback (deliver connection via holder)
   auto holder = std::make_shared<TransportConnectionPtr>();
   auto cb = [this, address, port, addr, permissions, chain_height,
-             holder, effective_conn_type, bypass_slot_limit](bool success) {
+             holder, effective_conn_type, bypass_slot_limit,
+             on_complete = on_complete](bool success) mutable {
     // Post to io_context to decouple from transport callback and ensure
     // *holder assignment completes before we access it.
     // This also guarantees pending_outbound_ modifications are serialized.
     asio::post(io_context_, [this, address, port, addr, success, permissions,
                              chain_height, holder, effective_conn_type,
-                             bypass_slot_limit]() {
+                             bypass_slot_limit,
+                             on_complete = std::move(on_complete)]() {
       std::lock_guard<std::recursive_mutex> lock(mutex_);
       // Remove from pending set (now safe - running on io_context thread)
       pending_outbound_.erase(AddressKey(addr));
@@ -1193,6 +1196,13 @@ ConnectionResult ConnectionManager::ConnectTo(const protocol::NetworkAddress& ad
         // Connection failed - no peer created, no ID allocated
         // Attempt() already called before transport_->connect()
         ++metrics_outbound_failures_;
+        if (effective_conn_type == ConnectionType::MANUAL) {
+          LOG_NET_WARN("outbound connect failed: {}:{} (conn_type={})", address, port,
+                       ConnectionTypeAsString(effective_conn_type));
+        }
+        if (on_complete) {
+          on_complete(ConnectionResult::TransportFailed);
+        }
         return;
       }
 
@@ -1205,6 +1215,9 @@ ConnectionResult ConnectionManager::ConnectTo(const protocol::NetworkAddress& ad
         connection_cb->close();
         // Attempt() already called before transport_->connect()
         ++metrics_outbound_failures_;
+        if (on_complete) {
+          on_complete(ConnectionResult::TransportFailed);
+        }
         return;
       }
 
@@ -1224,6 +1237,9 @@ ConnectionResult ConnectionManager::ConnectTo(const protocol::NetworkAddress& ad
         peer->disconnect();
         // Attempt() already called before transport_->connect()
         ++metrics_outbound_failures_;
+        if (on_complete) {
+          on_complete(ConnectionResult::NoSlotsAvailable);
+        }
         return;
       }
 
@@ -1233,6 +1249,9 @@ ConnectionResult ConnectionManager::ConnectTo(const protocol::NetworkAddress& ad
         LOG_NET_DEBUG("connected to {}:{} (peer_id={})", address, port, peer_id);
         // Good() deferred to HandleVerack (post-handshake)
         peer_ptr->start();
+      }
+      if (on_complete) {
+        on_complete(ConnectionResult::Success);
       }
     });
   };

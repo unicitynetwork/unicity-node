@@ -152,7 +152,8 @@ public:
   ConnectionResult connect_to(const protocol::NetworkAddress& addr,
                               NetPermissionFlags permissions = NetPermissionFlags::None,
                               ConnectionType conn_type = ConnectionType::OUTBOUND_FULL_RELAY,
-                              bool bypass_slot_limit = false);
+                              bool bypass_slot_limit = false,
+                              const ConnectCompletion& on_complete = {});
   bool disconnect_from(int peer_id);  // Returns true if peer existed and was disconnected
 
   // Announce block to all peers via direct HEADERS message

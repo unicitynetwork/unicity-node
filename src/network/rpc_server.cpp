@@ -43,8 +43,10 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <future>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 #include <thread>
 
 #include <asio/ip/address.hpp>
@@ -56,6 +58,74 @@
 
 namespace unicity {
 namespace rpc {
+
+namespace {
+
+// Map a ConnectionResult to a human-readable RPC error message.
+std::string_view ConnectionResultMessage(const network::ConnectionResult r) {
+  switch (r) {
+    case network::ConnectionResult::Success:
+      return "Connected";
+    case network::ConnectionResult::NotRunning:
+      return "Network is not running";
+    case network::ConnectionResult::AddressBanned:
+      return "Address is banned";
+    case network::ConnectionResult::AddressDiscouraged:
+      return "Address is discouraged";
+    case network::ConnectionResult::AlreadyConnected:
+      return "Already connected (or connection attempt already in flight)";
+    case network::ConnectionResult::NoSlotsAvailable:
+      return "No outbound connection slots available";
+    case network::ConnectionResult::TransportFailed:
+      return "Transport connect failed";
+  }
+  return "Unknown connection error";
+}
+
+// Bound on how long the addnode RPC will block waiting for the async TCP
+// handshake to resolve. Kept longer than the transport's own connect
+// timeout (see DEFAULT_CONNECT_TIMEOUT in include/network/real_transport.hpp,
+// currently 10s) so the transport always reports a real result before this
+// fires; this is a defensive outer bound in case the callback never fires.
+constexpr auto addNodeWaitTimeout = std::chrono::seconds(12);
+
+// Initiate an outbound manual connection and synchronously wait for the
+// async TCP handshake outcome. Returns a JSON-formatted RPC response.
+std::string AddNodeSyncConnect(network::NetworkManager& network_manager,
+                               const protocol::NetworkAddress& addr,
+                               std::string_view success_message) {
+  auto promise = std::make_shared<std::promise<network::ConnectionResult>>();
+  auto future = promise->get_future();
+
+  auto sync_result = network_manager.connect_to(
+      addr,
+      network::NetPermissionFlags::Manual | network::NetPermissionFlags::NoBan,
+      network::ConnectionType::MANUAL,
+      /*bypass_slot_limit=*/false,
+      [promise](network::ConnectionResult r) { promise->set_value(r); });
+
+  if (sync_result != network::ConnectionResult::Success) {
+    // Synchronous rejection (NotRunning, AlreadyConnected, Banned etc) —
+    return util::JsonError(std::string(ConnectionResultMessage(sync_result)));
+  }
+
+  if (future.wait_for(addNodeWaitTimeout) != std::future_status::ready) {
+    return util::JsonError("Connection attempt timed out");
+  }
+  auto final_result = future.get();
+  if (final_result != network::ConnectionResult::Success) {
+    return util::JsonError(std::string(ConnectionResultMessage(final_result)));
+  }
+
+  std::ostringstream oss;
+  oss << "{\n"
+      << "  \"success\": true,\n"
+      << "  \"message\": \"" << success_message << "\"\n"
+      << "}\n";
+  return oss.str();
+}
+
+}  // namespace
 
 // Helper class to manage chain tip notification subscription for long-polling
 class RPCServer::LongPollNotifier {
@@ -998,20 +1068,9 @@ std::string RPCServer::HandleAddNode(const std::vector<std::string>& params) {
     // Connect to the node with Manual + NoBan permissions (bypasses slot limits and
     // protects from ban/discourage/eviction — admin explicitly trusts this peer)
     LOG_INFO("RPC addnode: calling connect_to() with Manual|NoBan flags");
-    auto result = network_manager_.connect_to(addr, network::NetPermissionFlags::Manual | network::NetPermissionFlags::NoBan);
-    LOG_INFO("RPC addnode: connect_to() returned result");
-    if (result != network::ConnectionResult::Success) {
-      LOG_INFO("RPC addnode: connect_to() failed");
-      return util::JsonError("Failed to connect to node");
-    }
-
-    std::ostringstream oss;
-    oss << "{\n"
-        << "  \"success\": true,\n"
-        << "  \"message\": \"Connection initiated to " << node_addr << "\"\n"
-        << "}\n";
-    return oss.str();
-  } else if (command == "remove") {
+    return AddNodeSyncConnect(network_manager_, addr, "Connected to " + node_addr);
+  }
+  if (command == "remove") {
     // Find peer by address:port and disconnect (thread-safe)
     int peer_id = network_manager_.peer_manager().find_peer_by_address(host, port);
 
@@ -1033,7 +1092,8 @@ std::string RPCServer::HandleAddNode(const std::vector<std::string>& params) {
         << "  \"message\": \"Disconnected from " << node_addr << "\"\n"
         << "}\n";
     return oss.str();
-  } else if (command == "onetry") {
+  }
+  if (command == "onetry") {
     // Same as "add" but semantic indication it's temporary
     // Note: In regtest/testing, all connections are effectively temporary
     // since tests control the network topology explicitly
@@ -1055,24 +1115,12 @@ std::string RPCServer::HandleAddNode(const std::vector<std::string>& params) {
     }
 
     // Connect with Manual + NoBan permissions (bypasses slot limits and
-    // protects from ban/discourage/eviction — admin explicitly trusts this peer)
-    LOG_INFO("RPC addnode onetry: calling connect_to() with Manual|NoBan flags");
-    auto result = network_manager_.connect_to(addr, network::NetPermissionFlags::Manual | network::NetPermissionFlags::NoBan);
-    LOG_INFO("RPC addnode onetry: connect_to() returned result");
-    if (result != network::ConnectionResult::Success) {
-      LOG_INFO("RPC addnode onetry: connect_to() failed");
-      return util::JsonError("Failed to connect to node");
-    }
-
-    std::ostringstream oss;
-    oss << "{\n"
-        << "  \"success\": true,\n"
-        << "  \"message\": \"Connection initiated to " << node_addr << " (onetry)\"\n"
-        << "}\n";
-    return oss.str();
-  } else {
-    return util::JsonError("Unknown command (use 'add', 'remove', or 'onetry')");
+    // protects from ban/discourage/eviction — admin explicitly trusts this peer).
+    // Same synchronous wait semantics as the "add" path.
+    LOG_INFO("RPC addnode onetry: calling connect_to() (Manual|NoBan), awaiting result");
+    return AddNodeSyncConnect(network_manager_, addr, "Connected to " + node_addr + " (onetry)");
   }
+  return util::JsonError("Unknown command (use 'add', 'remove', or 'onetry')");
 }
 
 std::string RPCServer::HandleSetNetworkActive(const std::vector<std::string>& params) {
