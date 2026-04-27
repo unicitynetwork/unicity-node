@@ -21,6 +21,7 @@
 #include <memory>
 #include <vector>
 #include <atomic>
+#include <unistd.h>
 
 using namespace unicity;
 using namespace unicity::test;

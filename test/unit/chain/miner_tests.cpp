@@ -20,6 +20,7 @@
 #include "util/uint.hpp"
 #include "util/hash.hpp"
 #include <memory>
+#include <unistd.h>
 
 using namespace unicity;
 using namespace unicity::chain;
