@@ -30,6 +30,7 @@
 #include "network/network_manager.hpp"
 #include "network/addr_relay_manager.hpp"
 #include "network/connection_manager.hpp"
+#include "network/real_transport.hpp"
 #include "util/hash.hpp"
 #include "util/logging.hpp"
 #include "util/netaddress.hpp"
@@ -43,7 +44,6 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
-#include <future>
 #include <iomanip>
 #include <sstream>
 #include <string_view>
@@ -78,43 +78,42 @@ std::string_view ConnectionResultMessage(const network::ConnectionResult r) {
       return "No outbound connection slots available";
     case network::ConnectionResult::TransportFailed:
       return "Transport connect failed";
+    case network::ConnectionResult::Timeout:
+      return "Connection attempt timed out";
+    default:
+      return "Unknown connection error";
   }
-  return "Unknown connection error";
 }
 
 // Bound on how long the addnode RPC will block waiting for the async TCP
-// handshake to resolve. Kept longer than the transport's own connect
-// timeout (see DEFAULT_CONNECT_TIMEOUT in include/network/real_transport.hpp,
-// currently 10s) so the transport always reports a real result before this
-// fires; this is a defensive outer bound in case the callback never fires.
-constexpr auto addNodeWaitTimeout = std::chrono::seconds(12);
+// handshake to resolve. Derived from the transport's own connect timeout
+// plus a small slack so the transport always reports a real result before
+// this fires; this is a defensive outer bound in case the underlying
+// callback never fires. Bumping DEFAULT_CONNECT_TIMEOUT in real_transport.hpp
+// keeps the relationship correct without touching this file.
+//
+// Late-completion note: if the transport resolves after this timeout fires,
+// the peer can still be added to the registry while the RPC reports
+// Timeout; a subsequent retry would then return AlreadyConnected. Low
+// severity in practice given the slack, but operators should know that a
+// Timeout result does not strictly preclude a successful late connection.
+constexpr auto ADDNODE_WAIT_TIMEOUT =
+    network::RealTransportConnection::DEFAULT_CONNECT_TIMEOUT + std::chrono::seconds(2);
 
 // Initiate an outbound manual connection and synchronously wait for the
 // async TCP handshake outcome. Returns a JSON-formatted RPC response.
 std::string AddNodeSyncConnect(network::NetworkManager& network_manager,
                                const protocol::NetworkAddress& addr,
                                std::string_view success_message) {
-  auto promise = std::make_shared<std::promise<network::ConnectionResult>>();
-  auto future = promise->get_future();
-
-  auto sync_result = network_manager.connect_to(
+  auto result = network_manager.connect_to_sync(
       addr,
       network::NetPermissionFlags::Manual | network::NetPermissionFlags::NoBan,
       network::ConnectionType::MANUAL,
       /*bypass_slot_limit=*/false,
-      [promise](network::ConnectionResult r) { promise->set_value(r); });
+      ADDNODE_WAIT_TIMEOUT);
 
-  if (sync_result != network::ConnectionResult::Success) {
-    // Synchronous rejection (NotRunning, AlreadyConnected, Banned etc) —
-    return util::JsonError(std::string(ConnectionResultMessage(sync_result)));
-  }
-
-  if (future.wait_for(addNodeWaitTimeout) != std::future_status::ready) {
-    return util::JsonError("Connection attempt timed out");
-  }
-  auto final_result = future.get();
-  if (final_result != network::ConnectionResult::Success) {
-    return util::JsonError(std::string(ConnectionResultMessage(final_result)));
+  if (result != network::ConnectionResult::Success) {
+    return util::JsonError(std::string(ConnectionResultMessage(result)));
   }
 
   std::ostringstream oss;

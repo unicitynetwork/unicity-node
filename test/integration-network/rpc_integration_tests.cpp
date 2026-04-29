@@ -6,6 +6,7 @@
 #include "chain/chainstate_manager.hpp"
 #include "chain/token_manager.hpp"
 #include "chain/trust_base_manager.hpp"
+#include "infra/test_access.hpp"
 #include "network/network_manager.hpp"
 #include "network/rpc_client.hpp"
 #include "network/rpc_server.hpp"
@@ -13,6 +14,7 @@
 #include <nlohmann/json.hpp>
 #include "common/mock_bft_client.hpp"
 #include "common/mock_trust_base_manager.hpp"
+#include "common/test_util.hpp"
 
 #include <thread>
 #include <chrono>
@@ -30,28 +32,26 @@ namespace {
 // Test fixture for RPC integration tests
 class RPCTestFixture {
 public:
-    RPCTestFixture() {
-        // Create temporary directory for test
-        temp_dir_ = std::filesystem::temp_directory_path() / "rpc_test";
-        std::filesystem::create_directories(temp_dir_);
-        socket_path_ = (temp_dir_ / "test.sock").string();
+    RPCTestFixture() : temp_dir_("rpc_test") {
+        socket_path_ = (temp_dir_.path / "test.sock").string();
 
-        // Initialize components
+        // Initialize components in dependency order. tbm_ must precede
+        // chainstate_ because ChainstateManager binds a reference to *tbm_
+        // at construction — using *tbm_ before tbm_ is set would be UB.
         auto params_unique = chain::ChainParams::CreateRegTest();
         params_ = params_unique.release();  // Take ownership as raw pointer
+        tbm_ = new chain::LocalTrustBaseManager(temp_dir_, std::make_shared<test::MockBFTClient>());
         chainstate_ = new validation::ChainstateManager(*params_, *tbm_);
+        token_manager_ = new mining::TokenManager(temp_dir_, *chainstate_);
 
         // Create NetworkManager config for regtest
         network::NetworkManager::Config net_config;
         net_config.network_magic = params_->GetNetworkMagic();
         net_config.listen_port = params_->GetDefaultPort();
-        net_config.datadir = temp_dir_.string();
+        net_config.datadir = temp_dir_.path.string();
         net_config.io_threads = 0;  // External io_context for tests
 
         network_ = new network::NetworkManager(*chainstate_, net_config);
-
-        tbm_ = new chain::LocalTrustBaseManager(temp_dir_, std::make_shared<test::MockBFTClient>());
-        token_manager_ = new mining::TokenManager(temp_dir_, *chainstate_);
 
         // Create RPC server (without miner for basic tests)
         server_ = new rpc::RPCServer(
@@ -73,7 +73,8 @@ public:
         delete tbm_;
         delete chainstate_;
         delete params_;
-        std::filesystem::remove_all(temp_dir_);
+        // temp_dir_ destructor (member) removes the directory after the
+        // managers above have been deleted.
     }
 
     bool StartServer() {
@@ -93,7 +94,9 @@ public:
     }
 
 private:
-    std::filesystem::path temp_dir_;
+    // Declared first so it is destroyed last, after the explicit deletes in
+    // the destructor body (which release objects that hold paths into it).
+    test::TempDir temp_dir_;
     std::string socket_path_;
     chain::ChainParams* params_;
     validation::ChainstateManager* chainstate_;
@@ -312,8 +315,7 @@ TEST_CASE("RPC: Socket Path Validation", "[rpc][integration][validation]") {
         long_path = "/tmp/" + long_path + ".sock";
 
         auto params_ptr = chain::ChainParams::CreateRegTest();
-        auto temp_dir = std::filesystem::temp_directory_path() / "rpc_long_path_test";
-        std::filesystem::create_directories(temp_dir);
+        test::TempDir temp_dir{"rpc_long_path_test"};
 
         test::MockTrustBaseManager mock_tbm;
         validation::ChainstateManager chainstate(*params_ptr, mock_tbm);
@@ -321,7 +323,7 @@ TEST_CASE("RPC: Socket Path Validation", "[rpc][integration][validation]") {
         network::NetworkManager::Config net_config;
         net_config.network_magic = params_ptr->GetNetworkMagic();
         net_config.listen_port = params_ptr->GetDefaultPort();
-        net_config.datadir = temp_dir.string();
+        net_config.datadir = temp_dir.path.string();
         net_config.io_threads = 0;
         network::NetworkManager network(chainstate, net_config);
 
@@ -332,8 +334,6 @@ TEST_CASE("RPC: Socket Path Validation", "[rpc][integration][validation]") {
 
         // Should fail to start due to path too long
         REQUIRE_FALSE(server.Start());
-
-        std::filesystem::remove_all(temp_dir);
     }
 }
 
@@ -897,6 +897,75 @@ TEST_CASE("RPC Commands: addnode", "[rpc][integration][network]") {
         std::string response = client.ExecuteCommand("addnode", {"127.0.0.1:9590", "remove"});
         REQUIRE_FALSE(response.empty());
     }
+}
+
+// Verifies that addnode actually waits for the asynchronous transport
+// outcome before replying — i.e. it does not immediately return success
+// while a connect attempt is still in flight. With a non-routable target
+// (TEST-NET-3, RFC 5737) and a shrunk transport connect timeout the call
+// must surface a connection error after measurably waiting.
+TEST_CASE("RPC Commands: addnode onetry waits for transport result, returns error",
+          "[rpc][integration][network]") {
+    test::TempDir temp_dir{"rpc_addnode_timeout_test"};
+    auto socket_path = (temp_dir.path / "test.sock").string();
+
+    auto params = chain::ChainParams::CreateRegTest();
+    auto tbm = std::make_shared<chain::LocalTrustBaseManager>(
+        temp_dir, std::make_shared<test::MockBFTClient>());
+    auto chainstate = std::make_unique<validation::ChainstateManager>(*params, *tbm);
+    auto token_manager = std::make_unique<mining::TokenManager>(temp_dir, *chainstate);
+
+    network::NetworkManager::Config net_config;
+    net_config.network_magic = params->GetNetworkMagic();
+    net_config.listen_port = 0;
+    net_config.listen_enabled = false;  // don't try to bind a port
+    net_config.enable_nat = false;
+    net_config.io_threads = 1;          // own thread runs the io_context
+    net_config.datadir = temp_dir.path.string();
+    auto network = std::make_unique<network::NetworkManager>(*chainstate, net_config);
+    REQUIRE(network->start());
+
+    auto server = std::make_unique<rpc::RPCServer>(
+        socket_path, *chainstate, *network, nullptr, *token_manager, *tbm, *params);
+    REQUIRE(server->Start());
+    std::this_thread::sleep_for(100ms);
+
+    // Shrink the transport's per-attempt connect timeout so the test does
+    // not have to wait the default 10s. The same override is used by
+    // real_transport_tests.cpp against the same TEST-NET-3 destination.
+    constexpr auto transport_timeout = std::chrono::milliseconds(500);
+    test::RealTransportTestAccess::SetConnectTimeout(transport_timeout);
+
+    rpc::RPCClient client(socket_path);
+    REQUIRE_FALSE(client.Connect().has_value());
+
+    auto t0 = std::chrono::steady_clock::now();
+    std::string response = client.ExecuteCommand("addnode", {"203.0.113.1:65530", "onetry"});
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0);
+
+    test::RealTransportTestAccess::ResetConnectTimeout();
+
+    INFO("addnode response: " << response);
+    INFO("elapsed: " << elapsed.count() << "ms");
+
+    REQUIRE_FALSE(response.empty());
+    // Must not claim a successful connection.
+    REQUIRE(response.find("\"success\": true") == std::string::npos);
+    // Must surface a connection error (TransportFailed or Timeout —
+    // either is acceptable; both prove synchronous wait reached the user).
+    REQUIRE(response.find("error") != std::string::npos);
+    // Synchronous wait actually happened; the call did not short-circuit
+    // to a fake success before the transport produced a result. Lower
+    // bound is well below the transport timeout to absorb scheduling
+    // jitter on busy CI machines.
+    REQUIRE(elapsed >= std::chrono::milliseconds(100));
+    // And the wait is bounded — we should not hang for many seconds.
+    REQUIRE(elapsed < std::chrono::seconds(5));
+
+    server->Stop();
+    network->stop();
+    util::LogManager::SetLogLevel("off");
 }
 
 TEST_CASE("RPC Commands: setban", "[rpc][integration][network]") {

@@ -58,7 +58,8 @@ enum class ConnectionResult {
   AddressDiscouraged,
   AlreadyConnected,
   NoSlotsAvailable,
-  TransportFailed
+  TransportFailed,
+  Timeout  // connect_to_sync only: transport did not resolve within wait_timeout
 };
 
 // Forward declarations
@@ -149,11 +150,29 @@ public:
   AddrRelayManager& discovery_manager();
 
   // Manual connection management
+  //
+  // connect_to: fire-and-forget. Returns the synchronous outcome only —
+  // synchronous rejections (NotRunning, AlreadyConnected, Banned, ...) are
+  // returned directly; if Success is returned the transport handshake is
+  // still in flight and its eventual outcome is not surfaced to the caller.
+  // Use connect_to_sync below if you need the final result.
   ConnectionResult connect_to(const protocol::NetworkAddress& addr,
                               NetPermissionFlags permissions = NetPermissionFlags::None,
                               ConnectionType conn_type = ConnectionType::OUTBOUND_FULL_RELAY,
-                              bool bypass_slot_limit = false,
-                              const ConnectCompletion& on_complete = {});
+                              bool bypass_slot_limit = false);
+
+  // Initiate an outbound connection and synchronously wait for the transport
+  // handshake to resolve, up to `wait_timeout`. Returns either the synchronous
+  // rejection or the final async result (Success / TransportFailed / etc).
+  //
+  // Must NOT be called from the network io_context thread: the wait would
+  // deadlock the very thread that drives the completion. Intended for RPC
+  // handlers running on dedicated threads.
+  ConnectionResult connect_to_sync(const protocol::NetworkAddress& addr,
+                                   NetPermissionFlags permissions,
+                                   ConnectionType conn_type,
+                                   bool bypass_slot_limit,
+                                   std::chrono::milliseconds wait_timeout);
   bool disconnect_from(int peer_id);  // Returns true if peer existed and was disconnected
 
   // Announce block to all peers via direct HEADERS message

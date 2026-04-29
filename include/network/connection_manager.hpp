@@ -108,9 +108,6 @@ class HeaderSyncManager;
 class Transport;
 enum class ConnectionResult;  // From network_manager.hpp
 
-// Optional connection completion callback fired from the io_context thread
-using ConnectCompletion = std::function<void(ConnectionResult)>;
-
 class ConnectionManager {
 public:
   struct Config {
@@ -327,15 +324,27 @@ public:
 
   // Connect to a peer address (main outbound connection logic)
   // Performs all checks (banned, discouraged, already connected, slot availability)
-  // and initiates async transport connection.
+  // and initiates async transport connection. Returns the synchronous outcome
+  // only — if Success is returned, the transport handshake is still in flight.
   // bypass_slot_limit: allows extra block-relay connections beyond the configured max
   //   (used for periodic block-relay rotation)
   ConnectionResult ConnectTo(const protocol::NetworkAddress& addr,
                              NetPermissionFlags permissions,
                              int32_t chain_height,
                              ConnectionType conn_type = ConnectionType::OUTBOUND_FULL_RELAY,
-                             bool bypass_slot_limit = false,
-                             const ConnectCompletion& on_complete = {});
+                             bool bypass_slot_limit = false);
+
+  // Connect to a peer address and synchronously wait for the transport
+  // handshake outcome, up to `wait_timeout`. Returns the final result
+  // (ConnectionResult::Timeout if the wait elapses first).
+  // Must NOT be called from the io_context thread (would deadlock the
+  // very thread that drives the completion).
+  ConnectionResult ConnectToSync(const protocol::NetworkAddress& addr,
+                                 NetPermissionFlags permissions,
+                                 int32_t chain_height,
+                                 ConnectionType conn_type,
+                                 bool bypass_slot_limit,
+                                 std::chrono::milliseconds wait_timeout);
 
   // Handle an inbound connection
   // Processes incoming connections, validates against bans/limits, creates peer
@@ -351,6 +360,22 @@ public:
 private:
   // Test access
   friend class test::ConnectionManagerTestAccess;
+
+  // Internal completion hook used by ConnectToSync. Fires at most once on
+  // the io_context thread, after mutex_ has been released, only when
+  // ConnectToImpl returned Success synchronously.
+  using CompletionFn = std::function<void(ConnectionResult)>;
+
+  // Shared implementation backing the two public ConnectTo* methods.
+  // Performs the synchronous validation and kicks off the async transport
+  // connect; if `on_complete` is non-empty it is invoked with the final
+  // result (only on a Success synchronous return).
+  ConnectionResult ConnectToImpl(const protocol::NetworkAddress& addr,
+                                 NetPermissionFlags permissions,
+                                 int32_t chain_height,
+                                 ConnectionType conn_type,
+                                 bool bypass_slot_limit,
+                                 CompletionFn on_complete);
 
   asio::io_context& io_context_;
   PeerDiscoveryInterface* addr_relay_mgr_{nullptr};  // Injected after construction
