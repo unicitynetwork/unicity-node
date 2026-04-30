@@ -281,7 +281,7 @@ bool RPCServer::Start() {
   }
 
   // Listen for connections (backlog handles burst of concurrent connections)
-  if (listen(server_fd_, 20) < 0) {
+  if (listen(server_fd_, SOMAXCONN) < 0) {
     LOG_ERROR("Failed to listen on RPC socket");
     close(server_fd_);
     server_fd_ = -1;
