@@ -43,6 +43,12 @@ public:
   RealTransportConnection(RealTransportConnection&&) = delete;
   RealTransportConnection& operator=(RealTransportConnection&&) = delete;
 
+  // Default per-attempt connect timeout. Exposed publicly so callers that
+  // synchronously wait on a connect outcome (e.g. the addnode RPC handler)
+  // can derive their own bound from it programmatically rather than
+  // restating the value in a comment.
+  static constexpr std::chrono::milliseconds DEFAULT_CONNECT_TIMEOUT{std::chrono::seconds(10)};
+
   // TransportConnection interface
   void start() override;
   bool send(const std::vector<uint8_t>& data) override;
@@ -108,7 +114,6 @@ private:
   // on different io_context threads.
   std::atomic<bool> connect_done_{false};
   std::shared_ptr<asio::ip::tcp::resolver> resolver_;
-  static constexpr std::chrono::milliseconds DEFAULT_CONNECT_TIMEOUT{std::chrono::seconds(10)};
 
   static std::atomic<std::chrono::milliseconds> connect_timeout_override_ms_;
   // Test-only override for send queue limit (0 = disabled)

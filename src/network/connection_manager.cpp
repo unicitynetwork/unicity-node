@@ -12,6 +12,7 @@
 #include "util/time.hpp"
 
 #include <algorithm>
+#include <future>
 #include <set>
 #include <utility>  // for std::move
 
@@ -1101,6 +1102,49 @@ ConnectionResult ConnectionManager::ConnectTo(const protocol::NetworkAddress& ad
                                               int32_t chain_height,
                                               ConnectionType conn_type,
                                               bool bypass_slot_limit) {
+  return ConnectToImpl(addr, permissions, chain_height, conn_type, bypass_slot_limit, {});
+}
+
+ConnectionResult ConnectionManager::ConnectToSync(const protocol::NetworkAddress& addr,
+                                                  NetPermissionFlags permissions,
+                                                  int32_t chain_height,
+                                                  ConnectionType conn_type,
+                                                  bool bypass_slot_limit,
+                                                  std::chrono::milliseconds wait_timeout) {
+  // The completion lambda fires from the io_context thread; capturing the
+  // promise by shared_ptr keeps it alive across the synchronous-rejection
+  // early return below.
+  auto promise = std::make_shared<std::promise<ConnectionResult>>();
+  auto future = promise->get_future();
+
+  auto sync_result = ConnectToImpl(
+      addr, permissions, chain_height, conn_type, bypass_slot_limit,
+      [promise](ConnectionResult r) { promise->set_value(r); });
+
+  // Synchronous rejection (NotRunning, AlreadyConnected, Banned, ...): the
+  // completion will not fire, so return immediately without touching the
+  // future.
+  if (sync_result != ConnectionResult::Success) {
+    return sync_result;
+  }
+
+  try {
+    if (future.wait_for(wait_timeout) != std::future_status::ready) {
+      return ConnectionResult::Timeout;
+    }
+    return future.get();
+  } catch (const std::future_error&) {
+    // Promise destroyed without being satisfied (e.g. shutdown raced).
+    return ConnectionResult::TransportFailed;
+  }
+}
+
+ConnectionResult ConnectionManager::ConnectToImpl(const protocol::NetworkAddress& addr,
+                                                  NetPermissionFlags permissions,
+                                                  int32_t chain_height,
+                                                  ConnectionType conn_type,
+                                                  bool bypass_slot_limit,
+                                                  CompletionFn on_complete) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   // Convert NetworkAddress to IP string for transport layer
   auto ip_opt = addr.to_string();
@@ -1176,63 +1220,80 @@ ConnectionResult ConnectionManager::ConnectTo(const protocol::NetworkAddress& ad
   // Create async transport connection with callback (deliver connection via holder)
   auto holder = std::make_shared<TransportConnectionPtr>();
   auto cb = [this, address, port, addr, permissions, chain_height,
-             holder, effective_conn_type, bypass_slot_limit](bool success) {
+             holder, effective_conn_type, bypass_slot_limit,
+             on_complete = on_complete](bool success) mutable {
     // Post to io_context to decouple from transport callback and ensure
     // *holder assignment completes before we access it.
     // This also guarantees pending_outbound_ modifications are serialized.
     asio::post(io_context_, [this, address, port, addr, success, permissions,
                              chain_height, holder, effective_conn_type,
-                             bypass_slot_limit]() {
-      std::lock_guard<std::recursive_mutex> lock(mutex_);
-      // Remove from pending set (now safe - running on io_context thread)
-      pending_outbound_.erase(AddressKey(addr));
+                             bypass_slot_limit,
+                             on_complete = std::move(on_complete)]() {
+      // State mutations run under mutex_ inside the IIFE; on_complete fires
+      // outside the lock so the completion (e.g. ConnectToSync setting its
+      // promise) cannot deadlock against any other ConnectionManager call
+      // path.
+      auto result = [&]() -> ConnectionResult {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        // Remove from pending set (now safe - running on io_context thread)
+        pending_outbound_.erase(AddressKey(addr));
 
-      auto connection_cb = *holder;
+        auto connection_cb = *holder;
 
-      if (!success || !connection_cb) {
-        // Connection failed - no peer created, no ID allocated
-        // Attempt() already called before transport_->connect()
-        ++metrics_outbound_failures_;
-        return;
-      }
+        if (!success || !connection_cb) {
+          // Connection failed - no peer created, no ID allocated
+          // Attempt() already called before transport_->connect()
+          ++metrics_outbound_failures_;
+          if (effective_conn_type == ConnectionType::MANUAL) {
+            LOG_NET_WARN("outbound connect failed: {}:{} (conn_type={})", address, port,
+                         ConnectionTypeAsString(effective_conn_type));
+          }
+          return ConnectionResult::TransportFailed;
+        }
 
-      // Connection succeeded - now create the peer and allocate ID
-      auto peer = Peer::create_outbound(io_context_, connection_cb, network_magic_, chain_height, address, port,
-                                        effective_conn_type);
-      if (!peer) {
-        LOG_NET_ERROR("Failed to create peer for {}:{}", address, port);
-        // No peer created; close the raw connection held by holder
-        connection_cb->close();
-        // Attempt() already called before transport_->connect()
-        ++metrics_outbound_failures_;
-        return;
-      }
+        // Connection succeeded - now create the peer and allocate ID
+        auto peer = Peer::create_outbound(io_context_, connection_cb, network_magic_, chain_height, address, port,
+                                          effective_conn_type);
+        if (!peer) {
+          LOG_NET_ERROR("Failed to create peer for {}:{}", address, port);
+          // No peer created; close the raw connection held by holder
+          connection_cb->close();
+          // Attempt() already called before transport_->connect()
+          ++metrics_outbound_failures_;
+          return ConnectionResult::TransportFailed;
+        }
 
-      // Set local nonce
-      peer->set_local_nonce(local_nonce_);
+        // Set local nonce
+        peer->set_local_nonce(local_nonce_);
 
-      // Setup message handler
-      if (setup_message_handler_) {
-        setup_message_handler_(peer.get());
-      }
+        // Setup message handler
+        if (setup_message_handler_) {
+          setup_message_handler_(peer.get());
+        }
 
-      // Add to peer manager (bypass_slot_limit for extra block-relay rotation)
-      int peer_id = add_peer(peer, permissions, address, /*prefer_evict=*/false, bypass_slot_limit);
-      if (peer_id < 0) {
-        LOG_NET_DEBUG("Failed to add outbound peer {} to manager (limit reached)", address);
-        // Clean up transient peer to avoid destructor warning
-        peer->disconnect();
-        // Attempt() already called before transport_->connect()
-        ++metrics_outbound_failures_;
-        return;
-      }
+        // Add to peer manager (bypass_slot_limit for extra block-relay rotation)
+        int peer_id = add_peer(peer, permissions, address, /*prefer_evict=*/false, bypass_slot_limit);
+        if (peer_id < 0) {
+          LOG_NET_DEBUG("Failed to add outbound peer {} to manager (limit reached)", address);
+          // Clean up transient peer to avoid destructor warning
+          peer->disconnect();
+          // Attempt() already called before transport_->connect()
+          ++metrics_outbound_failures_;
+          return ConnectionResult::NoSlotsAvailable;
+        }
 
-      // Get peer and start it
-      auto peer_ptr = get_peer(peer_id);
-      if (peer_ptr) {
-        LOG_NET_DEBUG("connected to {}:{} (peer_id={})", address, port, peer_id);
-        // Good() deferred to HandleVerack (post-handshake)
-        peer_ptr->start();
+        // Get peer and start it
+        auto peer_ptr = get_peer(peer_id);
+        if (peer_ptr) {
+          LOG_NET_DEBUG("connected to {}:{} (peer_id={})", address, port, peer_id);
+          // Good() deferred to HandleVerack (post-handshake)
+          peer_ptr->start();
+        }
+        return ConnectionResult::Success;
+      }();
+
+      if (on_complete) {
+        on_complete(result);
       }
     });
   };

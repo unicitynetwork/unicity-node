@@ -17,6 +17,7 @@
 #include "chain/validation.hpp"
 #include "common/test_chainstate_manager.hpp"
 #include "common/mock_bft_client.hpp"
+#include "common/test_util.hpp"
 #include "util/uint.hpp"
 #include "util/hash.hpp"
 #include <memory>
@@ -33,38 +34,30 @@ using namespace unicity::test;
 
 class MinerTestFixture {
 public:
-    MinerTestFixture() {
+    MinerTestFixture() : test_dir("unicity_miner_test") {
         GlobalChainParams::Select(ChainType::REGTEST);
         params = &GlobalChainParams::Get();
 
-        test_dir = std::filesystem::temp_directory_path() / "unicity_miner_test_XXXXXX";
-        char dir_template[256];
-        std::strncpy(dir_template, test_dir.string().c_str(), sizeof(dir_template));
-        if (mkdtemp(dir_template)) {
-            test_dir = dir_template;
-        }
-
         tbm = std::make_unique<LocalTrustBaseManager>(test_dir, std::make_shared<MockBFTClient>());
         chainstate = std::make_unique<ChainstateManager>(*params, *tbm);
-
-        token_manager = std::make_unique<TokenManager>(test_dir, *chainstate);        miner = std::make_unique<CPUMiner>(*params, *chainstate, *tbm, *token_manager);
+        token_manager = std::make_unique<TokenManager>(test_dir, *chainstate);
+        miner = std::make_unique<CPUMiner>(*params, *chainstate, *tbm, *token_manager);
     }
 
     ~MinerTestFixture() {
         if (miner && miner->IsMining()) {
             miner->Stop();
         }
-        if (!test_dir.empty() && std::filesystem::exists(test_dir)) {
-            std::filesystem::remove_all(test_dir);
-        }
     }
 
+    // test_dir declared first so it is destroyed last, after the unique_ptrs
+    // that hold managers tied to its path.
+    TempDir test_dir;
     const ChainParams* params;
     std::unique_ptr<ChainstateManager> chainstate;
     std::unique_ptr<TrustBaseManager> tbm;
     std::unique_ptr<TokenManager> token_manager;
     std::unique_ptr<CPUMiner> miner;
-    std::filesystem::path test_dir;
 };
 
 // =============================================================================
@@ -95,9 +88,7 @@ TEST_CASE("CPUMiner - Start/Stop and idempotency", "[miner]") {
     TestChainstateManager csm(*params);
     REQUIRE(csm.Initialize(params->GenesisBlock()));
 
-    std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "unicity_miner_test_XXXXXX";
-    char dir_template[256];
-    std::strncpy(dir_template, test_dir.string().c_str(), sizeof(dir_template));
+    TempDir test_dir{"unicity_miner_test"};
 
     LocalTrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
     TokenManager token_manager(test_dir, csm);
@@ -117,10 +108,6 @@ TEST_CASE("CPUMiner - Start/Stop and idempotency", "[miner]") {
         miner.Stop();
         REQUIRE_FALSE(miner.IsMining());
     }
-    
-    if (std::filesystem::exists(test_dir)) {
-        std::filesystem::remove_all(test_dir);
-    }
 }
 
 // =============================================================================
@@ -132,12 +119,7 @@ TEST_CASE("CPUMiner - DebugCreateBlockTemplate and DebugShouldRegenerateTemplate
     TestChainstateManager csm(*params);
     REQUIRE(csm.Initialize(params->GenesisBlock()));
 
-    std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "unicity_miner_test_XXXXXX";
-    char dir_template[256];
-    std::strncpy(dir_template, test_dir.string().c_str(), sizeof(dir_template));
-    if (mkdtemp(dir_template)) {
-        test_dir = dir_template;
-    }
+    TempDir test_dir{"unicity_miner_test"};
 
     LocalTrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
     TokenManager token_manager(test_dir, csm);
@@ -180,9 +162,5 @@ TEST_CASE("CPUMiner - DebugCreateBlockTemplate and DebugShouldRegenerateTemplate
         miner.InvalidateTemplate();
         REQUIRE(miner.DebugShouldRegenerateTemplate(tmpl.hashPrevBlock));
         REQUIRE_FALSE(miner.DebugShouldRegenerateTemplate(tmpl.hashPrevBlock));
-    }
-    
-    if (std::filesystem::exists(test_dir)) {
-        std::filesystem::remove_all(test_dir);
     }
 }

@@ -3,6 +3,7 @@
 // Comprehensive tests for directory locking (fs_lock.cpp)
 
 #include "catch_amalgamated.hpp"
+#include "common/test_util.hpp"
 #include "util/fs_lock.hpp"
 #include <filesystem>
 #include <thread>
@@ -13,9 +14,7 @@
 using namespace unicity::util;
 
 TEST_CASE("Directory locking: Basic functionality", "[fs_lock][basic]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_lock_test_basic";
-    std::filesystem::remove_all(test_dir);
-    std::filesystem::create_directories(test_dir);
+  unicity::test::TempDir test_dir{"unicity_lock_test_basic"};
 
     SECTION("Lock succeeds on empty directory") {
         auto result = LockDirectory(test_dir, ".lock");
@@ -38,7 +37,7 @@ TEST_CASE("Directory locking: Basic functionality", "[fs_lock][basic]") {
         auto result = LockDirectory(test_dir, ".lock");
         REQUIRE(result == LockResult::Success);
 
-        auto lock_file = test_dir / ".lock";
+        auto lock_file = test_dir.path / ".lock";
         REQUIRE(std::filesystem::exists(lock_file));
 
         UnlockDirectory(test_dir, ".lock");
@@ -61,19 +60,15 @@ TEST_CASE("Directory locking: Basic functionality", "[fs_lock][basic]") {
         auto result = LockDirectory(test_dir, ".custom");
         REQUIRE(result == LockResult::Success);
 
-        auto lock_file = test_dir / ".custom";
+        auto lock_file = test_dir.path / ".custom";
         REQUIRE(std::filesystem::exists(lock_file));
 
         UnlockDirectory(test_dir, ".custom");
     }
-
-    std::filesystem::remove_all(test_dir);
 }
 
 TEST_CASE("Directory locking: Multi-process exclusion", "[fs_lock][multiprocess]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_lock_test_mp";
-    std::filesystem::remove_all(test_dir);
-    std::filesystem::create_directories(test_dir);
+    unicity::test::TempDir test_dir{"unicity_lock_test_mp"};
 
     SECTION("Fork test: parent holds lock, child blocked") {
         // Parent acquires lock
@@ -133,30 +128,26 @@ TEST_CASE("Directory locking: Multi-process exclusion", "[fs_lock][multiprocess]
         REQUIRE(result == LockResult::Success);
         UnlockDirectory(test_dir, ".lock");
     }
-
-    std::filesystem::remove_all(test_dir);
 }
 
 TEST_CASE("Directory locking: Error handling", "[fs_lock][errors]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_lock_test_errors";
-    std::filesystem::remove_all(test_dir);
+    unicity::test::TempDir test_dir{"unicity_lock_test_errors"};
 
     SECTION("Lock fails on non-existent directory") {
-        auto non_existent = test_dir / "does_not_exist";
+        auto non_existent = test_dir.path / "does_not_exist";
         auto result = LockDirectory(non_existent, ".lock");
         REQUIRE(result == LockResult::ErrorWrite);
     }
 
     SECTION("Lock succeeds when directory is created") {
-        std::filesystem::create_directories(test_dir);
         auto result = LockDirectory(test_dir, ".lock");
         REQUIRE(result == LockResult::Success);
         UnlockDirectory(test_dir, ".lock");
     }
 
     SECTION("ReleaseAllDirectoryLocks clears all locks") {
-        auto dir1 = test_dir / "dir1";
-        auto dir2 = test_dir / "dir2";
+        auto dir1 = test_dir.path / "dir1";
+        auto dir2 = test_dir.path / "dir2";
         std::filesystem::create_directories(dir1);
         std::filesystem::create_directories(dir2);
 
@@ -171,26 +162,21 @@ TEST_CASE("Directory locking: Error handling", "[fs_lock][errors]") {
 
         ReleaseAllDirectoryLocks();
     }
-
-    std::filesystem::remove_all(test_dir);
 }
 
 TEST_CASE("Directory locking: Readonly directory", "[fs_lock][readonly]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_lock_test_readonly";
-    std::filesystem::remove_all(test_dir);
-    std::filesystem::create_directories(test_dir);
+    unicity::test::TempDir test_dir{"unicity_lock_test_readonly"};
 
 #if defined(__unix__) || defined(__APPLE__)
     SECTION("Lock fails on readonly directory") {
         // Skip test when running as root (root bypasses file permissions)
         if (geteuid() == 0) {
             WARN("Skipping readonly test when running as root");
-            std::filesystem::remove_all(test_dir);
             return;
         }
 
         // Make directory readonly
-        std::filesystem::permissions(test_dir,
+        std::filesystem::permissions(test_dir.path,
                                       std::filesystem::perms::owner_read |
                                       std::filesystem::perms::owner_exec,
                                       std::filesystem::perm_options::replace);
@@ -198,12 +184,10 @@ TEST_CASE("Directory locking: Readonly directory", "[fs_lock][readonly]") {
         auto result = LockDirectory(test_dir, ".lock");
         REQUIRE(result == LockResult::ErrorWrite);
 
-        // Restore permissions for cleanup
-        std::filesystem::permissions(test_dir,
+        // Restore permissions so TempDir's destructor can remove the dir.
+        std::filesystem::permissions(test_dir.path,
                                       std::filesystem::perms::owner_all,
                                       std::filesystem::perm_options::replace);
     }
 #endif
-
-    std::filesystem::remove_all(test_dir);
 }
