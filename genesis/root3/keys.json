@@ -1,0 +1,10 @@
+{
+  "sigKey": {
+    "algorithm": "secp256k1",
+    "privateKey": "0x256d5cff961d7bd4a27878e77c89d5720727aa96cada029ad7672da48ae4e867"
+  },
+  "authKey": {
+    "algorithm": "secp256k1",
+    "privateKey": "0x92e5856b03994baa40afee76c84ccbeac5fea957e85c4a185258c50b765ebf7c"
+  }
+}
