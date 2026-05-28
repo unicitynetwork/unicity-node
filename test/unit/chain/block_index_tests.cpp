@@ -12,7 +12,7 @@ CBlockHeader CreateTestHeader(uint32_t nTime = 1234567890, uint32_t nBits = 0x1d
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock.SetNull();
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = 0;
@@ -31,7 +31,7 @@ TEST_CASE("CBlockIndex - Construction and initialization", "[block_index]") {
         REQUIRE(index.nHeight == 0);
         REQUIRE(index.nChainWork == 0);
         REQUIRE(index.nVersion == 0);
-        REQUIRE(index.minerAddress.IsNull());
+        REQUIRE(index.payloadRoot.IsNull());
         REQUIRE(index.nTime == 0);
         REQUIRE(index.nBits == 0);
         REQUIRE(index.nNonce == 0);
@@ -42,7 +42,7 @@ TEST_CASE("CBlockIndex - Construction and initialization", "[block_index]") {
         CBlockHeader header = CreateTestHeader(1000, 0x1d00ffff);
         header.nVersion = 2;
         header.nNonce = 12345;
-        header.minerAddress.SetHex("0102030405060708090a0b0c0d0e0f1011121314");
+        header.payloadRoot.SetHex("0102030405060708090a0b0c0d0e0f1011121314");
 
         CBlockIndex index(header);
 
@@ -50,7 +50,7 @@ TEST_CASE("CBlockIndex - Construction and initialization", "[block_index]") {
         REQUIRE(index.nTime == 1000);
         REQUIRE(index.nBits == 0x1d00ffff);
         REQUIRE(index.nNonce == 12345);
-        REQUIRE(index.minerAddress == header.minerAddress);
+        REQUIRE(index.payloadRoot == header.payloadRoot);
         REQUIRE(index.hashRandomX == header.hashRandomX);
 
         // Metadata fields should be default-initialized
@@ -100,7 +100,7 @@ TEST_CASE("CBlockIndex - GetBlockHeader", "[block_index]") {
         CBlockHeader original = CreateTestHeader(1000, 0x1d00ffff);
         original.nVersion = 2;
         original.nNonce = 54321;
-        original.minerAddress.SetHex("0102030405060708090a0b0c0d0e0f1011121314");
+        original.payloadRoot.SetHex("0102030405060708090a0b0c0d0e0f1011121314");
         original.hashRandomX.SetHex("1111111111111111111111111111111111111111111111111111111111111111");
 
         CBlockIndex index(original);
@@ -111,7 +111,7 @@ TEST_CASE("CBlockIndex - GetBlockHeader", "[block_index]") {
         REQUIRE(reconstructed.nTime == original.nTime);
         REQUIRE(reconstructed.nBits == original.nBits);
         REQUIRE(reconstructed.nNonce == original.nNonce);
-        REQUIRE(reconstructed.minerAddress == original.minerAddress);
+        REQUIRE(reconstructed.payloadRoot == original.payloadRoot);
         REQUIRE(reconstructed.hashRandomX == original.hashRandomX);
         REQUIRE(reconstructed.hashPrevBlock.IsNull()); // No parent
     }
@@ -426,7 +426,7 @@ TEST_CASE("CBlockIndex - ToString", "[block_index]") {
 
         index.nHeight = 100;
         index.m_block_hash = hash;
-        index.minerAddress.SetHex("0102030405060708090a0b0c0d0e0f1011121314");
+        index.payloadRoot.SetHex("0102030405060708090a0b0c0d0e0f1011121314");
 
         std::string str = index.ToString();
 

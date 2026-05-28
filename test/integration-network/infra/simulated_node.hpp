@@ -67,8 +67,8 @@ public:
     void Disconnect(int peer_id) { DisconnectFrom(peer_id); }  // Alias
 
     // Mining (instant, no PoW)
-    uint256 MineBlock(const std::string& miner_address = "test_miner");
-    bool MineBlocks(int count, const std::string& miner_address = "test_miner");
+    uint256 MineBlock(const std::string& payload_root = "test_miner");
+    bool MineBlocks(int count, const std::string& payload_root = "test_miner");
 
     // Blockchain state
     int GetTipHeight() const;

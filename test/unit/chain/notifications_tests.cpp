@@ -9,9 +9,13 @@
 #include "chain/chainparams.hpp"
 #include "chain/chain.hpp"
 #include "chain/block_index.hpp"
-#include "chain/block.hpp"
-#include "chain/notifications.hpp"
 #include "chain/miner.hpp"
+#include "chain/token_manager.hpp"
+#include "chain/notifications.hpp"
+
+#include "chain/miner.hpp"
+#include "common/mock_bft_client.hpp"
+#include "common/test_util.hpp"
 #include "util/logging.hpp"
 #include "util/time.hpp"
 #include <filesystem>
@@ -31,7 +35,7 @@ static CBlockHeader CreateTestHeader(const uint256& hashPrevBlock,
     CBlockHeader header;
     header.nVersion = 1;
     header.hashPrevBlock = hashPrevBlock;
-    header.minerAddress.SetNull();
+    header.payloadRoot.SetNull();
     header.nTime = nTime;
     header.nBits = nBits;
     header.nNonce = 0;
@@ -347,7 +351,10 @@ TEST_CASE("Notifications - Miner template invalidation on tip change", "[notific
     validation::ValidationState state;
 
     // Create a miner
-    mining::CPUMiner miner(*params, chainstate);
+    test::TempDir test_dir{"unicity_notif_test"};
+    LocalTrustBaseManager tbm(test_dir, std::make_shared<MockBFTClient>());
+    mining::TokenManager token_manager(test_dir, chainstate);
+    mining::CPUMiner miner(*params, chainstate, tbm, token_manager);
 
     // Simulate miner generating template (sets internal state)
     // In real code, GetBlockTemplate() would be called by mining loop

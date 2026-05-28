@@ -26,7 +26,10 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
+#include <vector>
 
 // uint256 must be fully defined for std::optional<uint256>
 #include "util/uint.hpp"
@@ -105,6 +108,22 @@ std::optional<int64_t> SafeParseInt64(const std::string& str, int64_t min, int64
  *   IsValidHex("") -> false
  */
 bool IsValidHex(const std::string& str);
+
+/**
+ * Convert byte span to hexadecimal string
+ *
+ * @param data Byte span to convert
+ * @return Hexadecimal string
+ */
+std::string ToHex(std::span<const uint8_t> data);
+
+/**
+ * Parse hexadecimal string into byte vector
+ *
+ * @param hex Hexadecimal string
+ * @return Vector of bytes
+ */
+std::vector<uint8_t> ParseHex(std::string_view hex);
 
 /**
  * Parse 64-character hexadecimal hash string

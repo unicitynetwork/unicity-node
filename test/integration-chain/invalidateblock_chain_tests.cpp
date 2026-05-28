@@ -21,7 +21,7 @@ public:
     }
     uint256 MineBlock() {
         auto* tip = chainstate.GetTip(); REQUIRE(tip != nullptr);
-        CBlockHeader header; header.nVersion=1; header.hashPrevBlock=tip->GetBlockHash(); header.minerAddress=uint160(); header.nTime=tip->nTime+120; header.nBits=0x207fffff; header.nNonce=tip->nHeight+1;
+        CBlockHeader header; header.nVersion=1; header.hashPrevBlock=tip->GetBlockHash(); header.payloadRoot=uint256(); header.nTime=tip->nTime+120; header.nBits=0x207fffff; header.nNonce=tip->nHeight+1;
         header.hashRandomX.SetNull(); ValidationState st; REQUIRE(chainstate.ProcessNewBlockHeader(header, st)); return header.GetHash();
     }
     const CBlockIndex* Get(const uint256& h){ return chainstate.LookupBlockIndex(h); }
@@ -54,7 +54,7 @@ TEST_CASE("InvalidateBlock (chain) - Fork switching after invalidation", "[inval
     CBlockHeader b1;
     b1.nVersion = 1;
     b1.hashPrevBlock = fx.genesis_hash;
-    b1.minerAddress = uint160();
+    b1.payloadRoot = uint256();
     b1.nTime = fx.chainstate.GetTip()->nTime + 1000;
     b1.nBits = 0x207fffff;
     b1.nNonce = 9999;
@@ -65,7 +65,7 @@ TEST_CASE("InvalidateBlock (chain) - Fork switching after invalidation", "[inval
     CBlockHeader b2;
     b2.nVersion = 1;
     b2.hashPrevBlock = b1.GetHash();
-    b2.minerAddress = uint160();
+    b2.payloadRoot = uint256();
     b2.nTime = b1.nTime + 120;
     b2.nBits = 0x207fffff;
     b2.nNonce = 10000;
@@ -75,7 +75,7 @@ TEST_CASE("InvalidateBlock (chain) - Fork switching after invalidation", "[inval
     CBlockHeader b3;
     b3.nVersion = 1;
     b3.hashPrevBlock = b2.GetHash();
-    b3.minerAddress = uint160();
+    b3.payloadRoot = uint256();
     b3.nTime = b2.nTime + 120;
     b3.nBits = 0x207fffff;
     b3.nNonce = 10001;
@@ -129,7 +129,7 @@ TEST_CASE("InvalidateBlock (chain) - Invalidate non-active chain block", "[inval
     CBlockHeader b1;
     b1.nVersion = 1;
     b1.hashPrevBlock = fx.genesis_hash;
-    b1.minerAddress = uint160();
+    b1.payloadRoot = uint256();
     b1.nTime = fx.chainstate.GetTip()->nTime + 500;
     b1.nBits = 0x207fffff;
     b1.nNonce = 8888;
@@ -224,7 +224,7 @@ TEST_CASE("InvalidateBlock (chain) - Multiple forks, best fork wins", "[invalida
     CBlockHeader b1;
     b1.nVersion = 1;
     b1.hashPrevBlock = fx.genesis_hash;
-    b1.minerAddress = uint160();
+    b1.payloadRoot = uint256();
     b1.nTime = fx.chainstate.GetTip()->nTime + 500;
     b1.nBits = 0x207fffff;
     b1.nNonce = 7777;
@@ -236,7 +236,7 @@ TEST_CASE("InvalidateBlock (chain) - Multiple forks, best fork wins", "[invalida
     CBlockHeader c1;
     c1.nVersion = 1;
     c1.hashPrevBlock = fx.genesis_hash;
-    c1.minerAddress = uint160();
+    c1.payloadRoot = uint256();
     c1.nTime = fx.chainstate.GetTip()->nTime + 1000;
     c1.nBits = 0x207fffff;
     c1.nNonce = 6666;
@@ -246,7 +246,7 @@ TEST_CASE("InvalidateBlock (chain) - Multiple forks, best fork wins", "[invalida
     CBlockHeader c2;
     c2.nVersion = 1;
     c2.hashPrevBlock = c1.GetHash();
-    c2.minerAddress = uint160();
+    c2.payloadRoot = uint256();
     c2.nTime = c1.nTime + 120;
     c2.nBits = 0x207fffff;
     c2.nNonce = 6667;

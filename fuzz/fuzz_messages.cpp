@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <vector>
+#include <memory>
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     using namespace unicity::message;
@@ -20,8 +21,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
     std::unique_ptr<Message> msg;
 
-    // Create message based on type selector
-switch (msg_type % 9) {
+    // Create message based on type selector (8 supported types)
+    switch (msg_type % 8) {
         case 0:
             msg = std::make_unique<VersionMessage>();
             break;
@@ -41,12 +42,9 @@ switch (msg_type % 9) {
             msg = std::make_unique<GetAddrMessage>();
             break;
         case 6:
-            msg = std::make_unique<InvMessage>();
-            break;
-        case 7:
             msg = std::make_unique<GetHeadersMessage>();
             break;
-        case 8:
+        case 7:
             msg = std::make_unique<HeadersMessage>();
             break;
     }
@@ -69,16 +67,15 @@ switch (msg_type % 9) {
 
             // Create new message of same type and deserialize
             std::unique_ptr<Message> msg2;
-switch (msg_type % 9) {
+            switch (msg_type % 8) {
                 case 0: msg2 = std::make_unique<VersionMessage>(); break;
                 case 1: msg2 = std::make_unique<VerackMessage>(); break;
                 case 2: msg2 = std::make_unique<PingMessage>(); break;
                 case 3: msg2 = std::make_unique<PongMessage>(); break;
                 case 4: msg2 = std::make_unique<AddrMessage>(); break;
                 case 5: msg2 = std::make_unique<GetAddrMessage>(); break;
-                case 6: msg2 = std::make_unique<InvMessage>(); break;
-case 7: msg2 = std::make_unique<GetHeadersMessage>(); break;
-                case 8: msg2 = std::make_unique<HeadersMessage>(); break;
+                case 6: msg2 = std::make_unique<GetHeadersMessage>(); break;
+                case 7: msg2 = std::make_unique<HeadersMessage>(); break;
             }
 
             if (msg2) {

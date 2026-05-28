@@ -174,9 +174,10 @@ uint256 GetRandomXCommitment(const CBlockHeader& block, uint256* inHash) {
   CBlockHeader rx_blockHeader(block);
   rx_blockHeader.hashRandomX.SetNull();
 
-  // Calculate commitment
+  // Calculate commitment using only the 112-byte static header
+  const std::vector<uint8_t> bytes = rx_blockHeader.Serialize(false);
   char rx_cm[RANDOMX_HASH_SIZE];
-  randomx_calculate_commitment(&rx_blockHeader, sizeof(rx_blockHeader), rx_hash.data(), rx_cm);
+  randomx_calculate_commitment(bytes.data(), bytes.size(), rx_hash.data(), rx_cm);
 
   return uint256(std::vector<unsigned char>(rx_cm, rx_cm + sizeof(rx_cm)));
 }

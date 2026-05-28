@@ -17,6 +17,7 @@ namespace unicity {
 namespace chain {
 class ChainParams;
 class CBlockIndex;
+class TrustBaseManager;
 }  // namespace chain
 
 namespace validation {
@@ -92,7 +93,7 @@ private:
 // SECURITY: Does NOT validate that nBits is correct for chain position
 // Always call ContextualCheckBlockHeader() afterward to verify nBits is
 // expected value
-bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& params, ValidationState& state);
+bool CheckBlockHeader(const CBlockHeader& header, const chain::ChainParams& params, ValidationState& state, const chain::TrustBaseManager& tbm);
 
 // Validates header follows chain consensus rules
 // Checks: nBits matches expected difficulty (ASERT), timestamps, version

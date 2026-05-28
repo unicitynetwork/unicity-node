@@ -128,7 +128,7 @@ private:
 };
 
 // Helper to create genesis block
-CBlockHeader CreateGenesisBlock(uint32_t nTime, uint32_t nNonce, uint32_t nBits, int32_t nVersion = 1);
+CBlockHeader CreateGenesisBlock(uint32_t nTime, uint32_t nNonce, uint32_t nBits, std::span<const uint8_t> utb_cbor, int32_t nVersion = 1);
 
 }  // namespace chain
 }  // namespace unicity

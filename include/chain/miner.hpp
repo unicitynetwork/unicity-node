@@ -5,9 +5,11 @@
 
 #include "chain/block.hpp"
 #include "chain/chainparams.hpp"
+#include "chain/trust_base_manager.hpp"
 #include "util/uint.hpp"
 
 #include <atomic>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -28,18 +30,22 @@ class ChainstateManager;
 
 namespace mining {
 
+class TokenManager;
+
 // Block template for mining
 struct BlockTemplate {
   CBlockHeader header;
   uint32_t nBits;
   int nHeight;
   uint256 hashPrevBlock;
+  uint256 rewardTokenId;
 };
 
 // Single-threaded CPU miner for regtest testing
 class CPUMiner {
 public:
-  CPUMiner(const chain::ChainParams& params, validation::ChainstateManager& chainstate);
+  CPUMiner(const chain::ChainParams& params, validation::ChainstateManager& chainstate,
+           chain::TrustBaseManager& trust_base_manager, TokenManager& token_manager);
   ~CPUMiner();
 
   bool Start(int target_height = -1);  // -1 = mine forever
@@ -49,17 +55,6 @@ public:
   double GetHashrate() const;
   uint64_t GetTotalHashes() const { return total_hashes_.load(); }
   int GetBlocksFound() const { return blocks_found_.load(); }
-
-  // Set/get mining address (thread-safe, sticky across sessions)
-  void SetMiningAddress(const uint160& address) {
-    std::lock_guard<std::mutex> lock(address_mutex_);
-    mining_address_ = address;
-  }
-
-  uint160 GetMiningAddress() const {
-    std::lock_guard<std::mutex> lock(address_mutex_);
-    return mining_address_;
-  }
 
   // Invalidate current block template (called when chain tip changes)
   void InvalidateTemplate() { template_invalidated_.store(true); }
@@ -75,9 +70,8 @@ private:
 
   const chain::ChainParams& params_;
   validation::ChainstateManager& chainstate_;
-
-  uint160 mining_address_;
-  mutable std::mutex address_mutex_;
+  chain::TrustBaseManager& trust_base_manager_;
+  TokenManager& token_manager_;
 
   std::atomic<bool> mining_{false};
   std::atomic<uint64_t> total_hashes_{0};

@@ -1167,3 +1167,70 @@ TEST_CASE("VarInt - Non-Canonical Encoding Rejection (CVE-2018-17144 class)", "[
         }
     }
 }
+
+// ============================================================================
+// HEADERS Message Tests
+// ============================================================================
+
+TEST_CASE("HeadersMessage - Serialization Round Trip", "[network][message][headers][unit]") {
+    HeadersMessage msg;
+
+    // Create a mock header with a 32-byte payload (Token ID hash)
+    CBlockHeader h1;
+    h1.nVersion = 1;
+    h1.vPayload.assign(32, 0xAA);
+    msg.headers.push_back(h1);
+
+    // Create a mock header with a larger payload (Token ID + UTB)
+    CBlockHeader h2;
+    h2.nVersion = 2;
+    h2.vPayload.assign(100, 0xBB);
+    msg.headers.push_back(h2);
+
+    auto data = msg.serialize();
+
+    HeadersMessage msg2;
+    REQUIRE(msg2.deserialize(data.data(), data.size()));
+    REQUIRE(msg2.headers.size() == 2);
+
+    REQUIRE(msg2.headers[0].nVersion == 1);
+    REQUIRE(msg2.headers[0].vPayload.size() == 32);
+    REQUIRE(msg2.headers[0].vPayload[0] == 0xAA);
+
+    REQUIRE(msg2.headers[1].nVersion == 2);
+    REQUIRE(msg2.headers[1].vPayload.size() == 100);
+    REQUIRE(msg2.headers[1].vPayload[0] == 0xBB);
+}
+
+TEST_CASE("HeadersMessage - Empty", "[network][message][headers][unit]") {
+    HeadersMessage msg;
+    auto data = msg.serialize();
+    REQUIRE(data.size() == 1); // Just varint 0
+
+    HeadersMessage msg2;
+    REQUIRE(msg2.deserialize(data.data(), data.size()));
+    REQUIRE(msg2.headers.empty());
+}
+
+TEST_CASE("HeadersMessage - Security Limits", "[network][message][headers][dos][unit]") {
+    SECTION("Block size too small (< 112)") {
+        MessageSerializer s;
+        s.write_varint(1); // 1 header
+        s.write_varint(100); // Invalid size (too small)
+        std::vector<uint8_t> dummy(100, 0);
+        s.write_bytes(dummy);
+
+        HeadersMessage msg;
+        REQUIRE_FALSE(msg.deserialize(s.data().data(), s.data().size()));
+    }
+
+    SECTION("Block size too large") {
+        MessageSerializer s;
+        s.write_varint(1);
+        s.write_varint(MAX_PROTOCOL_MESSAGE_LENGTH + 1);
+
+        HeadersMessage msg;
+        REQUIRE_FALSE(msg.deserialize(s.data().data(), s.data().size()));
+    }
+}
+

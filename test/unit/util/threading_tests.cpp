@@ -9,10 +9,13 @@
 #include "chain/randomx_pow.hpp"
 #include "chain/pow.hpp"
 #include "util/arith_uint256.hpp"
+#include "util/hash.hpp"
 #include <randomx.h>
 #include <thread>
 #include <vector>
 #include <atomic>
+
+#include "mock_trust_base_manager.hpp"
 
 using namespace unicity;
 
@@ -22,7 +25,8 @@ TEST_CASE("ChainstateManager thread safety", "[validation][threading]") {
 
     // Create test environment
     auto params = chain::ChainParams::CreateRegTest();
-    validation::ChainstateManager chainstate(*params);
+    test::MockTrustBaseManager mock_tbm;
+    validation::ChainstateManager chainstate(*params, mock_tbm);
 
     // Initialize with genesis
     CBlockHeader genesis = params->GenesisBlock();
@@ -53,6 +57,14 @@ TEST_CASE("ChainstateManager thread safety", "[validation][threading]") {
                     // Create a block extending current tip
                     CBlockHeader header;
                     header.nVersion = 1;
+                    
+                    uint256 token_id;
+                    token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+                    uint256 leaf_0 = SingleHash(token_id);
+                    uint256 leaf_1 = uint256::ZERO;
+                    header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+                    header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
                     header.nTime = static_cast<uint32_t>(std::time(nullptr)) + thread_id * 100 + i;
                     header.nBits = params->GenesisBlock().nBits;
                     header.nNonce = 0;
@@ -71,7 +83,8 @@ TEST_CASE("ChainstateManager thread safety", "[validation][threading]") {
                     while (true) {
                         CBlockHeader tmp(header);
                         tmp.hashRandomX.SetNull();
-                        randomx_calculate_hash(vmWrapper->vm, &tmp, sizeof(tmp), rx_hash);
+                        auto serialized = tmp.Serialize(false);
+                        randomx_calculate_hash(vmWrapper->vm, serialized.data(), serialized.size(), rx_hash);
                         randomx_hash = uint256(std::vector<unsigned char>(rx_hash, rx_hash + RANDOMX_HASH_SIZE));
 
                         if (UintToArith256(crypto::GetRandomXCommitment(header, &randomx_hash)) <=
@@ -144,6 +157,14 @@ chain::CBlockIndex* pindex = chainstate.AcceptBlockHeader(header, state);
             for (int i = 0; i < 3; i++) {  // Reduced from 10 to 3 for faster test with interpreter mode
                 CBlockHeader header;
                 header.nVersion = 1;
+                
+                uint256 token_id;
+                token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+                uint256 leaf_0 = SingleHash(token_id);
+                uint256 leaf_1 = uint256::ZERO;
+                header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+                header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
                 header.nTime = static_cast<uint32_t>(std::time(nullptr)) + i;
                 header.nBits = params->GenesisBlock().nBits;
                 header.nNonce = 0;
@@ -195,6 +216,14 @@ chain::CBlockIndex* pindex = chainstate.AcceptBlockHeader(header, state);
         for (int i = 0; i < 2; i++) {  // Reduced from 20 to 2 for faster test with interpreter mode
             CBlockHeader header;
             header.nVersion = 1;
+            
+            uint256 token_id;
+            token_id.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+            uint256 leaf_0 = SingleHash(token_id);
+            uint256 leaf_1 = uint256::ZERO;
+            header.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+            header.vPayload.assign(leaf_0.begin(), leaf_0.end());
+
             header.nTime = static_cast<uint32_t>(std::time(nullptr)) + i;
             header.nBits = params->GenesisBlock().nBits;
             header.nNonce = 0;

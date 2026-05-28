@@ -150,7 +150,7 @@ public:
         consensus.nNetworkExpirationGracePeriod = 0;
         consensus.nSuspiciousReorgDepth = 100;
         nDefaultPort = 29591;
-        genesis = chain::CreateGenesisBlock(1296688602, 2, 0x207fffff, 1);
+        genesis = chain::CreateGenesisBlock(1296688602, 2, 0x207fffff, chain::GlobalChainParams::Get().GenesisBlock().GetUTB(), 1);
         consensus.hashGenesisBlock = genesis.GetHash();
     }
 };

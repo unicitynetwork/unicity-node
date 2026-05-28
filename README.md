@@ -30,7 +30,8 @@ Unicity adopts proven architectural patterns from Bitcoin Core for P2P networkin
 **Unicity-Specific Design:**
 - **Proof-of-work**: RandomX (ASIC-resistant) instead of SHA256d
 - **Difficulty adjustment**: ASERT per-block instead of 2016-block retargeting
-- **Block headers**: 100 bytes (includes miner address + RandomX hash)
+- **Block headers**: 112 bytes fixed header + variable-length payload
+- **Block payload**: Contains mandatory 32-byte Miner Reward Token ID hash and optional BFT Trust Base snapshot
 - **Target spacing**: 2.4 hours instead of 10 minutes
 - **No transaction layer**: No mempool, UTXO set, or transaction processing
 
@@ -122,6 +123,15 @@ See [test/README.md](test/README.md) for testing documentation.
 # Note: internal CPU miner is designed for testing and uses a single thread
 ./build/bin/unicity-cli startmining
 ```
+
+### BFT Integration
+
+Running on **testnet** and **mainnet** requires BFT integration to verify the genesis block and sync trust bases.
+- **Default address**: `--bftaddr=http://127.0.0.1:25866`
+- **Verification**: If the BFT node is not accessible at the specified address, genesis block verification will fail and the node will not start.
+- **Disabling**: BFT integration can be explicitly disabled by setting the address to an empty string: `--bftaddr=""`.
+- **Regtest**: In `regtest` mode, BFT integration is **disabled by default**. To enable it, you must explicitly provide an address, e.g., `--bftaddr=http://127.0.0.1:25866`.
+
 
 ### Using Docker
 

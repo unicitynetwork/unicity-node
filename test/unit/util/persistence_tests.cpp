@@ -64,7 +64,7 @@ TEST_CASE("BlockManager persistence", "[persistence][chain]") {
             CBlockHeader header;
             header.nVersion = 1;
             header.hashPrevBlock = prev_header.GetHash();
-            header.minerAddress.SetHex("0000000000000000000000000000000000000001");
+            header.payloadRoot.SetHex("0000000000000000000000000000000000000001");
             header.nTime = genesis.nTime + i * 600;  // 10 minutes apart
             header.nBits = genesis.nBits;
             header.nNonce = i;
@@ -151,7 +151,7 @@ TEST_CASE("BlockManager persistence", "[persistence][chain]") {
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock = genesis.GetHash();
-        header.minerAddress.SetHex("0000000000000000000000000000000000000001");
+        header.payloadRoot.SetHex("0000000000000000000000000000000000000001");
         header.nTime = genesis.nTime + 600;
         header.nBits = genesis.nBits;
         header.nNonce = 1;

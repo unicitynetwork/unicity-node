@@ -125,7 +125,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock = prev_hash;
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x00000001;  // Impossible difficulty
         header.nNonce = 0;
@@ -156,7 +156,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -190,7 +190,7 @@ public:
         CBlockHeader header1;
         header1.nVersion = 1;
         header1.hashPrevBlock = prev_hash;
-        header1.minerAddress.SetNull();
+        header1.payloadRoot.SetNull();
         header1.nTime = std::time(nullptr);
         header1.nBits = 0x207fffff;
         header1.nNonce = 1;
@@ -199,7 +199,7 @@ public:
         CBlockHeader header2;
         header2.nVersion = 1;
         header2.hashPrevBlock.SetNull();  // Wrong! Doesn't connect to header1
-        header2.minerAddress.SetNull();
+        header2.payloadRoot.SetNull();
         header2.nTime = std::time(nullptr);
         header2.nBits = 0x207fffff;
         header2.nNonce = 2;
@@ -329,8 +329,8 @@ public:
         std::cout << "\n=== TEST: Length Less Than Actual ===" << std::endl;
         std::cout << "Sending message with declared length < actual payload..." << std::endl;
 
-        // Build a 100-byte payload but declare only 10 bytes
-        std::vector<uint8_t> payload(100, 0x41);  // 'A' bytes
+        // Build a 112-byte payload but declare only 10 bytes
+        std::vector<uint8_t> payload(112, 0x41);  // 'A' bytes
         std::vector<uint8_t> hdr_bytes(protocol::MESSAGE_HEADER_SIZE);
 
         uint32_t magic = protocol::magic::REGTEST;
@@ -339,7 +339,7 @@ public:
         const char* cmd = "headers";
         std::memset(hdr_bytes.data() + 4, 0, 12);
         std::memcpy(hdr_bytes.data() + 4, cmd, strlen(cmd));
-        // Declare only 10 bytes (less than actual 100)
+        // Declare only 10 bytes (less than actual 112)
         uint32_t len = 10;
         std::memcpy(hdr_bytes.data() + 16, &len, 4);
         // Checksum of the DECLARED portion only
@@ -349,7 +349,7 @@ public:
 
         std::vector<uint8_t> full;
         full.insert(full.end(), hdr_bytes.begin(), hdr_bytes.end());
-        full.insert(full.end(), payload.begin(), payload.end());  // Send full 100 bytes
+        full.insert(full.end(), payload.begin(), payload.end());  // Send full 112 bytes
         asio::write(socket_, asio::buffer(full));
 
         std::cout << "Expected: Node reads declared length, extra bytes interpreted as next message" << std::endl;
@@ -403,7 +403,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -505,14 +505,14 @@ public:
         std::cout << "\n=== TEST: Partial VERSION ===" << std::endl;
         std::cout << "Sending incomplete VERSION message then closing..." << std::endl;
 
-        // Build a partial VERSION - just first 20 bytes of what should be ~100 bytes
-        std::vector<uint8_t> partial_payload(20, 0x00);
+        // Build a partial VERSION - just first 32 bytes of what should be ~112 bytes
+        std::vector<uint8_t> partial_payload(32, 0x00);
         // Set version field
         int32_t version = protocol::PROTOCOL_VERSION;
         std::memcpy(partial_payload.data(), &version, 4);
 
         // Build header with correct length for full message but only send partial
-        protocol::MessageHeader hdr(protocol::magic::REGTEST, protocol::commands::VERSION, 100);  // Claim 100 bytes
+        protocol::MessageHeader hdr(protocol::magic::REGTEST, protocol::commands::VERSION, 112);  // Claim 112 bytes
         uint256 hash = Hash(partial_payload);
         std::memcpy(hdr.checksum.data(), hash.begin(), 4);
         auto hdr_bytes = message::serialize_header(hdr);
@@ -704,7 +704,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr) + 3600;  // 1 hour in future (exceeds 10 min limit)
         header.nBits = 0x207fffff;  // Regtest difficulty
         header.nNonce = 0;
@@ -727,7 +727,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = 0;  // Invalid - timestamp zero
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -750,7 +750,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0;  // Invalid - impossible difficulty
         header.nNonce = 0;
@@ -773,7 +773,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0xFFFFFFFF;  // Invalid - trivial difficulty
         header.nNonce = 0;
@@ -797,7 +797,7 @@ public:
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x207fffff;
         header.nNonce = 12345;
@@ -828,7 +828,7 @@ public:
         // Create header A pointing to a fake "B" hash
         CBlockHeader headerA;
         headerA.nVersion = 1;
-        headerA.minerAddress.SetNull();
+        headerA.payloadRoot.SetNull();
         headerA.nTime = std::time(nullptr);
         headerA.nBits = 0x207fffff;
         headerA.nNonce = 1;
@@ -837,7 +837,7 @@ public:
         // Create header B
         CBlockHeader headerB;
         headerB.nVersion = 1;
-        headerB.minerAddress.SetNull();
+        headerB.payloadRoot.SetNull();
         headerB.nTime = std::time(nullptr);
         headerB.nBits = 0x207fffff;
         headerB.nNonce = 2;
@@ -870,7 +870,7 @@ public:
         CBlockHeader header;
         header.nVersion = 0;  // Invalid version
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -893,7 +893,7 @@ public:
         CBlockHeader header;
         header.nVersion = -1;  // Negative version (will be interpreted as large unsigned)
         header.hashPrevBlock.SetNull();
-        header.minerAddress.SetNull();
+        header.payloadRoot.SetNull();
         header.nTime = std::time(nullptr);
         header.nBits = 0x207fffff;
         header.nNonce = 0;
@@ -927,7 +927,7 @@ public:
                 std::memcpy(random_prev.begin() + j * 8, &r, 8);
             }
             header.hashPrevBlock = random_prev;
-            header.minerAddress.SetNull();
+            header.payloadRoot.SetNull();
             header.nTime = std::time(nullptr);
             header.nBits = 0x207fffff;
             header.nNonce = static_cast<uint32_t>(i);
@@ -1239,9 +1239,9 @@ public:
     // Attack: PING with oversized payload
     void test_ping_oversized() {
         std::cout << "\n=== TEST: PING Oversized ===" << std::endl;
-        std::cout << "Sending PING with 100-byte payload (should be 8)..." << std::endl;
+        std::cout << "Sending PING with 112-byte payload (should be 8)..." << std::endl;
 
-        std::vector<uint8_t> payload(100, 0x42);  // 100 bytes instead of 8
+        std::vector<uint8_t> payload(112, 0x42);  // 112 bytes instead of 8
         send_raw_message(protocol::commands::PING, payload);
 
         std::cout << "Expected: Node should reject or ignore" << std::endl;

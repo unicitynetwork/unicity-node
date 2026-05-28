@@ -1271,7 +1271,7 @@ TEST_CASE("CheckProofOfWork - Zero epoch duration protection", "[pow][security][
         CBlockHeader header;
         header.nVersion = 1;
         header.hashPrevBlock = uint256();
-        header.minerAddress = uint160();
+        header.payloadRoot = uint256();
         header.nTime = 1000000;
         header.nBits = 0x207fffff; // powLimit for regtest
         header.nNonce = 0;

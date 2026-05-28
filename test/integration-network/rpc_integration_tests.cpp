@@ -4,16 +4,25 @@
 #include "catch_amalgamated.hpp"
 #include "chain/chainparams.hpp"
 #include "chain/chainstate_manager.hpp"
+#include "chain/token_manager.hpp"
+#include "chain/trust_base_manager.hpp"
+#include "infra/test_access.hpp"
 #include "network/network_manager.hpp"
 #include "network/rpc_client.hpp"
 #include "network/rpc_server.hpp"
 #include "util/logging.hpp"
 #include <nlohmann/json.hpp>
+#include "common/mock_bft_client.hpp"
+#include "common/mock_trust_base_manager.hpp"
+#include "common/test_util.hpp"
 
 #include <thread>
 #include <chrono>
 #include <filesystem>
 #include <atomic>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 using namespace unicity;
 using namespace std::chrono_literals;
@@ -23,29 +32,30 @@ namespace {
 // Test fixture for RPC integration tests
 class RPCTestFixture {
 public:
-    RPCTestFixture() {
-        // Create temporary directory for test
-        temp_dir_ = std::filesystem::temp_directory_path() / "rpc_test";
-        std::filesystem::create_directories(temp_dir_);
-        socket_path_ = (temp_dir_ / "test.sock").string();
+    RPCTestFixture() : temp_dir_("rpc_test") {
+        socket_path_ = (temp_dir_.path / "test.sock").string();
 
-        // Initialize components
+        // Initialize components in dependency order. tbm_ must precede
+        // chainstate_ because ChainstateManager binds a reference to *tbm_
+        // at construction — using *tbm_ before tbm_ is set would be UB.
         auto params_unique = chain::ChainParams::CreateRegTest();
         params_ = params_unique.release();  // Take ownership as raw pointer
-        chainstate_ = new validation::ChainstateManager(*params_);
+        tbm_ = new chain::LocalTrustBaseManager(temp_dir_, std::make_shared<test::MockBFTClient>());
+        chainstate_ = new validation::ChainstateManager(*params_, *tbm_);
+        token_manager_ = new mining::TokenManager(temp_dir_, *chainstate_);
 
         // Create NetworkManager config for regtest
         network::NetworkManager::Config net_config;
         net_config.network_magic = params_->GetNetworkMagic();
         net_config.listen_port = params_->GetDefaultPort();
-        net_config.datadir = temp_dir_.string();
+        net_config.datadir = temp_dir_.path.string();
         net_config.io_threads = 0;  // External io_context for tests
 
         network_ = new network::NetworkManager(*chainstate_, net_config);
 
         // Create RPC server (without miner for basic tests)
         server_ = new rpc::RPCServer(
-            socket_path_, *chainstate_, *network_, nullptr, *params_);
+            socket_path_, *chainstate_, *network_, nullptr, *token_manager_, *tbm_, *params_);
     }
 
     ~RPCTestFixture() {
@@ -59,9 +69,12 @@ public:
         util::LogManager::SetLogLevel("off");
         delete server_;
         delete network_;
+        delete token_manager_;
+        delete tbm_;
         delete chainstate_;
         delete params_;
-        std::filesystem::remove_all(temp_dir_);
+        // temp_dir_ destructor (member) removes the directory after the
+        // managers above have been deleted.
     }
 
     bool StartServer() {
@@ -81,11 +94,15 @@ public:
     }
 
 private:
-    std::filesystem::path temp_dir_;
+    // Declared first so it is destroyed last, after the explicit deletes in
+    // the destructor body (which release objects that hold paths into it).
+    test::TempDir temp_dir_;
     std::string socket_path_;
     chain::ChainParams* params_;
     validation::ChainstateManager* chainstate_;
     network::NetworkManager* network_;
+    chain::TrustBaseManager* tbm_;
+    mining::TokenManager* token_manager_;
     rpc::RPCServer* server_;
 };
 
@@ -298,24 +315,25 @@ TEST_CASE("RPC: Socket Path Validation", "[rpc][integration][validation]") {
         long_path = "/tmp/" + long_path + ".sock";
 
         auto params_ptr = chain::ChainParams::CreateRegTest();
-        auto temp_dir = std::filesystem::temp_directory_path() / "rpc_long_path_test";
-        std::filesystem::create_directories(temp_dir);
+        test::TempDir temp_dir{"rpc_long_path_test"};
 
-        validation::ChainstateManager chainstate(*params_ptr);
+        test::MockTrustBaseManager mock_tbm;
+        validation::ChainstateManager chainstate(*params_ptr, mock_tbm);
 
         network::NetworkManager::Config net_config;
         net_config.network_magic = params_ptr->GetNetworkMagic();
         net_config.listen_port = params_ptr->GetDefaultPort();
-        net_config.datadir = temp_dir.string();
+        net_config.datadir = temp_dir.path.string();
         net_config.io_threads = 0;
         network::NetworkManager network(chainstate, net_config);
 
-        rpc::RPCServer server(long_path, chainstate, network, nullptr, *params_ptr);
+        chain::LocalTrustBaseManager tbm(temp_dir, std::make_shared<test::MockBFTClient>());
+        mining::TokenManager token_manager(temp_dir, chainstate);
+
+        rpc::RPCServer server(long_path, chainstate, network, nullptr, token_manager, tbm, *params_ptr);
 
         // Should fail to start due to path too long
         REQUIRE_FALSE(server.Start());
-
-        std::filesystem::remove_all(temp_dir);
     }
 }
 
@@ -779,17 +797,17 @@ TEST_CASE("RPC Commands: submitblock", "[rpc][integration][mining]") {
     SECTION("Invalid hex length returns error") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        // 100 bytes = 200 hex chars expected
-        std::string response = client.ExecuteCommand("submitblock", {"abcd1234"});
+        // 112 bytes header + 32 bytes payload = 144 bytes = 288 hex chars expected
+        std::string response = client.ExecuteCommand("submitblock", {"abcd1234", "0000000000000000000000000000000000000000000000000000000000000000"});
         REQUIRE(response.find("error") != std::string::npos);
-        REQUIRE(response.find("length") != std::string::npos);
+        REQUIRE(response.find("288 hex chars") != std::string::npos);
     }
 
     SECTION("Invalid hex characters returns error") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        // 200 chars but with invalid hex (contains 'g')
-        std::string invalid_hex(200, 'g');
+        // 224 chars but with invalid hex (contains 'g')
+        std::string invalid_hex(224, 'g');
         std::string response = client.ExecuteCommand("submitblock", {invalid_hex});
         REQUIRE(response.find("error") != std::string::npos);
     }
@@ -879,6 +897,75 @@ TEST_CASE("RPC Commands: addnode", "[rpc][integration][network]") {
         std::string response = client.ExecuteCommand("addnode", {"127.0.0.1:9590", "remove"});
         REQUIRE_FALSE(response.empty());
     }
+}
+
+// Verifies that addnode actually waits for the asynchronous transport
+// outcome before replying — i.e. it does not immediately return success
+// while a connect attempt is still in flight. With a non-routable target
+// (TEST-NET-3, RFC 5737) and a shrunk transport connect timeout the call
+// must surface a connection error after measurably waiting.
+TEST_CASE("RPC Commands: addnode onetry waits for transport result, returns error",
+          "[rpc][integration][network]") {
+    test::TempDir temp_dir{"rpc_addnode_timeout_test"};
+    auto socket_path = (temp_dir.path / "test.sock").string();
+
+    auto params = chain::ChainParams::CreateRegTest();
+    auto tbm = std::make_shared<chain::LocalTrustBaseManager>(
+        temp_dir, std::make_shared<test::MockBFTClient>());
+    auto chainstate = std::make_unique<validation::ChainstateManager>(*params, *tbm);
+    auto token_manager = std::make_unique<mining::TokenManager>(temp_dir, *chainstate);
+
+    network::NetworkManager::Config net_config;
+    net_config.network_magic = params->GetNetworkMagic();
+    net_config.listen_port = 0;
+    net_config.listen_enabled = false;  // don't try to bind a port
+    net_config.enable_nat = false;
+    net_config.io_threads = 1;          // own thread runs the io_context
+    net_config.datadir = temp_dir.path.string();
+    auto network = std::make_unique<network::NetworkManager>(*chainstate, net_config);
+    REQUIRE(network->start());
+
+    auto server = std::make_unique<rpc::RPCServer>(
+        socket_path, *chainstate, *network, nullptr, *token_manager, *tbm, *params);
+    REQUIRE(server->Start());
+    std::this_thread::sleep_for(100ms);
+
+    // Shrink the transport's per-attempt connect timeout so the test does
+    // not have to wait the default 10s. The same override is used by
+    // real_transport_tests.cpp against the same TEST-NET-3 destination.
+    constexpr auto transport_timeout = std::chrono::milliseconds(500);
+    test::RealTransportTestAccess::SetConnectTimeout(transport_timeout);
+
+    rpc::RPCClient client(socket_path);
+    REQUIRE_FALSE(client.Connect().has_value());
+
+    auto t0 = std::chrono::steady_clock::now();
+    std::string response = client.ExecuteCommand("addnode", {"203.0.113.1:65530", "onetry"});
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0);
+
+    test::RealTransportTestAccess::ResetConnectTimeout();
+
+    INFO("addnode response: " << response);
+    INFO("elapsed: " << elapsed.count() << "ms");
+
+    REQUIRE_FALSE(response.empty());
+    // Must not claim a successful connection.
+    REQUIRE(response.find("\"success\": true") == std::string::npos);
+    // Must surface a connection error (TransportFailed or Timeout —
+    // either is acceptable; both prove synchronous wait reached the user).
+    REQUIRE(response.find("error") != std::string::npos);
+    // Synchronous wait actually happened; the call did not short-circuit
+    // to a fake success before the transport produced a result. Lower
+    // bound is well below the transport timeout to absorb scheduling
+    // jitter on busy CI machines.
+    REQUIRE(elapsed >= std::chrono::milliseconds(100));
+    // And the wait is bounded — we should not hang for many seconds.
+    REQUIRE(elapsed < std::chrono::seconds(5));
+
+    server->Stop();
+    network->stop();
+    util::LogManager::SetLogLevel("off");
 }
 
 TEST_CASE("RPC Commands: setban", "[rpc][integration][network]") {
@@ -1264,4 +1351,63 @@ TEST_CASE("RPC Commands: getpeerinfo extended fields", "[rpc][integration][netwo
     // Note: Testing lastsend/lastrecv with actual peers would require
     // setting up peer connections, which is done in dedicated peer tests.
     // Here we just verify the RPC command executes without errors.
+}
+
+TEST_CASE("RPC Server: Request ID Mirroring", "[rpc][integration]") {
+    RPCTestFixture fixture;
+    REQUIRE(fixture.StartServer());
+
+    // Give server time to bind
+    std::this_thread::sleep_for(100ms);
+
+    auto send_raw_http = [&](const std::string& body) -> std::string {
+        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) return "";
+
+        struct sockaddr_un addr;
+        std::memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        std::strncpy(addr.sun_path, fixture.GetSocketPath().c_str(), sizeof(addr.sun_path) - 1);
+
+        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+            close(fd);
+            return "";
+        }
+
+        std::string request = "POST / HTTP/1.1\r\n"
+                              "Content-Length: " + std::to_string(body.length()) + "\r\n"
+                              "\r\n" + body;
+        
+        send(fd, request.c_str(), request.length(), 0);
+
+        char buffer[4096];
+        ssize_t received = recv(fd, buffer, sizeof(buffer) - 1, 0);
+        close(fd);
+
+        if (received <= 0) return "";
+        buffer[received] = '\0';
+        return std::string(buffer);
+    };
+
+    SECTION("Mirrors integer ID") {
+        std::string body = "{\"method\":\"getinfo\",\"id\":42}";
+        std::string response = send_raw_http(body);
+        REQUIRE(!response.empty());
+        REQUIRE(response.find("\"id\":42") != std::string::npos);
+    }
+
+    SECTION("Mirrors string ID") {
+        std::string body = "{\"method\":\"getinfo\",\"id\":\"test-id\"}";
+        std::string response = send_raw_http(body);
+        REQUIRE(!response.empty());
+        REQUIRE(response.find("\"id\":\"test-id\"") != std::string::npos);
+    }
+
+    SECTION("Defaults to 0 if ID missing") {
+        // technically does not follow rpc spec, but matches original implementation
+        std::string body = "{\"method\":\"getinfo\"}";
+        std::string response = send_raw_http(body);
+        REQUIRE(!response.empty());
+        REQUIRE(response.find("\"id\":0") != std::string::npos);
+    }
 }

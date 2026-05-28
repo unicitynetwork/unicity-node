@@ -5,9 +5,11 @@
 #include "chain/block_manager.hpp"
 
 #include "chain/block.hpp"
+#include "chain/trust_base.hpp"
 #include "util/arith_uint256.hpp"
 #include "util/files.hpp"
 #include "util/logging.hpp"
+#include "util/string_parsing.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -143,6 +145,27 @@ CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& header) {
   pindex->m_block_hash = hash;
   pindex->pprev = pprev;
 
+  // Extract BFT epoch from payload if present
+  if (pindex->vPayload.size() > 32) {
+    try {
+      const std::span<const uint8_t> utb_cbor(pindex->vPayload.data() + 32, pindex->vPayload.size() - 32);
+      const auto utb = RootTrustBaseV1::FromCBOR(utb_cbor);
+      pindex->bftEpoch = utb.epoch;
+    } catch (const std::exception& e) {
+      LOG_CHAIN_ERROR("Failed to parse UTB from block {} payload: {}", hash.ToString().substr(0, 16), e.what());
+      // in case of any errors, carry forward the previous bftEpoch
+      if (pprev) {
+        pindex->bftEpoch = pprev->bftEpoch;
+      }
+    }
+  } else if (pprev) {
+    // If no new UTB, carry forward the previous one
+    pindex->bftEpoch = pprev->bftEpoch;
+  } else {
+    // Genesis block must contain the genesis UTB (epoch 1)
+    LOG_CHAIN_ERROR("Genesis block {} missing UTB in payload", hash.ToString().substr(0, 16));
+  }
+
   // Set height and chainwork (immutable after insertion - used for std::set ordering)
   if (pprev) {
     pindex->nHeight = pprev->nHeight + 1;
@@ -196,15 +219,17 @@ bool BlockManager::Save(const std::string& filepath) const {
 
       // Header fields
       block_data["version"] = block_index->nVersion;
-      block_data["miner_address"] = block_index->minerAddress.ToString();
+      block_data["payload_root"] = block_index->payloadRoot.ToString();
       block_data["time"] = block_index->nTime;
       block_data["bits"] = block_index->nBits;
       block_data["nonce"] = block_index->nNonce;
       block_data["hash_randomx"] = block_index->hashRandomX.ToString();
+      block_data["payload"] = util::ToHex(block_index->vPayload);
 
       // Chain metadata
       block_data["height"] = block_index->nHeight;
       block_data["chainwork"] = block_index->nChainWork.GetHex();
+      block_data["bft_epoch"] = block_index->bftEpoch;
 
       // Canonical status representation
       {
@@ -324,8 +349,8 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
 
     // Required fields for each block entry 
     static const std::vector<std::string> required_fields = {
-        "hash", "prev_hash", "version", "miner_address", "time",
-        "bits", "nonce",     "hash_randomx", "height", "chainwork", "status"};
+        "hash", "prev_hash", "version", "payload_root", "time",
+        "bits", "nonce",     "hash_randomx", "height", "chainwork", "status", "bft_epoch"};
 
     for (const auto& block_data : blocks) {
       // Validate required fields are present
@@ -352,12 +377,17 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
       // Create header
       CBlockHeader header;
       header.nVersion = block_data["version"].get<int32_t>();
-      header.minerAddress.SetHex(block_data["miner_address"].get<std::string>());
+      header.payloadRoot.SetHex(block_data["payload_root"].get<std::string>());
       header.nTime = block_data["time"].get<uint32_t>();
       header.nBits = block_data["bits"].get<uint32_t>();
       header.nNonce = block_data["nonce"].get<uint32_t>();
       header.hashRandomX.SetHex(block_data["hash_randomx"].get<std::string>());
       header.hashPrevBlock = prev_hash;
+
+      // Load payload if present
+      if (block_data.contains("payload") && block_data["payload"].is_string()) {
+        header.vPayload = util::ParseHex(block_data["payload"].get<std::string>());
+      }
 
       // Verify reconstructed header hash matches stored hash
       // This detects corruption, tampering, or missing fields in the JSON
@@ -390,6 +420,7 @@ LoadResult BlockManager::Load(const std::string& filepath, const uint256& expect
       // Restore metadata
       pindex->nHeight = block_data["height"].get<int>();
       pindex->nChainWork.SetHex(block_data["chainwork"].get<std::string>());
+      pindex->bftEpoch = block_data["bft_epoch"].get<uint64_t>();
 
       // Store for second pass
       block_map[hash] = {pindex, prev_hash};

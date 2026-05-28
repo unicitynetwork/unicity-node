@@ -32,7 +32,7 @@ CBlockHeader CreateRandomHeader(uint32_t nTime) {
     header.hashRandomX.SetNull();
 
     for (int j = 0; j < 20; j++) {
-        header.minerAddress.data()[j] = byte_dist(gen);
+        header.payloadRoot.data()[j] = byte_dist(gen);
     }
 
     return header;

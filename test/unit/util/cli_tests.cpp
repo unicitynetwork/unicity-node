@@ -2,6 +2,7 @@
 // Distributed under the MIT software license
 
 #include "catch_amalgamated.hpp"
+#include "common/test_util.hpp"
 #include "network/rpc_client.hpp"
 #include "util/files.hpp"
 #include <filesystem>
@@ -65,30 +66,24 @@ TEST_CASE("CLI: RPC Client socket path validation", "[cli][rpc]") {
     }
 
     SECTION("Connect fails with connection error for non-existent socket") {
-        auto test_dir = std::filesystem::temp_directory_path() / "unicity_cli_test";
-        std::filesystem::remove_all(test_dir);
-        std::filesystem::create_directories(test_dir);
+        test::TempDir test_dir{"unicity_cli_test"};
 
-        std::string socket_path = (test_dir / "nonexistent.sock").string();
+        std::string socket_path = (test_dir.path / "nonexistent.sock").string();
         rpc::RPCClient client(socket_path);
         auto error = client.Connect();
 
         REQUIRE(error.has_value());
         REQUIRE(error->find("Cannot connect") != std::string::npos);
         REQUIRE(error->find(socket_path) != std::string::npos);
-
-        std::filesystem::remove_all(test_dir);
     }
 
     SECTION("Connect succeeds for already connected client") {
         // This tests the "already connected" path
         // We can't easily test actual connection without a running server,
         // but we can verify the client doesn't crash on multiple Connect() calls
-        auto test_dir = std::filesystem::temp_directory_path() / "unicity_cli_test2";
-        std::filesystem::remove_all(test_dir);
-        std::filesystem::create_directories(test_dir);
+        test::TempDir test_dir{"unicity_cli_test2"};
 
-        std::string socket_path = (test_dir / "test.sock").string();
+        std::string socket_path = (test_dir.path / "test.sock").string();
         rpc::RPCClient client(socket_path);
 
         // First connect will fail (no server)
@@ -98,8 +93,6 @@ TEST_CASE("CLI: RPC Client socket path validation", "[cli][rpc]") {
         // Second connect should also fail, but not crash
         auto error2 = client.Connect();
         REQUIRE(error2.has_value());
-
-        std::filesystem::remove_all(test_dir);
     }
 }
 

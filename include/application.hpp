@@ -6,7 +6,9 @@
 #include "chain/block_manager.hpp"
 #include "chain/chainparams.hpp"
 #include "chain/miner.hpp"
+#include "chain/trust_base_manager.hpp"
 #include "network/network_manager.hpp"
+#include "chain/token_manager.hpp"
 #include "chain/notifications.hpp"
 #include "network/rpc_server.hpp"
 #include "util/files.hpp"
@@ -42,6 +44,9 @@ struct AppConfig {
   // Logging
   bool verbose = false;
 
+  // BFT RPC address
+  std::string bftaddr = "http://127.0.0.1:25866";
+
   AppConfig() : datadir(util::get_default_datadir()) {
     // Default data directory set via initialization list
     // Set network parameters based on chain type
@@ -70,6 +75,7 @@ public:
   validation::ChainstateManager &chainstate_manager() {
     return *chainstate_manager_;
   }
+  chain::TrustBaseManager &trust_base_manager() { return *trust_base_manager_; }
   const chain::ChainParams &chain_params() const { return *chain_params_; }
 
   // Status
@@ -90,6 +96,8 @@ private:
   // Components (initialized in order)
   std::unique_ptr<chain::ChainParams> chain_params_;
   std::unique_ptr<validation::ChainstateManager> chainstate_manager_;
+  std::unique_ptr<chain::TrustBaseManager> trust_base_manager_;
+  std::unique_ptr<mining::TokenManager> token_manager_;
   std::unique_ptr<network::NetworkManager> network_manager_;
   std::unique_ptr<mining::CPUMiner> miner_;
   std::unique_ptr<rpc::RPCServer> rpc_server_;
@@ -105,6 +113,7 @@ private:
   bool init_datadir();
   bool init_randomx();
   bool init_chain();
+  bool init_trustbase();
   bool init_network();
   bool init_rpc();
 

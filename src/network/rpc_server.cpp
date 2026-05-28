@@ -21,6 +21,7 @@
 #include "chain/chainparams.hpp"
 #include "chain/chainstate_manager.hpp"
 #include "chain/miner.hpp"
+#include "chain/token_manager.hpp"
 #include "chain/notifications.hpp"
 #include "chain/pow.hpp"
 #include "chain/timedata.hpp"
@@ -29,6 +30,8 @@
 #include "network/network_manager.hpp"
 #include "network/addr_relay_manager.hpp"
 #include "network/connection_manager.hpp"
+#include "network/real_transport.hpp"
+#include "util/hash.hpp"
 #include "util/logging.hpp"
 #include "util/netaddress.hpp"
 #include "util/string_parsing.hpp"
@@ -43,6 +46,7 @@
 #include <cstring>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 #include <thread>
 
 #include <asio/ip/address.hpp>
@@ -54,6 +58,73 @@
 
 namespace unicity {
 namespace rpc {
+
+namespace {
+
+// Map a ConnectionResult to a human-readable RPC error message.
+std::string_view ConnectionResultMessage(const network::ConnectionResult r) {
+  switch (r) {
+    case network::ConnectionResult::Success:
+      return "Connected";
+    case network::ConnectionResult::NotRunning:
+      return "Network is not running";
+    case network::ConnectionResult::AddressBanned:
+      return "Address is banned";
+    case network::ConnectionResult::AddressDiscouraged:
+      return "Address is discouraged";
+    case network::ConnectionResult::AlreadyConnected:
+      return "Already connected (or connection attempt already in flight)";
+    case network::ConnectionResult::NoSlotsAvailable:
+      return "No outbound connection slots available";
+    case network::ConnectionResult::TransportFailed:
+      return "Transport connect failed";
+    case network::ConnectionResult::Timeout:
+      return "Connection attempt timed out";
+    default:
+      return "Unknown connection error";
+  }
+}
+
+// Bound on how long the addnode RPC will block waiting for the async TCP
+// handshake to resolve. Derived from the transport's own connect timeout
+// plus a small slack so the transport always reports a real result before
+// this fires; this is a defensive outer bound in case the underlying
+// callback never fires. Bumping DEFAULT_CONNECT_TIMEOUT in real_transport.hpp
+// keeps the relationship correct without touching this file.
+//
+// Late-completion note: if the transport resolves after this timeout fires,
+// the peer can still be added to the registry while the RPC reports
+// Timeout; a subsequent retry would then return AlreadyConnected. Low
+// severity in practice given the slack, but operators should know that a
+// Timeout result does not strictly preclude a successful late connection.
+constexpr auto ADDNODE_WAIT_TIMEOUT =
+    network::RealTransportConnection::DEFAULT_CONNECT_TIMEOUT + std::chrono::seconds(2);
+
+// Initiate an outbound manual connection and synchronously wait for the
+// async TCP handshake outcome. Returns a JSON-formatted RPC response.
+std::string AddNodeSyncConnect(network::NetworkManager& network_manager,
+                               const protocol::NetworkAddress& addr,
+                               std::string_view success_message) {
+  auto result = network_manager.connect_to_sync(
+      addr,
+      network::NetPermissionFlags::Manual | network::NetPermissionFlags::NoBan,
+      network::ConnectionType::MANUAL,
+      /*bypass_slot_limit=*/false,
+      ADDNODE_WAIT_TIMEOUT);
+
+  if (result != network::ConnectionResult::Success) {
+    return util::JsonError(std::string(ConnectionResultMessage(result)));
+  }
+
+  std::ostringstream oss;
+  oss << "{\n"
+      << "  \"success\": true,\n"
+      << "  \"message\": \"" << success_message << "\"\n"
+      << "}\n";
+  return oss.str();
+}
+
+}  // namespace
 
 // Helper class to manage chain tip notification subscription for long-polling
 class RPCServer::LongPollNotifier {
@@ -74,12 +145,16 @@ RPCServer::RPCServer(
     validation::ChainstateManager& chainstate_manager,
     network::NetworkManager& network_manager,
     mining::CPUMiner* miner,
+    mining::TokenManager& token_manager,
+    chain::TrustBaseManager& trust_base_manager,
     const chain::ChainParams& params,
     std::function<void()> shutdown_callback)
     : socket_path_(socket_path)
     , chainstate_manager_(chainstate_manager)
     , network_manager_(network_manager)
     , miner_(miner)
+    , token_manager_(token_manager)
+    , trust_base_manager_(trust_base_manager)
     , params_(params)
     , shutdown_callback_(shutdown_callback)
     , server_fd_(-1)
@@ -206,7 +281,7 @@ bool RPCServer::Start() {
   }
 
   // Listen for connections (backlog handles burst of concurrent connections)
-  if (listen(server_fd_, 20) < 0) {
+  if (listen(server_fd_, SOMAXCONN) < 0) {
     LOG_ERROR("Failed to listen on RPC socket");
     close(server_fd_);
     server_fd_ = -1;
@@ -395,9 +470,15 @@ void RPCServer::HandleClient(int client_fd) {
   // Use proper JSON parsing
   std::string method;
   std::vector<std::string> params;
+  std::string request_id = "0";
 
   try {
     nlohmann::json j = nlohmann::json::parse(request);
+
+    // Extract ID (mirror in response)
+    if (j.contains("id")) {
+      request_id = j["id"].dump();
+    }
 
     // Extract method
     if (!j.contains("method") || !j["method"].is_string()) {
@@ -448,14 +529,14 @@ void RPCServer::HandleClient(int client_fd) {
     if (result.is_error) {
       // Error: use extracted error_message as the JSON-RPC error string
       json_rpc_response = "{\"result\":null,\"error\":\""
-          + util::EscapeJSONString(result.error_message) + "\",\"id\":0}\n";
+          + util::EscapeJSONString(result.error_message) + "\",\"id\":" + request_id + "}\n";
     } else {
       // Success: embed handler JSON as the JSON-RPC result value
       std::string trimmed = result.json;
       while (!trimmed.empty() && (trimmed.back() == '\n' || trimmed.back() == '\r')) {
         trimmed.pop_back();
       }
-      json_rpc_response = "{\"result\":" + trimmed + ",\"error\":null,\"id\":0}\n";
+      json_rpc_response = "{\"result\":" + trimmed + ",\"error\":null,\"id\":" + request_id + "}\n";
     }
 
     std::string http_response = "HTTP/1.1 200 OK\r\n"
@@ -737,6 +818,7 @@ std::string RPCServer::HandleGetBlockHeader(const std::vector<std::string>& para
       << "  \"difficulty\": " << difficulty << ",\n"
       << "  \"chainwork\": \"" << index->nChainWork.GetHex() << "\",\n"
       << "  \"previousblockhash\": \"" << (index->pprev ? index->pprev->GetBlockHash().GetHex() : "null") << "\",\n"
+      << "  \"payload_root\": \"" << index->payloadRoot.GetHex() << "\",\n"
       << "  \"rx_hash\": \"" << index->hashRandomX.GetHex() << "\"";
 
   // nextblockhash (if block has a successor on the active chain)
@@ -985,20 +1067,9 @@ std::string RPCServer::HandleAddNode(const std::vector<std::string>& params) {
     // Connect to the node with Manual + NoBan permissions (bypasses slot limits and
     // protects from ban/discourage/eviction — admin explicitly trusts this peer)
     LOG_INFO("RPC addnode: calling connect_to() with Manual|NoBan flags");
-    auto result = network_manager_.connect_to(addr, network::NetPermissionFlags::Manual | network::NetPermissionFlags::NoBan);
-    LOG_INFO("RPC addnode: connect_to() returned result");
-    if (result != network::ConnectionResult::Success) {
-      LOG_INFO("RPC addnode: connect_to() failed");
-      return util::JsonError("Failed to connect to node");
-    }
-
-    std::ostringstream oss;
-    oss << "{\n"
-        << "  \"success\": true,\n"
-        << "  \"message\": \"Connection initiated to " << node_addr << "\"\n"
-        << "}\n";
-    return oss.str();
-  } else if (command == "remove") {
+    return AddNodeSyncConnect(network_manager_, addr, "Connected to " + node_addr);
+  }
+  if (command == "remove") {
     // Find peer by address:port and disconnect (thread-safe)
     int peer_id = network_manager_.peer_manager().find_peer_by_address(host, port);
 
@@ -1020,7 +1091,8 @@ std::string RPCServer::HandleAddNode(const std::vector<std::string>& params) {
         << "  \"message\": \"Disconnected from " << node_addr << "\"\n"
         << "}\n";
     return oss.str();
-  } else if (command == "onetry") {
+  }
+  if (command == "onetry") {
     // Same as "add" but semantic indication it's temporary
     // Note: In regtest/testing, all connections are effectively temporary
     // since tests control the network topology explicitly
@@ -1042,24 +1114,12 @@ std::string RPCServer::HandleAddNode(const std::vector<std::string>& params) {
     }
 
     // Connect with Manual + NoBan permissions (bypasses slot limits and
-    // protects from ban/discourage/eviction — admin explicitly trusts this peer)
-    LOG_INFO("RPC addnode onetry: calling connect_to() with Manual|NoBan flags");
-    auto result = network_manager_.connect_to(addr, network::NetPermissionFlags::Manual | network::NetPermissionFlags::NoBan);
-    LOG_INFO("RPC addnode onetry: connect_to() returned result");
-    if (result != network::ConnectionResult::Success) {
-      LOG_INFO("RPC addnode onetry: connect_to() failed");
-      return util::JsonError("Failed to connect to node");
-    }
-
-    std::ostringstream oss;
-    oss << "{\n"
-        << "  \"success\": true,\n"
-        << "  \"message\": \"Connection initiated to " << node_addr << " (onetry)\"\n"
-        << "}\n";
-    return oss.str();
-  } else {
-    return util::JsonError("Unknown command (use 'add', 'remove', or 'onetry')");
+    // protects from ban/discourage/eviction — admin explicitly trusts this peer).
+    // Same synchronous wait semantics as the "add" path.
+    LOG_INFO("RPC addnode onetry: calling connect_to() (Manual|NoBan), awaiting result");
+    return AddNodeSyncConnect(network_manager_, addr, "Connected to " + node_addr + " (onetry)");
   }
+  return util::JsonError("Unknown command (use 'add', 'remove', or 'onetry')");
 }
 
 std::string RPCServer::HandleSetNetworkActive(const std::vector<std::string>& params) {
@@ -1593,23 +1653,6 @@ std::string RPCServer::HandleStartMining(const std::vector<std::string>& params)
     return util::JsonError("Already mining");
   }
 
-  // Parse optional mining address parameter
-  // Note: Address is "sticky" - if not provided, previous address is retained
-  if (!params.empty()) {
-    const std::string& address_str = params[0];
-
-    // Validate address is 40 hex characters (160 bits / 4 bits per hex char)
-    // Validate length and hex characters using centralized helper
-    if (address_str.length() != 40 || !util::IsValidHex(address_str)) {
-      return util::JsonError("Invalid mining address (must be 40 hex characters)");
-    }
-
-    // Parse and set mining address (persists across subsequent calls)
-    uint160 mining_address;
-    mining_address.SetHex(address_str);
-    miner_->SetMiningAddress(mining_address);
-  }
-
   bool started = miner_->Start();
   if (!started) {
     return util::JsonError("Failed to start mining");
@@ -1618,8 +1661,7 @@ std::string RPCServer::HandleStartMining(const std::vector<std::string>& params)
   std::ostringstream oss;
   oss << "{\n"
       << "  \"mining\": true,\n"
-      << "  \"message\": \"Mining started\",\n"
-      << "  \"address\": \"" << miner_->GetMiningAddress().GetHex() << "\"\n"
+      << "  \"message\": \"Mining started\"\n"
       << "}\n";
   return oss.str();
 }
@@ -1664,23 +1706,6 @@ std::string RPCServer::HandleGenerate(const std::vector<std::string>& params) {
   }
 
   int num_blocks = *num_blocks_opt;
-
-  // Parse optional mining address parameter (second parameter)
-  // Note: Address is "sticky" - if not provided, previous address is retained
-  if (params.size() >= 2) {
-    const std::string& address_str = params[1];
-
-    // Validate address is 40 hex characters (160 bits / 4 bits per hex char)
-    // Validate length and hex characters using centralized helper
-    if (address_str.length() != 40 || !util::IsValidHex(address_str)) {
-      return util::JsonError("Invalid mining address (must be 40 hex characters)");
-    }
-
-    // Parse and set mining address (persists across subsequent calls)
-    uint160 mining_address;
-    mining_address.SetHex(address_str);
-    miner_->SetMiningAddress(mining_address);
-  }
 
   // Get starting height and calculate target
   const chain::CBlockIndex* start_tip = chainstate_manager_.GetTip();
@@ -1777,7 +1802,7 @@ std::string RPCServer::HandleSubmitHeader(const std::vector<std::string>& params
   }
 
   if (params.empty()) {
-    return util::JsonError("Missing parameter: hex-encoded 100-byte header");
+    return util::JsonError("Missing parameter: hex-encoded 112-byte header");
   }
 
   const std::string& hex = params[0];
@@ -1796,14 +1821,14 @@ std::string RPCServer::HandleSubmitHeader(const std::vector<std::string>& params
     }
   }
 
-  // Expect exactly 200 hex chars (100 bytes)
-  if (hex.size() != 200) {
-    return util::JsonError("Invalid header length (expect 200 hex chars)");
+  // Expect at least 224 hex chars (112 bytes)
+  if (hex.size() < 224 || hex.size() % 2 != 0) {
+    return util::JsonError("Invalid header length (expect at least 224 hex chars)");
   }
 
   // Decode hex
   std::vector<uint8_t> bytes;
-  bytes.reserve(100);
+  bytes.reserve(hex.size() / 2);
   auto hex_to_nibble = [](char c) -> int {
     if (c >= '0' && c <= '9')
       return c - '0';
@@ -1823,13 +1848,18 @@ std::string RPCServer::HandleSubmitHeader(const std::vector<std::string>& params
     bytes.push_back(static_cast<uint8_t>((hi << 4) | lo));
   }
 
-  if (bytes.size() != CBlockHeader::HEADER_SIZE) {
+  if (bytes.size() < CBlockHeader::HEADER_SIZE) {
     return util::JsonError("Decoded header size mismatch");
   }
 
   CBlockHeader header;
   if (!header.Deserialize(bytes.data(), bytes.size())) {
     return util::JsonError("Failed to deserialize header");
+  }
+
+  // add default reward token id to payload
+  if (bytes.size() == CBlockHeader::HEADER_SIZE) {
+    header.vPayload.assign(32, 0);
   }
 
   // Apply temporary PoW-skip hook if requested (regtest-only)
@@ -2105,65 +2135,99 @@ std::string RPCServer::HandleGetBlockTemplate(const std::vector<std::string>& pa
     cur_time = tip->nTime + 1;
   }
 
+  // Calculate reward token
+  const uint256 rewardTokenId = token_manager_.GenerateNextTokenId();
+  const uint256 leaf_0 = SingleHash(std::span(rewardTokenId.begin(), rewardTokenId.size()));
+  uint256 leaf_1 = uint256::ZERO;
+  std::vector<uint8_t> utb_cbor;
+
+  // try to load the latest trust base from BFT node,
+  // if unsuccessful then log warning and proceed without
+  // including new UTB to block
+  uint64_t target_epoch = tip->bftEpoch + 1;
+  try {
+    trust_base_manager_.SyncToEpoch(target_epoch);
+    if (auto utb = trust_base_manager_.GetTrustBase(target_epoch)) {
+      utb_cbor = utb->ToCBOR();
+      leaf_1 = SingleHash(utb_cbor);
+    }
+  } catch (const std::exception& e) {
+    LOG_CHAIN_WARN("RPC: Failed to sync trust bases to epoch {}: {}", target_epoch, e.what());
+  }
+
+  const uint256 payload_root = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+
+  // Construct full payload (leaf_0 + UTB_cbor)
+  // This is what the miner actually puts into the block
+  std::vector<uint8_t> payload_bytes;
+  payload_bytes.assign(leaf_0.begin(), leaf_0.end());
+  if (!utb_cbor.empty()) {
+    payload_bytes.insert(payload_bytes.end(), utb_cbor.begin(), utb_cbor.end());
+  }
+
   // Build response JSON
   // Note: This is a simplified getblocktemplate for headers-only chain
   // No transactions, coinbase, or merkle tree - just header fields
   std::ostringstream oss;
   oss << "{\n"
-      << "  \"version\": 1,\n"
+      << "  \"version\": " << 1 << ",\n"
       << "  \"previousblockhash\": \"" << prev_hash.GetHex() << "\",\n"
       << "  \"height\": " << next_height << ",\n"
       << "  \"curtime\": " << cur_time << ",\n"
       << "  \"bits\": \"" << std::hex << std::setw(8) << std::setfill('0') << next_bits << std::dec << "\",\n"
       << "  \"target\": \"" << target.GetHex() << "\",\n"
+      << "  \"payloadroot\": \"" << payload_root.GetHex() << "\",\n"
       << "  \"longpollid\": \"" << prev_hash.GetHex() << "\",\n"
       << "  \"mintime\": " << (tip->nTime + 1) << ",\n"
       << "  \"mutable\": [\"time\", \"nonce\"],\n"
       << "  \"noncerange\": \"00000000ffffffff\",\n"
-      << "  \"capabilities\": [\"longpoll\"]\n"
+      << "  \"capabilities\": [\"longpoll\"],\n"
+      << "  \"payload\": \"" << util::ToHex(payload_bytes) << "\",\n"
+      << "  \"rewardtokenid\": \"" << rewardTokenId.GetHex() << "\"\n"
       << "}\n";
 
   return oss.str();
 }
 
 std::string RPCServer::HandleSubmitBlock(const std::vector<std::string>& params) {
-  if (params.empty()) {
-    return util::JsonError("Missing hex-encoded block header");
+  if (params.size() < 2) {
+    return util::JsonError("Usage: submitblock <blockhex> <rewardtokenid>");
   }
 
   const std::string& hex = params[0];
 
-  // Expect exactly 200 hex chars (100 bytes)
-  if (hex.size() != 200) {
-    return util::JsonError("Invalid header length (expect 200 hex chars for 100-byte header)");
+  // Expect at least 288 hex chars (112-byte header + 32-byte minimum payload)
+  if (hex.size() < 288) {
+    return util::JsonError("Invalid block data (expect at least 288 hex chars for 112-byte header + 32-byte payload)");
   }
 
   // Decode hex to bytes
-  auto hex_to_nibble = [](char c) -> int {
-    if (c >= '0' && c <= '9')
-      return c - '0';
-    if (c >= 'a' && c <= 'f')
-      return 10 + (c - 'a');
-    if (c >= 'A' && c <= 'F')
-      return 10 + (c - 'A');
-    return -1;
-  };
-
   std::vector<uint8_t> bytes;
-  bytes.reserve(100);
-  for (size_t i = 0; i < hex.size(); i += 2) {
-    int hi = hex_to_nibble(hex[i]);
-    int lo = hex_to_nibble(hex[i + 1]);
-    if (hi < 0 || lo < 0) {
-      return util::JsonError("Invalid hex character in header");
-    }
-    bytes.push_back(static_cast<uint8_t>((hi << 4) | lo));
+  try {
+    bytes = util::ParseHex(hex);
+  } catch (...) {
+    return util::JsonError("Invalid hex character in block data");
   }
 
   // Deserialize block header
   CBlockHeader header;
   if (!header.Deserialize(bytes.data(), bytes.size())) {
     return util::JsonError("Failed to deserialize block header");
+  }
+
+  // Sanity check: Token ID must match the payload
+  auto id_opt = util::SafeParseHash(params[1]);
+  if (!id_opt) {
+    return util::JsonError("Invalid rewardtokenid format (must be 64 hex characters)");
+  }
+  uint256 rewardTokenId = *id_opt;
+
+  if (header.vPayload.size() < 32) {
+    return util::JsonError("block payload too small to contain reward token ID commitment");
+  }
+  const uint256 providedHash = SingleHash(std::span(rewardTokenId.begin(), rewardTokenId.size()));
+  if (std::memcmp(providedHash.begin(), header.vPayload.data(), 32) != 0) {
+    return util::JsonError("rewardtokenid does not match the commitment in the block payload");
   }
 
   // Validate and process the block
@@ -2179,6 +2243,9 @@ std::string RPCServer::HandleSubmitBlock(const std::vector<std::string>& params)
         << "}\n";
     return oss.str();
   }
+
+  // Record reward token ID on success
+  token_manager_.RecordReward(header.GetHash(), rewardTokenId);
 
   // Success - return block hash
   std::ostringstream oss;

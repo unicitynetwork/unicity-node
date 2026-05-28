@@ -55,7 +55,7 @@ public:
     void EnableStalling(bool enabled) { stalling_enabled_ = enabled; }
 
     // Mine a block privately (don't broadcast) - for selfish mining attacks
-    uint256 MineBlockPrivate(const std::string& miner_address = "selfish_miner");
+    uint256 MineBlockPrivate(const std::string& payload_root = "selfish_miner");
 
     // Broadcast a previously mined private block to a specific peer
     void BroadcastBlock(const uint256& block_hash, int peer_node_id);

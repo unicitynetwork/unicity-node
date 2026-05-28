@@ -3,6 +3,7 @@
 // Comprehensive tests for atomic file writes (files.cpp)
 
 #include "catch_amalgamated.hpp"
+#include "common/test_util.hpp"
 #include "util/files.hpp"
 #include <filesystem>
 #include <fstream>
@@ -14,14 +15,12 @@
 using namespace unicity::util;
 
 TEST_CASE("Atomic write: O_NOFOLLOW symlink protection", "[atomic_write][security]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_atomic_test_symlink";
-    std::filesystem::remove_all(test_dir);
-    std::filesystem::create_directories(test_dir);
+    unicity::test::TempDir test_dir{"unicity_atomic_test_symlink"};
 
 #if defined(__APPLE__) || defined(__linux__)
     SECTION("Write fails if target is a symlink") {
-        auto real_file = test_dir / "real.txt";
-        auto symlink = test_dir / "link.txt";
+        auto real_file = test_dir.path / "real.txt";
+        auto symlink = test_dir.path / "link.txt";
 
         // Create a real file and symlink to it
         {
@@ -45,18 +44,14 @@ TEST_CASE("Atomic write: O_NOFOLLOW symlink protection", "[atomic_write][securit
         REQUIRE(content == "original");
     }
 #endif
-
-    std::filesystem::remove_all(test_dir);
 }
 
 TEST_CASE("Atomic write: File permissions", "[atomic_write][permissions]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_atomic_test_perms";
-    std::filesystem::remove_all(test_dir);
-    std::filesystem::create_directories(test_dir);
+    unicity::test::TempDir test_dir{"unicity_atomic_test_perms"};
 
 #if defined(__APPLE__) || defined(__linux__)
     SECTION("File created with specified mode") {
-        auto file_path = test_dir / "test_0600.dat";
+        auto file_path = test_dir.path / "test_0600.dat";
         std::vector<uint8_t> data = {0x01, 0x02, 0x03};
 
         REQUIRE(atomic_write_file(file_path, data, 0600));
@@ -67,7 +62,7 @@ TEST_CASE("Atomic write: File permissions", "[atomic_write][permissions]") {
     }
 
     SECTION("File created with default mode 0644") {
-        auto file_path = test_dir / "test_default.dat";
+        auto file_path = test_dir.path / "test_default.dat";
         std::vector<uint8_t> data = {0x01, 0x02, 0x03};
 
         REQUIRE(atomic_write_file(file_path, data));
@@ -78,17 +73,13 @@ TEST_CASE("Atomic write: File permissions", "[atomic_write][permissions]") {
         REQUIRE((st.st_mode & 0400) != 0); // At least owner-read
     }
 #endif
-
-    std::filesystem::remove_all(test_dir);
 }
 
 TEST_CASE("Atomic write: Large files", "[atomic_write][large]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_atomic_test_large";
-    std::filesystem::remove_all(test_dir);
-    std::filesystem::create_directories(test_dir);
+    unicity::test::TempDir test_dir{"unicity_atomic_test_large"};
 
     SECTION("Write 1MB file successfully") {
-        auto file_path = test_dir / "large.dat";
+        auto file_path = test_dir.path / "large.dat";
         std::vector<uint8_t> data(1024 * 1024, 0xAA);
 
         REQUIRE(atomic_write_file(file_path, data));
@@ -99,7 +90,7 @@ TEST_CASE("Atomic write: Large files", "[atomic_write][large]") {
     }
 
     SECTION("Write 10MB file successfully") {
-        auto file_path = test_dir / "very_large.dat";
+        auto file_path = test_dir.path / "very_large.dat";
         std::vector<uint8_t> data(10 * 1024 * 1024, 0xBB);
 
         REQUIRE(atomic_write_file(file_path, data));
@@ -107,7 +98,7 @@ TEST_CASE("Atomic write: Large files", "[atomic_write][large]") {
     }
 
     SECTION("Read fails on file larger than 100MB limit") {
-        auto file_path = test_dir / "huge.dat";
+        auto file_path = test_dir.path / "huge.dat";
 
         // Create a file larger than 100MB using direct file I/O
         {
@@ -124,17 +115,13 @@ TEST_CASE("Atomic write: Large files", "[atomic_write][large]") {
         auto result = read_file(file_path);
         REQUIRE(result.empty());
     }
-
-    std::filesystem::remove_all(test_dir);
 }
 
 TEST_CASE("Atomic write: Overwrite safety", "[atomic_write][overwrite]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_atomic_test_overwrite";
-    std::filesystem::remove_all(test_dir);
-    std::filesystem::create_directories(test_dir);
+    unicity::test::TempDir test_dir{"unicity_atomic_test_overwrite"};
 
     SECTION("Overwriting existing file is atomic") {
-        auto file_path = test_dir / "overwrite.dat";
+        auto file_path = test_dir.path / "overwrite.dat";
 
         // Write initial data
         std::vector<uint8_t> data1 = {0x01, 0x02, 0x03};
@@ -150,7 +137,7 @@ TEST_CASE("Atomic write: Overwrite safety", "[atomic_write][overwrite]") {
     }
 
     SECTION("File is never in partial state (simulated)") {
-        auto file_path = test_dir / "atomic.dat";
+        auto file_path = test_dir.path / "atomic.dat";
 
         // Write initial data
         std::vector<uint8_t> data1(1000, 0xAA);
@@ -165,18 +152,14 @@ TEST_CASE("Atomic write: Overwrite safety", "[atomic_write][overwrite]") {
         REQUIRE(result.size() == data2.size());
         REQUIRE(result == data2);
     }
-
-    std::filesystem::remove_all(test_dir);
 }
 
 TEST_CASE("Atomic write: Temp file uniqueness", "[atomic_write][tempfile]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_atomic_test_temp";
-    std::filesystem::remove_all(test_dir);
-    std::filesystem::create_directories(test_dir);
+    unicity::test::TempDir test_dir{"unicity_atomic_test_temp"};
 
     SECTION("Multiple concurrent writes create unique temp files") {
-        auto file1 = test_dir / "file1.dat";
-        auto file2 = test_dir / "file2.dat";
+        auto file1 = test_dir.path / "file1.dat";
+        auto file2 = test_dir.path / "file2.dat";
 
         std::vector<uint8_t> data1 = {0x01};
         std::vector<uint8_t> data2 = {0x02};
@@ -197,14 +180,14 @@ TEST_CASE("Atomic write: Temp file uniqueness", "[atomic_write][tempfile]") {
     }
 
     SECTION("No temp files left behind after successful write") {
-        auto file_path = test_dir / "clean.dat";
+        auto file_path = test_dir.path / "clean.dat";
         std::vector<uint8_t> data = {0xAB, 0xCD};
 
         REQUIRE(atomic_write_file(file_path, data));
 
         // Check for temp files
         int temp_file_count = 0;
-        for (const auto& entry : std::filesystem::directory_iterator(test_dir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(test_dir.path)) {
             if (entry.path().filename().string().find(".tmp.") != std::string::npos) {
                 temp_file_count++;
             }
@@ -212,69 +195,57 @@ TEST_CASE("Atomic write: Temp file uniqueness", "[atomic_write][tempfile]") {
 
         REQUIRE(temp_file_count == 0);
     }
-
-    std::filesystem::remove_all(test_dir);
 }
 
 TEST_CASE("Atomic write: Readonly directory", "[atomic_write][readonly]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_atomic_test_readonly";
-    std::filesystem::remove_all(test_dir);
-    std::filesystem::create_directories(test_dir);
+    unicity::test::TempDir test_dir{"unicity_atomic_test_readonly"};
 
 #if defined(__APPLE__) || defined(__linux__)
     SECTION("Write fails on readonly directory") {
         // Skip test when running as root (root bypasses file permissions)
         if (geteuid() == 0) {
             WARN("Skipping readonly test when running as root");
-            std::filesystem::remove_all(test_dir);
             return;
         }
 
         // Make directory readonly
-        std::filesystem::permissions(test_dir,
+        std::filesystem::permissions(test_dir.path,
                                       std::filesystem::perms::owner_read |
                                       std::filesystem::perms::owner_exec,
                                       std::filesystem::perm_options::replace);
 
-        auto file_path = test_dir / "fail.dat";
+        auto file_path = test_dir.path / "fail.dat";
         std::vector<uint8_t> data = {0x01};
 
         bool result = atomic_write_file(file_path, data);
         REQUIRE_FALSE(result);
 
-        // Restore permissions for cleanup
-        std::filesystem::permissions(test_dir,
+        // Restore permissions so TempDir's destructor can remove the dir.
+        std::filesystem::permissions(test_dir.path,
                                       std::filesystem::perms::owner_all,
                                       std::filesystem::perm_options::replace);
     }
 #endif
-
-    std::filesystem::remove_all(test_dir);
 }
 
 TEST_CASE("Atomic write: Directory creation", "[atomic_write][mkdir]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_atomic_test_mkdir";
-    std::filesystem::remove_all(test_dir);
+    unicity::test::TempDir test_dir{"unicity_atomic_test_mkdir"};
 
     SECTION("Creates parent directories automatically") {
-        auto file_path = test_dir / "sub1" / "sub2" / "file.dat";
+        auto file_path = test_dir.path / "sub1" / "sub2" / "file.dat";
         std::vector<uint8_t> data = {0x42};
 
         REQUIRE(atomic_write_file(file_path, data));
-        REQUIRE(std::filesystem::exists(test_dir / "sub1" / "sub2"));
+        REQUIRE(std::filesystem::exists(test_dir.path / "sub1" / "sub2"));
         REQUIRE(read_file(file_path) == data);
     }
-
-    std::filesystem::remove_all(test_dir);
 }
 
 TEST_CASE("Atomic write: String API", "[atomic_write][string]") {
-    auto test_dir = std::filesystem::temp_directory_path() / "unicity_atomic_test_string";
-    std::filesystem::remove_all(test_dir);
-    std::filesystem::create_directories(test_dir);
+    unicity::test::TempDir test_dir{"unicity_atomic_test_string"};
 
     SECTION("Write and read string data") {
-        auto file_path = test_dir / "text.txt";
+        auto file_path = test_dir.path / "text.txt";
         std::string text = "Hello, World! This is a test string with special chars: \n\t\r\0";
 
         REQUIRE(atomic_write_file(file_path, text));
@@ -284,13 +255,11 @@ TEST_CASE("Atomic write: String API", "[atomic_write][string]") {
     }
 
     SECTION("Write empty string") {
-        auto file_path = test_dir / "empty.txt";
+        auto file_path = test_dir.path / "empty.txt";
         std::string empty = "";
 
         REQUIRE(atomic_write_file(file_path, empty));
         REQUIRE(std::filesystem::exists(file_path));
         REQUIRE(std::filesystem::file_size(file_path) == 0);
     }
-
-    std::filesystem::remove_all(test_dir);
 }

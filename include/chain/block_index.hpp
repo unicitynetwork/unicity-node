@@ -91,13 +91,19 @@ public:
   // Cumulative work up to and including this block
   arith_uint256 nChainWork{};
 
+  // BFT epoch number of the last included UTB (or the epoch of currently included UTB in the current block)
+  uint64_t bftEpoch{1};
+
   // Block header fields (stored inline)
   int32_t nVersion{0};
-  uint160 minerAddress{};  // Default-initialized (SetNull())
+  uint256 payloadRoot{};  // Default-initialized (SetNull())
   uint32_t nTime{0};
   uint32_t nBits{0};
   uint32_t nNonce{0};
   uint256 hashRandomX{};  // Default-initialized (SetNull())
+
+  // Appended variable-length payload
+  std::vector<uint8_t> vPayload{};
 
   // Time when we first learned about this block (for relay decisions)
   // Blocks received recently (< MAX_BLOCK_RELAY_AGE) are relayed to peers
@@ -108,8 +114,8 @@ public:
   CBlockIndex() = default;
 
   explicit CBlockIndex(const CBlockHeader& block)
-      : nVersion{block.nVersion}, minerAddress{block.minerAddress}, nTime{block.nTime}, nBits{block.nBits},
-        nNonce{block.nNonce}, hashRandomX{block.hashRandomX} {}
+      : nVersion{block.nVersion}, payloadRoot{block.payloadRoot}, nTime{block.nTime}, nBits{block.nBits},
+        nNonce{block.nNonce}, hashRandomX{block.hashRandomX}, vPayload{block.vPayload} {}
 
   // Returns block hash
   [[nodiscard]] const uint256& GetBlockHash() const noexcept { return m_block_hash; }
@@ -120,11 +126,12 @@ public:
     block.nVersion = nVersion;
     if (pprev)
       block.hashPrevBlock = pprev->GetBlockHash();
-    block.minerAddress = minerAddress;
+    block.payloadRoot = payloadRoot;
     block.nTime = nTime;
     block.nBits = nBits;
     block.nNonce = nNonce;
     block.hashRandomX = hashRandomX;
+    block.vPayload = vPayload;
     return block;
   }
 

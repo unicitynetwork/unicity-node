@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent / "test_framework"))
 from test_node import TestNode
 
 
-def generate_chain(node, num_blocks, miner_address="0000000000000000000000000000000000000000"):
+def generate_chain(node, num_blocks, payload_root="0000000000000000000000000000000000000000000000000000000000000000"):
     """Generate a chain of blocks on a node, in batches if needed."""
     print(f"  Generating {num_blocks} blocks...")
     
@@ -37,7 +37,7 @@ def generate_chain(node, num_blocks, miner_address="0000000000000000000000000000
     
     while remaining > 0:
         to_generate = min(remaining, batch_size)
-        node.generate(to_generate, miner_address, timeout=300)
+        node.generate(to_generate, payload_root, timeout=300)
         remaining -= to_generate
         generated += to_generate
         if remaining > 0:

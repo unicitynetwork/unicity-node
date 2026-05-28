@@ -19,6 +19,7 @@ namespace unicity {
 
 // Forward declarations
 namespace chain {
+class TrustBaseManager;
 class ChainParams;
 }
 namespace network {
@@ -26,6 +27,7 @@ class NetworkManager;
 }
 namespace mining {
 class CPUMiner;
+class TokenManager;
 }
 namespace validation {
 class ChainstateManager;
@@ -48,8 +50,11 @@ public:
   };
 
   RPCServer(const std::string& socket_path, validation::ChainstateManager& chainstate_manager,
-            network::NetworkManager& network_manager, mining::CPUMiner* miner, const chain::ChainParams& params,
-            std::function<void()> shutdown_callback = nullptr);
+            network::NetworkManager& network_manager, mining::CPUMiner* miner,
+            mining::TokenManager& token_manager,
+            chain::TrustBaseManager& trust_base_manager,
+            const chain::ChainParams& params, std::function<void()> shutdown_callback = nullptr);
+
   ~RPCServer();
 
   bool Start();
@@ -118,6 +123,8 @@ private:
   validation::ChainstateManager& chainstate_manager_;
   network::NetworkManager& network_manager_;
   mining::CPUMiner* miner_;  // Optional, can be nullptr
+  mining::TokenManager& token_manager_;
+  chain::TrustBaseManager& trust_base_manager_;
   const chain::ChainParams& params_;
   std::function<void()> shutdown_callback_;
 
