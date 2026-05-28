@@ -806,10 +806,17 @@ TEST_CASE("RPC Commands: submitblock", "[rpc][integration][mining]") {
     SECTION("Invalid hex characters returns error") {
         rpc::RPCClient client(fixture.GetSocketPath());
         REQUIRE_FALSE(client.Connect().has_value());
-        // 224 chars but with invalid hex (contains 'g')
-        std::string invalid_hex(224, 'g');
-        std::string response = client.ExecuteCommand("submitblock", {invalid_hex});
+        // S2 fix: the original passed a SINGLE 224-char arg, so submitblock errored
+        // on missing-rewardtokenid / wrong-length BEFORE hex parsing — false coverage
+        // ("invalid hex" was never exercised). Pass BOTH args at the correct length
+        // (288 hex chars = 144-byte block) so the call reaches hex decoding, and
+        // assert it did NOT bail on the length guard.
+        std::string invalid_hex(288, 'g');   // correct length, invalid hex chars
+        std::string rewardtokenid(64, '0');  // valid 32-byte token id
+        std::string response = client.ExecuteCommand("submitblock", {invalid_hex, rewardtokenid});
         REQUIRE(response.find("error") != std::string::npos);
+        // Must have reached hex validation, not the length/usage guard.
+        REQUIRE(response.find("288 hex chars") == std::string::npos);
     }
 }
 

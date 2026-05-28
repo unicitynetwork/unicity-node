@@ -88,4 +88,29 @@ TEST_CASE("TokenGenerator basic operations", "[mining][token]") {
     CSHA256().Write(manual_seed.begin(), manual_seed.size()).Write(counter_le, 8).Finalize(expected_id.begin());
     REQUIRE(id == expected_id);
   }
+
+  // REQ 9/10 — seed material is security-sensitive; the file must be 0600
+  // (owner read/write only). PR #3 review added the file-mode restriction;
+  // this locks it in as a regression test.
+  SECTION("miner_state.json is created with mode 0600 (security)") {
+    {
+      TokenGenerator gen(test_dir);
+      (void)gen.GenerateNextTokenId();  // force at least one write
+    }
+    REQUIRE(std::filesystem::exists(state_file));
+
+    namespace fs = std::filesystem;
+    const auto perms = fs::status(state_file).permissions();
+
+    // Owner: read + write must be present.
+    REQUIRE((perms & fs::perms::owner_read)  != fs::perms::none);
+    REQUIRE((perms & fs::perms::owner_write) != fs::perms::none);
+
+    // Group + others: NO bits set.
+    REQUIRE((perms & fs::perms::group_all)  == fs::perms::none);
+    REQUIRE((perms & fs::perms::others_all) == fs::perms::none);
+
+    // Owner-exec also must NOT be set (data, not a script).
+    REQUIRE((perms & fs::perms::owner_exec) == fs::perms::none);
+  }
 }

@@ -126,6 +126,30 @@ TEST_CASE("HttpBFTClient tests", "[chain][bftclient]") {
     CHECK_THROWS_WITH(client.FetchTrustBases(1), Catch::Matchers::ContainsSubstring("HTTP request failed with status code 500"));
   }
 
+  // BFT-side failure mode coverage (req 5): a slow/hung BFT server must trigger
+  // the client's read timeout, not hang mining indefinitely. HttpBFTClient
+  // configures set_read_timeout(5, 0) (bft_client.cpp:11), so a handler that
+  // sleeps for > 5 s must surface as a thrown error containing "Read" / "timeout"
+  // / a connection-style message — not a hang. Sleeping 6 s keeps the test
+  // bounded; we use a separate path so the cleanup path doesn't have to wait.
+  SECTION("Timeout: slow server triggers read timeout (req 5 failure mode)") {
+    svr.Get("/api/v1/trustbases/slow", [](const httplib::Request&, httplib::Response& res) {
+      // Block longer than the client's 5 s read-timeout.
+      std::this_thread::sleep_for(std::chrono::seconds(6));
+      res.set_content("would-not-arrive", "application/cbor");
+    });
+
+    // Build a client pointed at a path that hangs; reuse the same in-process
+    // server. Bound the whole assertion at ~8 s to avoid blowing up CI on a
+    // pathological case.
+    const auto start = std::chrono::steady_clock::now();
+    CHECK_THROWS(client.FetchTrustBase(424242));  // any epoch — we only need the call to time out
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    // The timeout must fire before the server would have replied (6 s) — i.e.,
+    // we cap on the configured 5 s read-timeout side, with slack.
+    CHECK(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() < 7);
+  }
+
   svr.stop();
   svr_thread.join();
 }

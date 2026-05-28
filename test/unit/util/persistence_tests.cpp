@@ -175,4 +175,57 @@ TEST_CASE("BlockManager persistence", "[persistence][chain]") {
         REQUIRE(loaded != nullptr);
         REQUIRE(loaded->nChainWork == original_work);
     }
+
+    // Reqs 2/4 — vPayload (the variable-length payload appended after the
+    // 112-byte static header) must round-trip through BlockManager save/load,
+    // not just `payloadRoot`. Existing sections preserve `payloadRoot`; this
+    // closes the gap by verifying the actual `vPayload` bytes survive.
+    SECTION("vPayload round-trips through save/load (reqs 2/4)") {
+        GlobalChainParams::Select(ChainType::REGTEST);
+        const auto& params = GlobalChainParams::Get();
+        CBlockHeader genesis = params.GenesisBlock();
+
+        BlockManager bm1;
+        REQUIRE(bm1.Initialize(genesis));
+
+        // Build a header with a distinctive vPayload: 32 bytes of 0xAB
+        // (token-id hash slot) + 64 bytes of 0xCD (acting as a stand-in for
+        // appended-UTB content). 0xAB/0xCD pattern makes regressions obvious.
+        CBlockHeader header;
+        header.nVersion = 1;
+        header.hashPrevBlock = genesis.GetHash();
+        header.payloadRoot.SetHex("0000000000000000000000000000000000000000000000000000000000000042");
+        header.nTime = genesis.nTime + 600;
+        header.nBits = genesis.nBits;
+        header.nNonce = 7;
+        header.hashRandomX.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
+        header.vPayload.assign(32, 0xAB);
+        header.vPayload.insert(header.vPayload.end(), 64, 0xCD);
+        REQUIRE(header.vPayload.size() == 96);
+
+        CBlockIndex* pindex = bm1.AddToBlockIndex(header);
+        REQUIRE(pindex != nullptr);
+        REQUIRE(pindex->vPayload == header.vPayload);
+        bm1.SetActiveTip(*pindex);
+
+        const uint256 inserted_hash = pindex->GetBlockHash();
+
+        // Save + load into a fresh manager.
+        REQUIRE(bm1.Save(test_file));
+        BlockManager bm2;
+        REQUIRE(bm2.Load(test_file, genesis.GetHash()) == LoadResult::SUCCESS);
+
+        CBlockIndex* loaded = bm2.LookupBlockIndex(inserted_hash);
+        REQUIRE(loaded != nullptr);
+        REQUIRE(loaded->vPayload.size() == 96);
+
+        // Byte-for-byte equality.
+        REQUIRE(loaded->vPayload == header.vPayload);
+        // Spot-check the pattern.
+        for (size_t i = 0; i < 32; ++i) REQUIRE(loaded->vPayload[i] == 0xAB);
+        for (size_t i = 32; i < 96; ++i) REQUIRE(loaded->vPayload[i] == 0xCD);
+        // payloadRoot must also round-trip (existing tests cover this but we
+        // assert in-context as a sanity check alongside vPayload).
+        REQUIRE(loaded->payloadRoot == header.payloadRoot);
+    }
 }
