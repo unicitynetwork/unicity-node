@@ -409,6 +409,142 @@ TEST_CASE("CheckBlockHeader - payload validation", "[validation][payload]") {
         REQUIRE(state.GetRejectReason() == "bad-payload-size");
         REQUIRE(state.GetDebugMessage().find("exceeds maximum size") != std::string::npos);
     }
+
+    // S1 (unicity-node #1 / PR #3 coverage gap): the `bad-payload-root` check at
+    // validation.cpp:77 existed but had NO negative test. These cover the
+    // header.payloadRoot vs computed-root mismatch. POW is mined OVER the (wrong)
+    // payloadRoot, so POW passes (validation.cpp:46) and we reach the payload-root
+    // check (validation.cpp:77) — the path that was previously untested.
+
+    SECTION("Rejects payloadRoot that does not match the token-id payload (S1)") {
+        CBlockHeader h = CreateTestHeader();
+        h.vPayload.assign(32, 0x42);
+
+        // Deliberately set a payloadRoot that does NOT equal ComputePayloadRoot
+        // of the actual payload. Use all-0xFF so it can't collide.
+        h.payloadRoot.SetHex(std::string(64, 'f'));
+
+        // Mine valid POW over the header as-is (incl. the wrong payloadRoot),
+        // so the check that fails is bad-payload-root, not bad-pow.
+        REQUIRE(MineBlockHeader(h, *params));
+        bool result = CheckBlockHeader(h, *params, state, tbm);
+        REQUIRE_FALSE(result);
+        REQUIRE(state.GetRejectReason() == "bad-payload-root");
+    }
+
+    SECTION("Rejects payloadRoot computed with a zero UTB leaf when payload has a UTB (S1)") {
+        CBlockHeader h = CreateTestHeader();
+
+        std::vector<uint8_t> utb_bytes = util::ParseHex(unicity::test::epoch1_cbor);
+        h.vPayload.assign(32, 0x42);
+        h.vPayload.insert(h.vPayload.end(), utb_bytes.begin(), utb_bytes.end());
+
+        // Commit to the WRONG root: ignore the UTB leaf (use ZERO) even though the
+        // payload carries a real UTB. The computed root will include the UTB hash,
+        // so they mismatch.
+        uint256 leaf_0;
+        std::memcpy(leaf_0.begin(), h.vPayload.data(), 32);
+        h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, uint256::ZERO);
+
+        REQUIRE(MineBlockHeader(h, *params));
+        bool result = CheckBlockHeader(h, *params, state, tbm);
+        REQUIRE_FALSE(result);
+        REQUIRE(state.GetRejectReason() == "bad-payload-root");
+    }
+
+    SECTION("Rejects payloadRoot when the token-id leaf is tampered (S1)") {
+        CBlockHeader h = CreateTestHeader();
+        h.vPayload.assign(32, 0x42);
+
+        // Commit to a root derived from a DIFFERENT token-id leaf than the payload.
+        uint256 wrong_leaf;
+        wrong_leaf.SetHex(std::string(64, '1'));
+        h.payloadRoot = CBlockHeader::ComputePayloadRoot(wrong_leaf, uint256::ZERO);
+
+        REQUIRE(MineBlockHeader(h, *params));
+        bool result = CheckBlockHeader(h, *params, state, tbm);
+        REQUIRE_FALSE(result);
+        REQUIRE(state.GetRejectReason() == "bad-payload-root");
+    }
+
+    // S4 (PR #3 coverage gap): only MAX_PAYLOAD_SIZE+1 was tested (rejected). This
+    // adds the exact-boundary case. The size gate (validation.cpp:36) runs before
+    // UTB parsing, and an all-0x42 payload's bytes[32:] aren't valid UTB, so the
+    // block may be rejected for a LATER reason — the boundary assertion is that
+    // exactly-MAX is NOT a size rejection (proving the off-by-one against MAX+1).
+    SECTION("Payload of exactly MAX_PAYLOAD_SIZE passes the size gate (S4 boundary)") {
+        CBlockHeader h = CreateTestHeader();
+        h.vPayload.assign(CBlockHeader::MAX_PAYLOAD_SIZE, 0x42);
+
+        uint256 leaf_0;
+        std::memcpy(leaf_0.begin(), h.vPayload.data(), 32);
+        uint256 leaf_1 = SingleHash(std::span(h.vPayload.data() + 32, h.vPayload.size() - 32));
+        h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+
+        REQUIRE(MineBlockHeader(h, *params));
+        bool result = CheckBlockHeader(h, *params, state, tbm);
+        CAPTURE(state.GetRejectReason());
+        // Exactly-MAX must clear the size gate. If it fails at all, it must be for
+        // a non-size reason (e.g., UTB content), NOT "bad-payload-size".
+        if (!result) {
+            REQUIRE(state.GetRejectReason() != "bad-payload-size");
+        }
+    }
+
+    // REQ 6 (issue #1 / "Each new record needs to be authenticated before
+    // accepting it") — the block-validation gate at validation.cpp:60-66 calls
+    // tb.Verify(tbm.GetTrustBase(tb.epoch - 1)) on any UTB embedded in vPayload.
+    // The positive case ("Accepts payload containing valid UTB") is covered; the
+    // negative end-to-end path (forged/invalid UTB → bad-trustbase) was not.
+    // These two SECTIONs close that gap.
+
+    SECTION("Rejects UTB with epoch == 0 (req 6 — auth gate, epoch-zero branch)") {
+        CBlockHeader h = CreateTestHeader();
+
+        // Take a valid genesis UTB, tamper epoch to 0, re-serialize. ToCBOR/
+        // FromCBOR round-trip the raw field even though IsValid would reject it.
+        chain::RootTrustBaseV1 bad =
+            chain::RootTrustBaseV1::FromCBOR(util::ParseHex(unicity::test::epoch1_cbor));
+        bad.epoch = 0;
+        const std::vector<uint8_t> bad_cbor = bad.ToCBOR();
+
+        h.vPayload.assign(32, 0x42);
+        h.vPayload.insert(h.vPayload.end(), bad_cbor.begin(), bad_cbor.end());
+
+        uint256 leaf_0;
+        std::memcpy(leaf_0.begin(), h.vPayload.data(), 32);
+        uint256 leaf_1 = SingleHash(std::span(h.vPayload.data() + 32, h.vPayload.size() - 32));
+        h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+
+        REQUIRE(MineBlockHeader(h, *params));
+        bool result = CheckBlockHeader(h, *params, state, tbm);
+        REQUIRE_FALSE(result);
+        REQUIRE(state.GetRejectReason() == "bad-trustbase");
+        REQUIRE(state.GetDebugMessage().find("epoch cannot be 0") != std::string::npos);
+    }
+
+    SECTION("Rejects non-genesis UTB whose verify-extends-prev fails (req 6 — auth gate, Verify branch)") {
+        CBlockHeader h = CreateTestHeader();
+
+        // epoch2_cbor is a real non-genesis UTB signed by the test-fixture
+        // epoch-1 keys. MockTrustBaseManager auto-seeds tbm[1] with the REGTEST
+        // genesis (different keys), so tb2.Verify(regtest_genesis) returns false
+        // → bad-trustbase via the verify-extends branch (validation.cpp:62-66).
+        const std::vector<uint8_t> utb_bytes = util::ParseHex(unicity::test::epoch2_cbor);
+
+        h.vPayload.assign(32, 0x42);
+        h.vPayload.insert(h.vPayload.end(), utb_bytes.begin(), utb_bytes.end());
+
+        uint256 leaf_0;
+        std::memcpy(leaf_0.begin(), h.vPayload.data(), 32);
+        uint256 leaf_1 = SingleHash(std::span(h.vPayload.data() + 32, h.vPayload.size() - 32));
+        h.payloadRoot = CBlockHeader::ComputePayloadRoot(leaf_0, leaf_1);
+
+        REQUIRE(MineBlockHeader(h, *params));
+        bool result = CheckBlockHeader(h, *params, state, tbm);
+        REQUIRE_FALSE(result);
+        REQUIRE(state.GetRejectReason() == "bad-trustbase");
+    }
 }
 
 TEST_CASE("CheckBlockHeader - version validation", "[validation][version]") {
