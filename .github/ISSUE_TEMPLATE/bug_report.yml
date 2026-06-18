@@ -1,0 +1,98 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in unicity-node
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to file a bug report. Please fill out all sections
+        to help us reproduce and fix the issue quickly.
+
+        **For security vulnerabilities, do NOT use this form.** See [SECURITY.md](../SECURITY.md).
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+      placeholder: "When I do X, Y happens instead of Z."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Exact steps to reproduce the behavior.
+      placeholder: |
+        1. Build with ...
+        2. Run with flags ...
+        3. Send P2P message ...
+        4. See error ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened? Include any error messages or logs.
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit / Version
+      description: Git commit SHA or branch where the bug was observed.
+      placeholder: "e.g. a1b2c3d or main"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Ubuntu 22.04
+        - Ubuntu 20.04
+        - macOS 14 (Sonoma)
+        - macOS 13 (Ventura)
+        - Other Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: compiler
+    attributes:
+      label: Compiler & Version
+      placeholder: "e.g. clang-18, g++-11"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Log Output
+      description: Paste any relevant log output here (node logs, sanitizer output, crash traces).
+      render: shell
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues and this is not a duplicate
+          required: true
+        - label: This is not a security vulnerability (see SECURITY.md for those)
+          required: true

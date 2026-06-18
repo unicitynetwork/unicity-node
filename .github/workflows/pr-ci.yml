@@ -36,6 +36,28 @@ jobs:
             cxx: g++-11
             sanitizer: none
 
+          - name: Linux Clang 18 ASan
+            os: ubuntu-22.04
+            compiler: clang
+            cc: clang-18
+            cxx: clang++-18
+            sanitizer: address
+
+          - name: Linux Clang 18 UBSan
+            os: ubuntu-22.04
+            compiler: clang
+            cc: clang-18
+            cxx: clang++-18
+            sanitizer: undefined
+
+          # macOS builds
+          - name: macOS Clang (Xcode)
+            os: macos-14
+            compiler: clang
+            cc: clang
+            cxx: clang++
+            sanitizer: none
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,6 +90,13 @@ jobs:
             sudo apt-get install -y g++-11 gcc-11
           fi
 
+      # Install dependencies - macOS
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install boost miniupnpc
+
       # Configure build
       - name: Configure CMake
         run: |
@@ -78,7 +107,7 @@ jobs:
             cmake -B build \
               -DCMAKE_CXX_COMPILER=$CXX \
               -DCMAKE_C_COMPILER=$CC \
-              -DSANITIZE=${{ matrix.sanitizer }} \
+              -DSANITIZER=${{ matrix.sanitizer }} \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
           else
             cmake -B build \
@@ -89,7 +118,7 @@ jobs:
 
       # Build
       - name: Build
-        run: cmake --build build -j$(nproc)
+        run: cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
 
       # Run tests
       # Exclude [real] transport tests (require actual TCP sockets), [rpc] tests
@@ -106,10 +135,57 @@ jobs:
           name: test-logs-${{ matrix.name }}
           path: build/Testing/Temporary/
 
+  # Functional tests (Linux only — requires Python 3 + built binary)
+  functional-tests:
+    name: Functional Tests
+    runs-on: ubuntu-22.04
+    needs: build-test
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: true
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/_deps
+          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-system-dev libboost-filesystem-dev libminiupnpc-dev python3 python3-pip
+
+      - name: Configure and build
+        run: |
+          cmake -B build \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Run functional tests
+        run: |
+          cd test/functional
+          python3 test_runner.py --timeout 120 2>&1
+        timeout-minutes: 15
+
+      - name: Upload functional test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional-test-logs
+          path: test/functional/
+
   # Summary job - required to pass before merge
   all-checks-passed:
     name: All Checks Passed
-    needs: [build-test]
+    needs: [build-test, functional-tests]
     runs-on: ubuntu-latest
     if: always()
 
@@ -118,6 +194,10 @@ jobs:
         run: |
           if [ "${{ needs.build-test.result }}" != "success" ]; then
             echo "Build/test jobs failed"
+            exit 1
+          fi
+          if [ "${{ needs.functional-tests.result }}" != "success" ]; then
+            echo "Functional tests failed"
             exit 1
           fi
           echo "All checks passed"
